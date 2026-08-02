@@ -185,11 +185,27 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 .topbar__row { display: flex; align-items: flex-start; gap: 12px; max-width: 720px; margin: 0 auto; }
 .topbar__title { flex: 1; min-width: 0; }
 .topbar__title h1 { font-size: 21px; color: #F4F8F0; overflow-wrap: anywhere; }
+/* Wraps to at most two lines. Truncating this to one line ate the return date
+   and the headcount, which is most of what it is for. */
 .topbar__meta {
-  display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 4px;
-  font-family: var(--mono); font-size: 11.5px; letter-spacing: .05em;
-  color: rgba(234, 240, 230, .62);
+  margin: 3px 0 0;
+  font-family: var(--mono); font-size: 11px; line-height: 1.45; letter-spacing: .04em;
+  color: rgba(234, 240, 230, .58);
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden;
 }
+
+/* The Camp tab has no bar under the title, so the header needs its own floor. */
+.topbar--bare { padding-bottom: 15px; }
+/* Collapsed state, once you have scrolled past the trip details. */
+.topbar__title h1, .topbar { transition: padding .18s ease, font-size .18s ease; }
+.is-scrolled .topbar { padding-top: 9px; }
+.is-scrolled .topbar__title h1 {
+  font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.is-scrolled .topbar__meta { display: none; }
+.is-scrolled .switch { margin-top: 9px; }
+.is-scrolled .cov { padding: 9px 0 10px; }
+
 .topbar__share {
   flex: none; min-height: 38px; padding: 0 13px; border-radius: 8px;
   font-size: 13.5px; font-weight: 600; color: #EAF0E6;
@@ -200,75 +216,64 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 
 /* ---- the signature: coverage bar ---------------------------------------- */
 
-/* Two bars, never merged: what the group still has nobody on, and what you
-   still have to pack yourself. They are different questions. */
-.coverage {
-  max-width: 720px; margin: 0 auto; padding: 14px 0 16px;
-  display: flex; flex-direction: column; gap: 14px;
+/* One bar for the section on screen, on a single line: the track takes the room,
+   the sentence after it says what the orange means. */
+.cov { max-width: 720px; margin: 0 auto; padding: 11px 0 13px; display: flex; align-items: center; gap: 11px; }
+.cov__track {
+  flex: 1; min-width: 0; display: flex; gap: 2px; height: 13px;
+  border-radius: 3px; overflow: hidden; background: rgba(0, 0, 0, .22);
 }
-.cov + .cov { padding-top: 13px; border-top: 1px solid rgba(234, 240, 230, .14); }
-.cov__head {
-  display: flex; justify-content: space-between; align-items: baseline; gap: 12px;
-  margin-bottom: 7px;
-}
-.cov__label {
-  font-family: var(--mono); font-size: 11px; font-weight: 600;
-  letter-spacing: .12em; text-transform: uppercase; color: rgba(234, 240, 230, .62);
-}
-.cov__count {
-  font-family: var(--mono); font-size: 12px; font-weight: 600;
-  letter-spacing: .06em; color: rgba(234, 240, 230, .55); white-space: nowrap;
-}
-.cov__say { margin: 7px 0 0; font-size: 13.5px; color: rgba(234, 240, 230, .78); }
+.cov__say { flex: none; margin: 0; font-size: 12.5px; color: rgba(234, 240, 230, .7); white-space: nowrap; }
 .cov__say b { color: #F4F8F0; font-weight: 600; }
-.coverage__track {
-  display: flex; gap: 2px; height: 15px;
-  border-radius: 3px; overflow: hidden;
-  background: rgba(0, 0, 0, .22);
+.cov__empty {
+  flex: 1; display: grid; place-items: center;
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: .1em;
+  text-transform: uppercase; color: rgba(234, 240, 230, .4);
 }
+
+/* Section switcher: the other half of the list, always one tap away. */
+.switch {
+  max-width: 720px; margin: 12px auto 0; display: grid; grid-template-columns: 1fr 1fr; gap: 3px;
+  padding: 3px; border-radius: 9px; background: rgba(0, 0, 0, .22);
+}
+.switch__btn {
+  display: flex; align-items: center; justify-content: center; gap: 7px;
+  min-height: 34px; padding: 0 10px; border-radius: 7px;
+  font-size: 13.5px; font-weight: 600; color: rgba(234, 240, 230, .7);
+  transition: background .14s ease, color .14s ease;
+}
+.switch__btn:hover { color: #F4F8F0; }
+.switch__btn[aria-pressed="true"] { background: var(--paper); color: var(--forest-deep); }
+.switch__n {
+  min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px;
+  display: grid; place-items: center;
+  font-family: var(--mono); font-size: 10.5px; font-weight: 600;
+  background: rgba(255, 255, 255, .14); color: inherit;
+}
+.switch__btn[aria-pressed="true"] .switch__n { background: var(--blaze); color: #fff; }
 .coverage__seg { transition: flex-grow .35s cubic-bezier(.4, 0, .2, 1); min-width: 3px; }
 .coverage__seg--gap {
   background: repeating-linear-gradient(-45deg, var(--blaze) 0 5px, #A83C15 5px 10px);
 }
-.coverage__empty {
-  flex: 1; display: grid; place-items: center;
-  font-family: var(--mono); font-size: 10px; letter-spacing: .1em;
-  text-transform: uppercase; color: rgba(234, 240, 230, .4);
-}
+/* Plans that nobody has voted for are not a problem, so they are not orange. */
+.coverage__seg--quiet { background: rgba(234, 240, 230, .17); }
 
-/* ---- keyed legend ------------------------------------------------------- */
-
-.legend {
-  display: flex; flex-wrap: wrap; gap: 5px 12px; margin-top: 8px;
-  font-size: 12.5px; color: rgba(234, 240, 230, .72);
-}
-.legend:empty { display: none; }
-.legend__item { display: inline-flex; align-items: center; gap: 6px; }
-.legend__dot { width: 9px; height: 9px; border-radius: 2px; flex: none; }
+/* The hatch that means "nobody", reused as a swatch in the assign sheet. */
 .legend__dot--gap { background: repeating-linear-gradient(-45deg, var(--blaze) 0 3px, #A83C15 3px 6px); }
 
 /* ==========================================================================
    Page content
    ========================================================================== */
 
-.page { max-width: 720px; margin: 0 auto; padding: 20px 18px 30px; }
+.page { max-width: 720px; margin: 0 auto; padding: 16px 18px 30px; }
 
 .page__head { margin-bottom: 18px; }
 .page__head h2 { font-size: 27px; margin-top: 3px; }
 .page__head p { margin: 6px 0 0; color: var(--ink-soft); font-size: 14.5px; max-width: 52ch; }
 
-.actions { display: flex; gap: 9px; margin: 16px 0 22px; flex-wrap: wrap; }
+.page__note { margin: 0; font-size: 13.5px; color: var(--ink-soft); max-width: 56ch; }
 
-/* ---- shared kit vs your own kit ----------------------------------------- */
-
-.block { margin-bottom: 30px; }
-.block__head {
-  padding: 13px 15px; margin-bottom: 16px; border-radius: var(--r-md);
-  background: var(--paper); border-left: 4px solid var(--forest);
-}
-.block--own .block__head { border-left-color: var(--m2); }
-.block__head h3 { font-size: 16px; }
-.block__head p { margin: 4px 0 0; font-size: 13.5px; color: var(--ink-soft); max-width: 52ch; }
+.actions { display: flex; gap: 9px; margin: 13px 0 20px; flex-wrap: wrap; }
 
 /* ---- category group ----------------------------------------------------- */
 
@@ -364,18 +369,6 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 .stage--done .stage__box { background: var(--forest); box-shadow: none; }
 .stage--done .stage__box svg { opacity: 1; }
 
-/* ---- one-each items: everyone else's progress --------------------------- */
-
-.whos { display: inline-flex; align-items: center; gap: 3px; }
-.whos__dot {
-  width: 21px; height: 21px; border-radius: 50%;
-  display: grid; place-items: center;
-  font-family: var(--mono); font-size: 10px; font-weight: 600;
-  color: var(--ink-faint); background: transparent;
-  box-shadow: inset 0 0 0 1.5px var(--line-strong);
-}
-.whos__dot.is-done { color: #fff; box-shadow: none; }
-
 .tag {
   display: inline-flex; align-items: center; min-height: 26px; padding: 0 9px;
   border-radius: 999px; font-size: 11.5px; font-weight: 600;
@@ -384,10 +377,6 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
   transition: color .12s ease, box-shadow .12s ease;
 }
 .tag:hover { color: var(--ink-soft); box-shadow: inset 0 0 0 1.5px var(--line-strong); }
-.tag--inline {
-  margin-left: 8px; min-height: 20px; padding: 0 7px; font-size: 10.5px;
-  color: var(--m2); box-shadow: inset 0 0 0 1.5px rgba(122, 90, 166, .35);
-}
 
 /* ---- two-way switch ----------------------------------------------------- */
 
@@ -473,20 +462,25 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
   padding-bottom: env(safe-area-inset-bottom);
 }
 .tabbar__btn {
-  flex: 1; height: var(--tabbar-h);
-  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
-  font-size: 11px; font-weight: 600; color: var(--ink-faint);
+  flex: 1; min-width: 0; height: var(--tabbar-h);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+  font-size: 10.5px; font-weight: 600; color: var(--ink-faint);
   border-top: 2.5px solid transparent; margin-top: -1.5px;
   transition: color .12s ease;
 }
 .tabbar__btn svg { width: 21px; height: 21px; }
 .tabbar__btn[aria-current="page"] { color: var(--forest-deep); border-top-color: var(--blaze); }
+
+/* The count sits on the corner of the icon with a ring of the bar's own colour,
+   so it reads as a badge rather than smearing into the glyph underneath. */
+.tabbar__icon { position: relative; display: grid; place-items: center; }
 .tabbar__flag {
-  position: absolute; top: 9px; margin-left: 21px;
-  min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px;
+  position: absolute; top: -4px; left: 12px;
+  min-width: 15px; height: 15px; padding: 0 4px; border-radius: 8px;
   background: var(--blaze); color: #fff;
-  font-family: var(--mono); font-size: 10px; font-weight: 600;
+  font-family: var(--mono); font-size: 9.5px; font-weight: 600; line-height: 1;
   display: grid; place-items: center;
+  box-shadow: 0 0 0 2px var(--paper);
 }
 
 /* ==========================================================================
@@ -538,10 +532,6 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 }
 .pick:hover { box-shadow: inset 0 0 0 1.5px var(--forest); }
 .pick[aria-pressed="true"] { background: #fff; box-shadow: inset 0 0 0 2px var(--forest); }
-/* Someone else's personal kit: shown, not tappable. Only they can tick it. */
-.pick--flat, .pick--flat:hover { cursor: default; background: var(--paper-sunk); box-shadow: inset 0 0 0 1.5px var(--line); }
-.pick--flat[aria-pressed="true"] { background: var(--paper-sunk); box-shadow: inset 0 0 0 1.5px var(--line); }
-.pick--flat .pick__tick { color: var(--ink-faint); }
 .pick__swatch { width: 15px; height: 15px; border-radius: 4px; flex: none; }
 .pick__main { flex: 1; min-width: 0; }
 .pick__title { font-weight: 500; font-size: 15px; }

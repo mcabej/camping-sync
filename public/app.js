@@ -5,17 +5,17 @@
 const MEMBER_COLORS = ['#2F6B57', '#37698F', '#7A5AA6', '#8C6A2F', '#B23C6B', '#4E7A2A', '#2E6E77', '#6B5B4A']
 
 const TABS = [
-  { id: 'pack', list: 'gear', label: 'Pack', title: 'Packing list', blurb: 'Two sections: kit one person brings for everyone, and kit you each bring your own of. Say who is bringing what first, then tick things off as they go in the bag.' },
-  { id: 'eat', list: 'food', label: 'Eat', title: 'Food', blurb: 'Plan it by meal. Whoever claims a meal buys for it — that is the whole trick.' },
-  { id: 'drink', list: 'drinks', label: 'Drink', title: 'Drinks', blurb: 'Water first. Roughly 1 gallon / 4L per person per day if the site has no taps.' },
-  { id: 'do', list: 'activities', label: 'Do', title: 'Plans', blurb: 'Ideas anyone can add. Vote for what you actually want to do, and claim the ones that need organising.' },
-  { id: 'camp', list: null, label: 'Camp', title: 'The trip', blurb: '' },
+  { id: 'pack', list: 'gear', label: 'Pack', title: 'Packing list' },
+  { id: 'eat', list: 'food', label: 'Eat', title: 'Food', note: 'Plan it by meal. Whoever claims a meal buys for it.' },
+  { id: 'drink', list: 'drinks', label: 'Drink', title: 'Drinks', note: 'About 1 gallon / 4L of water per person per day.' },
+  { id: 'do', list: 'activities', label: 'Do', title: 'Plans', note: 'Vote for what you actually want to do. Nobody has to "bring" a hike.' },
+  { id: 'camp', list: null, label: 'Camp', title: 'The trip' },
 ]
 
 // The two ways a thing gets brought. This distinction runs through the whole app.
-const BLOCKS = {
-  shared: { label: 'Brought for the group', note: 'One person brings each of these, and everyone uses it.' },
-  own: { label: 'Everyone brings their own', note: 'One each — nobody can cover these for you. Tick off yours when it is packed.' },
+const SECTIONS = {
+  shared: { label: 'For the group', note: 'One person brings each of these, and everyone uses it.' },
+  own: { label: 'Personal kit', note: 'One each. Only you can see how much of yours is packed.' },
 }
 
 const ICONS = {
@@ -35,6 +35,7 @@ const ICONS = {
 const S = {
   view: 'boot',      // boot | landing | join | trip | missing
   tab: 'pack',
+  section: 'shared', // which half of the current list is on screen
   trip: null, members: [], items: [], events: [],
   catalog: null, tips: [],
   me: null,          // member id
@@ -99,21 +100,36 @@ async function mutate(fn) {
 
 const itemsIn = (list) => S.items.filter((i) => i.list === list)
 const isOwn = (it) => it.kind === 'own'
-const allHaveTheirs = (it) => S.members.length > 0 && S.members.every((m) => it.own.includes(m.id))
+const isMine = (it) => !!S.me && it.own.includes(S.me)
+const isPlan = (it) => it.list === 'activities'
 
-// Two different questions, so two different tallies: has somebody claimed the
-// group kit, and have you packed your own.
-function coverageFor(list) {
+// Personal kit exists as a section for any list the catalogue has one-each
+// suggestions for, even before the trip has added one — otherwise there is
+// nowhere to go looking for it.
+const hasOwnSection = (list) =>
+  itemsIn(list).some(isOwn) || (S.catalog?.[list] ?? []).some((c) => c.own)
+
+// The section actually on screen, which is 'shared' for any list that has no
+// personal half at all.
+function activeSection() {
+  const list = TABS.find((t) => t.id === S.tab)?.list
+  return list && hasOwnSection(list) ? S.section : 'shared'
+}
+
+// Each section answers a different question, so each gets its own tally.
+// Plans are not "brought" by anyone, so they are counted by interest instead.
+function statsFor(list) {
   const items = list ? itemsIn(list) : S.items
   const perMember = new Map()
-  const ownPerMember = new Map()
-  let shared = 0, open = 0, own = 0, mine = 0
+  let shared = 0, open = 0, own = 0, mine = 0, ideas = 0, wanted = 0
 
   for (const it of items) {
-    if (isOwn(it)) {
+    if (isPlan(it)) {
+      ideas++
+      if (it.votes.length) wanted++
+    } else if (isOwn(it)) {
       own++
-      if (S.me && it.own.includes(S.me)) mine++
-      for (const id of it.own) ownPerMember.set(id, (ownPerMember.get(id) ?? 0) + 1)
+      if (isMine(it)) mine++
     } else {
       shared++
       if (it.assignee_id && memberById(it.assignee_id)) {
@@ -121,11 +137,7 @@ function coverageFor(list) {
       } else open++
     }
   }
-  return {
-    shared, open, claimed: shared - open, perMember,
-    own, mine, ownPerMember,
-    todo: open + (own - mine),
-  }
+  return { shared, open, claimed: shared - open, perMember, own, mine, ideas, wanted }
 }
 
 function groupByCategory(items) {
@@ -160,76 +172,57 @@ function ago(iso) {
 
 // ---- shared partials --------------------------------------------------------
 
-function coverageBar(list) {
-  const c = coverageFor(list)
+// One bar, one line, for whichever section is on screen. It reads left to right:
+// how much is handled, then how much is not.
+function coverageBar(list, section) {
+  const c = statsFor(list)
+  const bar = (segs, say, label) => `
+    <div class="cov">
+      <div class="cov__track" role="img" aria-label="${label}">${segs}</div>
+      <p class="cov__say">${say}</p>
+    </div>`
 
-  if (c.shared === 0 && c.own === 0) {
-    return `
-      <div class="coverage">
-        <div class="cov">
-          <div class="cov__head"><span class="cov__label">This list</span></div>
-          <div class="coverage__track"><span class="coverage__empty">nothing on it yet</span></div>
-        </div>
-      </div>`
+  if (list === 'activities') {
+    const rest = c.ideas - c.wanted
+    if (!c.ideas) return bar('<span class="cov__empty">no ideas yet</span>', 'Add what you fancy doing.', 'empty')
+    return bar(
+      `${c.wanted ? `<div class="coverage__seg" style="flex:${c.wanted};background:var(--m0)"></div>` : ''}
+       ${rest ? `<div class="coverage__seg coverage__seg--quiet" style="flex:${rest}"></div>` : ''}`,
+      `<b>${c.wanted} of ${c.ideas}</b> ${c.ideas === 1 ? 'idea has' : 'ideas have'} a vote`,
+      `${c.wanted} of ${c.ideas} ideas have a vote`)
   }
 
-  const bars = []
-
-  if (c.shared) {
-    const segs = [...c.perMember.entries()]
-      .map(([id, n]) => `<div class="coverage__seg" style="flex:${n};background:${colorOf(memberById(id))}"
-             title="${esc(memberById(id).name)}: ${n}"></div>`).join('')
-    const gap = c.open > 0
-      ? `<div class="coverage__seg coverage__seg--gap" style="flex:${c.open}" title="${c.open} with nobody bringing them"></div>` : ''
-
-    const noun = list === 'activities' ? 'ideas' : 'things'
-    const say = c.open === 0
-      ? `<b>All ${c.shared} covered.</b> Nice.`
-      : `<b>${c.open} ${c.open === 1 ? (list === 'activities' ? 'idea has' : 'thing has') : `${noun} have`}</b> nobody bringing ${c.open === 1 ? 'it' : 'them'}.`
-
-    const legend = [...c.perMember.entries()].map(([id, n]) => {
-      const m = memberById(id)
-      return `<span class="legend__item"><span class="legend__dot" style="background:${colorOf(m)}"></span>${esc(m.name)} <span class="mono">${n}</span></span>`
-    }).join('')
-
-    bars.push(`
-      <div class="cov">
-        <div class="cov__head">
-          <span class="cov__label">${BLOCKS.shared.label}</span>
-          <span class="cov__count">${c.claimed}/${c.shared} claimed</span>
-        </div>
-        <div class="coverage__track" role="img" aria-label="${c.claimed} of ${c.shared} claimed">${segs}${gap}</div>
-        <p class="cov__say">${say}</p>
-        <div class="legend">${legend}${c.open ? `<span class="legend__item"><span class="legend__dot legend__dot--gap"></span>Nobody <span class="mono">${c.open}</span></span>` : ''}</div>
-      </div>`)
-  }
-
-  if (c.own) {
-    const me = meMember()
+  if (section === 'own') {
     const left = c.own - c.mine
-    const mineSeg = c.mine ? `<div class="coverage__seg" style="flex:${c.mine};background:${colorOf(me)}"></div>` : ''
-    const gap = left ? `<div class="coverage__seg coverage__seg--gap" style="flex:${left}"></div>` : ''
-
-    // How everyone else is doing on their own kit — the answer to "is Sam ready?"
-    const legend = S.members.filter((m) => m.id !== S.me).map((m) => {
-      const n = c.ownPerMember.get(m.id) ?? 0
-      return `<span class="legend__item"><span class="legend__dot" style="background:${colorOf(m)}"></span>${esc(m.name)} <span class="mono">${n}/${c.own}</span></span>`
-    }).join('')
-
-    bars.push(`
-      <div class="cov">
-        <div class="cov__head">
-          <span class="cov__label">Your own kit</span>
-          <span class="cov__count">${c.mine}/${c.own} packed</span>
-        </div>
-        <div class="coverage__track" role="img" aria-label="you have packed ${c.mine} of ${c.own}">${mineSeg}${gap}</div>
-        <p class="cov__say">${left === 0
-          ? '<b>Yours is all packed.</b>' : `<b>${left} of your own ${left === 1 ? 'thing' : 'things'}</b> still to pack.`}</p>
-        ${legend ? `<div class="legend">${legend}</div>` : ''}
-      </div>`)
+    if (!c.own) return bar('<span class="cov__empty">nothing here yet</span>', 'Nothing on your personal list.', 'empty')
+    return bar(
+      `${c.mine ? `<div class="coverage__seg" style="flex:${c.mine};background:${colorOf(meMember())}"></div>` : ''}
+       ${left ? `<div class="coverage__seg coverage__seg--gap" style="flex:${left}"></div>` : ''}`,
+      left === 0 ? '<b>All packed.</b>' : `<b>${left}</b> still to pack`,
+      `you have packed ${c.mine} of ${c.own}`)
   }
 
-  return `<div class="coverage">${bars.join('')}</div>`
+  if (!c.shared) return bar('<span class="cov__empty">nothing here yet</span>', 'Nothing on this list.', 'empty')
+
+  const segs = [...c.perMember.entries()]
+    .map(([id, n]) => `<div class="coverage__seg" style="flex:${n};background:${colorOf(memberById(id))}"
+           title="${esc(memberById(id).name)}: ${n}"></div>`).join('')
+  const gap = c.open > 0 ? `<div class="coverage__seg coverage__seg--gap" style="flex:${c.open}"></div>` : ''
+
+  return bar(`${segs}${gap}`,
+    c.open === 0 ? `<b>All ${c.shared} covered.</b>` : `<b>${c.open}</b> need someone`,
+    `${c.claimed} of ${c.shared} claimed`)
+}
+
+// The section switcher lives in the sticky header, so the other half of the
+// list is always one tap away rather than a scroll away.
+function sectionSwitch(list) {
+  if (!hasOwnSection(list)) return ''
+  const c = statsFor(list)
+  const chip = (key, outstanding) => `
+    <button class="switch__btn" data-act="section" data-section="${key}" aria-pressed="${S.section === key}">
+      ${SECTIONS[key].label}${outstanding ? `<span class="switch__n">${outstanding}</span>` : ''}</button>`
+  return `<div class="switch" role="group" aria-label="Which kit">${chip('shared', c.open)}${chip('own', c.own - c.mine)}</div>`
 }
 
 function assignChip(item) {
@@ -258,32 +251,30 @@ function ownToggle(item) {
       <span class="stage__box"${mine && me ? ` style="background:${colorOf(me)}"` : ''}>${ICONS.tick}</span>${mine ? "Mine's packed" : "I've not packed mine"}</button>`
 }
 
-// Everyone else's progress on a one-each item, so you can see who is still short.
-function ownDots(item) {
-  const others = S.members.filter((m) => m.id !== S.me)
-  if (!others.length) return ''
-  return `<span class="whos">${others.map((m) => {
-    const done = item.own.includes(m.id)
-    return `<span class="whos__dot${done ? ' is-done' : ''}"${done ? ` style="background:${colorOf(m)}"` : ''}
-                  title="${esc(m.name)}: ${done ? 'packed' : 'not packed yet'}">${esc(m.name.slice(0, 1).toUpperCase())}</span>`
-  }).join('')}</span>`
+// Nobody "brings" a hike, so a plan never shows the orange chip. An organiser is
+// optional and only for the plans that need booking or kit.
+function organiserChip(item) {
+  const m = memberById(item.assignee_id)
+  if (!m) return `<button class="tag" data-act="assign" data-id="${item.id}">Add an organiser</button>`
+  const mine = m.id === S.me ? ' chip--mine' : ''
+  return `<button class="chip chip--taken${mine}" style="background:${colorOf(m)}" data-act="assign" data-id="${item.id}">
+            <span class="chip__dot"></span>${esc(m.name)} is organising</button>`
 }
 
 function itemRow(item) {
-  const isPlan = item.list === 'activities'
   const own = isOwn(item)
-  const done = own ? allHaveTheirs(item) : item.packed
+  const done = own ? isMine(item) : item.packed
 
   let controls
-  if (isPlan) {
+  if (isPlan(item)) {
     const voted = item.votes.includes(S.me)
     controls = `
       <button class="chip chip--vote" data-act="vote" data-id="${item.id}" aria-pressed="${voted}">
         ${voted ? 'Up for it' : 'I want this'} <span class="mono">${item.votes.length}</span></button>
-      ${assignChip(item)}`
+      ${organiserChip(item)}`
   } else if (own) {
-    controls = `${ownToggle(item)}${ownDots(item)}
-      <button class="tag" data-act="assign" data-id="${item.id}">One each · change</button>`
+    controls = `${ownToggle(item)}
+      <button class="tag" data-act="move-kind" data-id="${item.id}" data-kind="shared">Move to group</button>`
   } else {
     controls = `${assignChip(item)}${item.assignee_id && memberById(item.assignee_id) ? packToggle(item) : ''}`
   }
@@ -371,66 +362,54 @@ function viewJoin() {
 function topbar() {
   const meta = [S.trip.location, fmtDates(S.trip)].filter(Boolean).map(esc)
   meta.push(`${S.members.length} ${S.members.length === 1 ? 'person' : 'people'}`)
+  const list = TABS.find((t) => t.id === S.tab)?.list ?? null
   return `
-    <header class="topbar">
+    <header class="topbar${list ? '' : ' topbar--bare'}">
       <div class="topbar__row">
         <div class="topbar__title">
           <h1>${esc(S.trip.name)}</h1>
-          <div class="topbar__meta">${meta.map((m) => `<span>${m}</span>`).join('')}</div>
+          <p class="topbar__meta">${meta.join(' · ')}</p>
         </div>
         <button class="topbar__share" data-act="share">Invite</button>
       </div>
-      ${coverageBar(TABS.find((t) => t.id === S.tab)?.list ?? null)}
+      ${list ? `${sectionSwitch(list)}${coverageBar(list, activeSection())}` : ''}
     </header>`
 }
 
-function categoryGroups(items, kind) {
+function categoryGroups(items, section) {
   return groupByCategory(items).map(([cat, list]) => {
-    const tally = kind === 'own'
-      ? `you ${list.filter((i) => S.me && i.own.includes(S.me)).length}/${list.length}`
+    const tally = section === 'own'
+      ? `${list.filter(isMine).length}/${list.length} packed`
       : `${list.filter((i) => i.assignee_id && memberById(i.assignee_id)).length}/${list.length}`
     return `
       <section class="group">
-        <div class="group__head"><h3>${esc(cat)}</h3><span class="group__tally">${tally}</span></div>
+        <div class="group__head"><h3>${esc(cat)}</h3>
+          <span class="group__tally">${list[0] && isPlan(list[0]) ? `${list.length}` : tally}</span></div>
         <ul class="items">${list.map(itemRow).join('')}</ul>
       </section>`
   }).join('')
 }
 
 function listPage(tab) {
-  const items = itemsIn(tab.list)
-  const shared = items.filter((i) => !isOwn(i))
-  const own = items.filter(isOwn)
+  // Only one section is ever on screen, so the switcher in the header is the
+  // whole navigation for it — no scrolling to find the other half.
+  const section = activeSection()
+  const items = itemsIn(tab.list).filter((i) => (section === 'own') === isOwn(i))
+  const note = hasOwnSection(tab.list) ? SECTIONS[section].note : tab.note
 
-  let body
-  if (items.length === 0) {
-    body = `<div class="empty">
-         <h3>Nothing here yet</h3>
-         <p>Pull in the usual suspects, or write your own.</p>
+  const body = items.length === 0
+    ? `<div class="empty">
+         <h3>${section === 'own' ? 'No personal kit listed yet' : 'Nothing here yet'}</h3>
+         <p>${section === 'own'
+            ? 'These are the things nobody can bring for you — a sleeping bag, a headtorch, your own boots.'
+            : 'Pull in the usual suspects, or write your own.'}</p>
          <button class="btn btn--blaze" data-act="suggest">What am I missing?</button>
        </div>`
-  } else if (own.length === 0) {
-    body = categoryGroups(shared, 'shared')
-  } else {
-    // Once a list has both, name them. The split is the point.
-    const block = (kind, list) => list.length ? `
-      <section class="block block--${kind}">
-        <div class="block__head">
-          <h3>${BLOCKS[kind].label}</h3>
-          <p>${BLOCKS[kind].note}</p>
-        </div>
-        ${categoryGroups(list, kind)}
-      </section>` : ''
-    body = block('shared', shared) + block('own', own)
-  }
+    : categoryGroups(items, section)
 
   return `
     <main class="page">
-      <div class="page__head">
-        <span class="eyebrow">${esc(tab.label)}</span>
-        <h2>${esc(tab.title)}</h2>
-        <p>${esc(tab.blurb)}</p>
-      </div>
+      ${note ? `<p class="page__note">${esc(note)}</p>` : ''}
       <div class="actions">
         <button class="btn btn--blaze" data-act="suggest">What am I missing?</button>
         <button class="btn" data-act="add">${ICONS.plus} Add your own</button>
@@ -441,15 +420,8 @@ function listPage(tab) {
 
 function campPage() {
   const load = new Map()
-  const ownDone = new Map()
-  let ownTotal = 0
   for (const it of S.items) {
-    if (isOwn(it)) {
-      ownTotal++
-      for (const id of it.own) ownDone.set(id, (ownDone.get(id) ?? 0) + 1)
-    } else if (it.assignee_id) {
-      load.set(it.assignee_id, (load.get(it.assignee_id) ?? 0) + 1)
-    }
+    if (!isOwn(it) && it.assignee_id) load.set(it.assignee_id, (load.get(it.assignee_id) ?? 0) + 1)
   }
 
   const link = `${location.origin}/t/${S.trip.id}`
@@ -472,13 +444,13 @@ function campPage() {
 
       <div class="card">
         <h3>Who's coming</h3>
-        <p>Colours match the bar at the top of every list. "Own kit" is how much of their personal kit each person has packed.</p>
+        <p>Colours match the bar at the top of every list. The count is what they're bringing for the group — personal kit is private to each person.</p>
         <div class="people">
           ${S.members.map((m) => `
             <div class="person">
               <span class="person__swatch" style="background:${colorOf(m)}"></span>
               <span class="person__name">${esc(m.name)}${m.id === S.me ? ' <span class="mono" style="color:var(--ink-faint);font-size:12px">you</span>' : ''}</span>
-              <span class="person__load">group ${load.get(m.id) ?? 0}${ownTotal ? ` · own ${ownDone.get(m.id) ?? 0}/${ownTotal}` : ''}</span>
+              <span class="person__load">${load.get(m.id) ?? 0} things</span>
               ${m.id === S.me ? '' : `<button class="item__kill" data-act="drop-member" data-id="${m.id}" aria-label="Remove ${esc(m.name)}">${ICONS.x}</button>`}
             </div>`).join('')}
         </div>
@@ -529,11 +501,13 @@ function tabbar() {
   return `
     <nav class="tabbar" aria-label="Sections">
       ${TABS.map((t) => {
-        const todo = t.list ? coverageFor(t.list).todo : 0
+        // Only the group's unanswered questions. Your own packing is your business,
+        // and it already has a count on the section switcher.
+        const open = t.list ? statsFor(t.list).open : 0
         return `<button class="tabbar__btn" data-act="tab" data-tab="${t.id}"
-                  ${S.tab === t.id ? 'aria-current="page"' : ''} style="position:relative">
-                  ${ICONS[t.id]}<span>${t.label}</span>
-                  ${todo ? `<span class="tabbar__flag">${todo}</span>` : ''}
+                  ${S.tab === t.id ? 'aria-current="page"' : ''}>
+                  <span class="tabbar__icon">${ICONS[t.id]}${open ? `<span class="tabbar__flag">${open}</span>` : ''}</span>
+                  <span>${t.label}</span>
                 </button>`
       }).join('')}
     </nav>`
@@ -566,34 +540,25 @@ function sheetAssign(s) {
   const me = meMember()
   const own = isOwn(item)
 
-  const kindSwitch = item.list === 'activities' ? '' : `
+  const kindSwitch = isPlan(item) ? '' : `
     <div class="segmented" role="group" aria-label="How this gets brought">
       <button class="segmented__btn" aria-pressed="${!own}" data-act="set-kind" data-id="${item.id}" data-kind="shared">
-        One of us brings it</button>
+        ${SECTIONS.shared.label}</button>
       <button class="segmented__btn" aria-pressed="${own}" data-act="set-kind" data-id="${item.id}" data-kind="own">
-        We each bring our own</button>
+        ${SECTIONS.own.label}</button>
     </div>`
 
   if (own) {
-    const rows = S.members.map((m) => {
-      const done = item.own.includes(m.id)
-      const you = m.id === S.me
-      return `
-        <button class="pick${you ? '' : ' pick--flat'}" ${you ? `data-act="own" data-id="${item.id}"` : 'disabled'}
-                aria-pressed="${done}">
-          <span class="pick__swatch" style="background:${colorOf(m)}"></span>
-          <span class="pick__main">
-            <span class="pick__title">${esc(m.name)}${you ? ' (you)' : ''}</span>
-            <span class="pick__note">${done ? 'Packed' : 'Not packed yet'}${you ? '' : ' — only they can tick this'}</span>
-          </span>
-          <span class="pick__tick">${ICONS.tickGreen}</span>
-        </button>`
-    }).join('')
-
     return sheetShell({
       title: item.title,
-      blurb: 'Everyone brings their own one. Nobody can cover this for anyone else.',
-      body: `${kindSwitch}<div class="sheet__group"><span class="eyebrow">Who's packed theirs</span>${rows}</div>`,
+      blurb: 'Everyone brings their own one, and only you can see whether yours is packed.',
+      body: `${kindSwitch}
+        <button class="pick" data-act="own" data-id="${item.id}" aria-pressed="${isMine(item)}">
+          <span class="pick__swatch" style="background:${colorOf(me)}"></span>
+          <span class="pick__main"><span class="pick__title">Mine is packed</span>
+            <span class="pick__note">${isMine(item) ? 'Ticked off.' : 'Not yet.'}</span></span>
+          <span class="pick__tick">${ICONS.tickGreen}</span>
+        </button>`,
     })
   }
 
@@ -605,18 +570,21 @@ function sheetAssign(s) {
       <span class="pick__tick">${ICONS.tickGreen}</span>
     </button>`).join('')
 
+  const plan = isPlan(item)
   return sheetShell({
-    title: `Who's bringing ${item.title}?`,
-    blurb: 'One person brings it for everyone.',
+    title: plan ? `Who's organising ${item.title}?` : `Who's bringing ${item.title}?`,
+    blurb: plan
+      ? 'Optional — only for the plans that need someone to book it or bring the kit.'
+      : 'One person brings it for everyone.',
     body: `
       ${kindSwitch}
-      ${me ? `<button class="btn btn--primary btn--wide" style="margin-bottom:14px" data-act="set-assignee" data-id="${item.id}" data-member="${me.id}">I'll bring it</button>` : ''}
+      ${me ? `<button class="btn btn--primary btn--wide" style="margin-bottom:14px" data-act="set-assignee" data-id="${item.id}" data-member="${me.id}">${plan ? "I'll organise it" : "I'll bring it"}</button>` : ''}
       ${rows}
       <button class="pick" data-act="set-assignee" data-id="${item.id}" data-member=""
               aria-pressed="${!item.assignee_id}" style="margin-top:10px">
-        <span class="pick__swatch legend__dot--gap"></span>
-        <span class="pick__main"><span class="pick__title">Nobody yet</span>
-          <span class="pick__note">Leave it open and it stays orange on the bar.</span></span>
+        <span class="pick__swatch${plan ? '' : ' legend__dot--gap'}"${plan ? ' style="background:var(--line-strong)"' : ''}></span>
+        <span class="pick__main"><span class="pick__title">${plan ? 'Nobody needs to' : 'Nobody yet'}</span>
+          <span class="pick__note">${plan ? 'Most plans do not need an organiser.' : 'Leave it open and it stays orange on the bar.'}</span></span>
         <span class="pick__tick">${ICONS.tickGreen}</span>
       </button>
       <div style="margin-top:18px">
@@ -651,12 +619,12 @@ function sheetAdd(s) {
           <div class="field">
             <span>Who brings it?</span>
             <div class="segmented" role="group" aria-label="Who brings it">
-              <button type="button" class="segmented__btn" aria-pressed="true" data-act="pick-kind" data-kind="shared">
-                One of us brings it</button>
-              <button type="button" class="segmented__btn" aria-pressed="false" data-act="pick-kind" data-kind="own">
-                We each bring our own</button>
+              <button type="button" class="segmented__btn" aria-pressed="${s.section !== 'own'}" data-act="pick-kind" data-kind="shared">
+                ${SECTIONS.shared.label}</button>
+              <button type="button" class="segmented__btn" aria-pressed="${s.section === 'own'}" data-act="pick-kind" data-kind="own">
+                ${SECTIONS.own.label}</button>
             </div>
-            <input type="hidden" name="kind" value="shared">
+            <input type="hidden" name="kind" value="${s.section === 'own' ? 'own' : 'shared'}">
           </div>`}
         <button class="btn btn--primary btn--wide" type="submit">Add it</button>
       </form>`,
@@ -666,13 +634,15 @@ function sheetAdd(s) {
 function sheetSuggest(s) {
   const tab = TABS.find((t) => t.list === s.list)
   const have = new Set(itemsIn(s.list).map((i) => i.title.toLowerCase()))
-  const pool = (S.catalog?.[s.list] ?? []).filter((c) => !have.has(c.title.toLowerCase()))
+  // Suggest into the section you are standing in, so the two never get mixed up.
+  const pool = (S.catalog?.[s.list] ?? [])
+    .filter((c) => !have.has(c.title.toLowerCase()) && !!c.own === (s.section === 'own'))
   const picked = s.picked ?? new Set()
 
   if (!pool.length) {
     return sheetShell({
       title: 'Nothing left to suggest',
-      body: `<div class="empty"><h3>You've got the lot</h3><p>Every suggestion we have for ${esc(tab.title.toLowerCase())} is already on your list. Add your own from here on.</p></div>`,
+      body: `<div class="empty"><h3>You've got the lot</h3><p>Every suggestion we have for ${s.section === 'own' ? 'personal kit' : esc(tab.title.toLowerCase())} is already on your list. Add your own from here on.</p></div>`,
     })
   }
 
@@ -689,7 +659,7 @@ function sheetSuggest(s) {
         <button class="pick" data-act="toggle-pick" data-title="${esc(c.title)}" data-cat="${esc(c.cat)}"
                 data-note="${esc(c.note ?? '')}" aria-pressed="${picked.has(c.title)}">
           <span class="pick__main">
-            <span class="pick__title">${esc(c.title)}${c.own ? '<span class="tag tag--inline">one each</span>' : ''}</span>
+            <span class="pick__title">${esc(c.title)}</span>
             ${c.note ? `<span class="pick__note">${esc(c.note)}</span>` : ''}
           </span>
           <span class="pick__tick">${ICONS.tickGreen}</span>
@@ -698,7 +668,7 @@ function sheetSuggest(s) {
 
   return sheetShell({
     title: 'What am I missing?',
-    blurb: `${pool.length} things people usually bring that aren't on your list yet. Tap the ones you want.`,
+    blurb: `${pool.length} ${s.section === 'own' ? 'things people bring one each of' : 'things people usually bring'} that aren't on your list yet. Tap the ones you want.`,
     body,
     foot: `<button class="btn btn--primary btn--wide" data-act="add-picked" ${picked.size ? '' : 'disabled'}>
              ${picked.size ? `Add ${picked.size} ${picked.size === 1 ? 'thing' : 'things'}` : 'Pick some things'}</button>`,
@@ -748,8 +718,20 @@ document.addEventListener('click', async (ev) => {
   switch (act) {
     case 'tab':
       S.tab = el.dataset.tab
+      S.section = 'shared'
       render()
       window.scrollTo(0, 0)
+      break
+
+    case 'section':
+      S.section = el.dataset.section
+      render()
+      window.scrollTo(0, 0)
+      break
+
+    case 'move-kind':
+      await mutate(() => api(`/items/${el.dataset.id}`, { method: 'PATCH', body: { kind: el.dataset.kind } }))
+      toast(el.dataset.kind === 'shared' ? 'Moved to the group list.' : 'Moved to personal kit.')
       break
 
     case 'scrim':
@@ -814,13 +796,14 @@ document.addEventListener('click', async (ev) => {
       await mutate(() => api(`/items/${el.dataset.id}`, { method: 'PATCH', body: { assignee_id: el.dataset.member || '' } }))
       break
 
+    // Both open into whichever section you are looking at.
     case 'add':
-      S.sheet = { kind: 'add', list: TABS.find((t) => t.id === S.tab).list }
+      S.sheet = { kind: 'add', list: TABS.find((t) => t.id === S.tab).list, section: activeSection() }
       renderSheet()
       break
 
     case 'suggest':
-      S.sheet = { kind: 'suggest', list: TABS.find((t) => t.id === S.tab).list, picked: new Set() }
+      S.sheet = { kind: 'suggest', list: TABS.find((t) => t.id === S.tab).list, section: activeSection(), picked: new Set() }
       renderSheet()
       break
 
@@ -946,6 +929,17 @@ async function poll() {
 
 setInterval(poll, 5000)
 document.addEventListener('visibilitychange', () => { if (!document.hidden) poll() })
+
+// The sticky header carries the trip name and dates, which you only need on
+// arrival. Once you start scrolling it collapses to the switcher and the bar.
+// The class goes on <html> so a re-render can't lose it.
+let tight = false
+addEventListener('scroll', () => {
+  const now = window.scrollY > 24
+  if (now === tight) return
+  tight = now
+  document.documentElement.classList.toggle('is-scrolled', now)
+}, { passive: true })
 
 // ---- boot -------------------------------------------------------------------
 

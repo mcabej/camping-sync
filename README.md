@@ -7,10 +7,12 @@ until somebody fixes that.
 ## What it does
 
 - **Pack / Eat / Drink / Do** — four shared lists, grouped by category.
-- **Group kit vs your own kit** — one tent covers four people; one sleeping bag
-  covers one. Group items are claimed by a single person. One-each items
-  (`kind = 'own'`) can't be claimed at all — every person ticks off their own.
-  Each list is split into the two, and each gets its own coverage bar.
+- **For the group vs personal kit** — one tent covers four people; one sleeping
+  bag covers one. Group items are claimed by a single person. Personal items
+  (`kind = 'own'`) can't be claimed at all — every person ticks off their own,
+  and **only they can see it**: the server returns a viewer's own ticks and
+  nobody else's, and personal ticks are kept out of the activity feed.
+  A switcher in the sticky header moves between the two halves of a list.
 - **Two steps, both labelled** — first *who is bringing it*, then *is it packed*.
   The packed toggle only exists once somebody has claimed the item, so there is
   never an unlabelled checkbox sitting next to an unanswered question.
@@ -56,7 +58,8 @@ An item's `kind` decides how it's tracked, and the two are mutually exclusive:
 
 Switching an item between the two clears the other model's state, so a thing
 can never be half-claimed and half-one-each. Plans (`activities`) are always
-shared. Trips created before this split are migrated on boot: the column is
+shared and never show the orange unclaimed chip — nobody "brings" a hike, so
+they're measured by votes and can take an optional organiser instead. Trips created before this split are migrated on boot: the column is
 added and known one-each titles are flipped over, using the catalogue.
 
 ### Auth

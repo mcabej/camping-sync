@@ -25,9 +25,12 @@ function requireTrip(req, res) {
   return trip
 }
 
+// Who is asking. Personal-kit ticks are only ever returned to their owner.
+const viewerId = (req) => clean(req.get('x-member-id') || req.body?.actorId, 64) || null
+
 // The name we attribute changes to in the activity feed.
 function actorName(tripId, req) {
-  const id = clean(req.get('x-member-id') || req.body?.actorId, 64)
+  const id = viewerId(req)
   if (!id) return ''
   const m = db.prepare('SELECT name FROM members WHERE id = ? AND trip_id = ?').get(id, tripId)
   return m?.name ?? ''
@@ -66,7 +69,7 @@ app.post('/api/trips', (req, res) => {
 })
 
 app.get('/api/trips/:id', (req, res) => {
-  const state = getTripState(req.params.id)
+  const state = getTripState(req.params.id, viewerId(req))
   if (!state) return res.status(404).json({ error: 'No trip with that code. Check the link.' })
   res.json(state)
 })
@@ -94,7 +97,7 @@ app.patch('/api/trips/:id', (req, res) => {
     logEvent(trip.id, actorName(trip.id, req), 'updated the trip details')
   }
   bumpRev(trip.id)
-  res.json(getTripState(trip.id))
+  res.json(getTripState(trip.id, viewerId(req)))
 })
 
 // ---- members ----------------------------------------------------------------
@@ -129,7 +132,7 @@ app.delete('/api/trips/:id/members/:mid', (req, res) => {
     logEvent(trip.id, actorName(trip.id, req), `removed ${m.name} from the trip`)
     bumpRev(trip.id)
   }
-  res.json(getTripState(trip.id))
+  res.json(getTripState(trip.id, viewerId(req)))
 })
 
 // ---- items ------------------------------------------------------------------
@@ -164,7 +167,7 @@ app.post('/api/trips/:id/items', (req, res) => {
       : `added ${added.length} things to the ${clean(incoming[0]?.list, 20)} list`)
     bumpRev(trip.id)
   }
-  res.json(getTripState(trip.id))
+  res.json(getTripState(trip.id, viewerId(req)))
 })
 
 app.patch('/api/items/:id', (req, res) => {
@@ -210,7 +213,7 @@ app.patch('/api/items/:id', (req, res) => {
   }
 
   bumpRev(item.trip_id)
-  res.json(getTripState(item.trip_id))
+  res.json(getTripState(item.trip_id, viewerId(req)))
 })
 
 app.delete('/api/items/:id', (req, res) => {
@@ -219,7 +222,7 @@ app.delete('/api/items/:id', (req, res) => {
   db.prepare('DELETE FROM items WHERE id = ?').run(item.id)
   logEvent(item.trip_id, actorName(item.trip_id, req), `removed ${item.title}`)
   bumpRev(item.trip_id)
-  res.json(getTripState(item.trip_id))
+  res.json(getTripState(item.trip_id, viewerId(req)))
 })
 
 // Personal kit: each person ticks off their own, so there is nothing to claim.
@@ -234,9 +237,9 @@ app.post('/api/items/:id/own', (req, res) => {
   if (has) db.prepare('DELETE FROM own_checks WHERE item_id = ? AND member_id = ?').run(item.id, member.id)
   else db.prepare('INSERT INTO own_checks (item_id, member_id) VALUES (?, ?)').run(item.id, member.id)
 
-  logEvent(item.trip_id, member.name, has ? `unpacked their ${item.title}` : `packed their own ${item.title}`)
+  // Deliberately not logged to the feed — your own packing is nobody else's news.
   bumpRev(item.trip_id)
-  res.json(getTripState(item.trip_id))
+  res.json(getTripState(item.trip_id, member.id))
 })
 
 app.post('/api/items/:id/vote', (req, res) => {
@@ -250,7 +253,7 @@ app.post('/api/items/:id/vote', (req, res) => {
   else db.prepare('INSERT INTO votes (item_id, member_id) VALUES (?, ?)').run(item.id, memberId)
 
   bumpRev(item.trip_id)
-  res.json(getTripState(item.trip_id))
+  res.json(getTripState(item.trip_id, viewerId(req)))
 })
 
 // ---- static -----------------------------------------------------------------
