@@ -110,6 +110,9 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 .field input:focus, .field textarea:focus { border-color: var(--forest); outline-offset: 1px; }
 .field textarea { min-height: 96px; resize: vertical; }
 .field--split { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+/* A date input's min-content width is wider than half a narrow card, so on
+   small phones the pair pushed the card out sideways. */
+@media (max-width: 400px) { .field--split { grid-template-columns: 1fr; } }
 
 /* ==========================================================================
    Landing
@@ -415,13 +418,69 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 }
 .card > h3 { font-size: 18px; margin-bottom: 3px; }
 .card > p { margin: 0 0 16px; color: var(--ink-soft); font-size: 14px; }
+.card__head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 10px; }
+.card__head h3 { flex: 1; font-size: 18px; }
+.card > .card__body { margin: 0; }
+/* The notes are the one piece of writing on the page, so they keep their line
+   breaks and the ink of body copy rather than the grey of a caption. */
+.card > .notes { white-space: pre-wrap; color: var(--ink); font-size: 15px; overflow-wrap: anywhere; }
+
+/* ---- the whole trip, in five lines --------------------------------------- */
+
+.status > .eyebrow { display: block; }
+.countdown { display: flex; align-items: baseline; gap: 10px; margin: 5px 0 15px; }
+.countdown__n {
+  font-family: var(--display); font-weight: 800; font-size: 46px; line-height: .9;
+  letter-spacing: -0.035em; font-variant-numeric: tabular-nums; color: var(--forest-deep);
+}
+.countdown__word { font-size: 15px; color: var(--ink-soft); }
+.countdown__word--alone {
+  font-family: var(--display); font-weight: 800; font-size: 28px;
+  letter-spacing: -0.02em; color: var(--forest-deep);
+}
+
+/* Every other tab shows one list. Here they all report in, and a row is a
+   shortcut to the list it is talking about. */
+.ready { display: flex; flex-direction: column; }
+/* Fixed outer columns, so the four bars line up as one block rather than four
+   ragged ones. */
+.ready__row {
+  display: grid; grid-template-columns: 46px minmax(28px, 1fr) 108px;
+  align-items: center; gap: 11px; text-align: left;
+  padding: 10px 0; border-top: 1px solid var(--line);
+}
+.ready__name {
+  font-size: 12px; font-weight: 800; letter-spacing: .05em;
+  text-transform: uppercase; color: var(--ink);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ready__track {
+  display: flex; gap: 2px; height: 11px; border-radius: 3px; overflow: hidden;
+  background: var(--paper-sunk); box-shadow: inset 0 0 0 1.5px var(--line);
+}
+.ready__say { font-size: 12.5px; color: var(--ink-soft); white-space: nowrap; text-align: right; }
+.ready__say b { color: var(--ink); font-weight: 600; }
+.ready__none { color: var(--ink-faint); }
+.ready__row:hover .ready__name { color: var(--forest); }
+
+.status__mine {
+  margin: 14px 0 0; padding-top: 13px; border-top: 1px solid var(--line);
+  font-size: 13px; color: var(--ink-soft);
+}
+.status__mine b { color: var(--ink); font-weight: 600; }
 
 .people { display: flex; flex-direction: column; gap: 2px; }
 .person { display: flex; align-items: center; gap: 11px; padding: 9px 0; border-bottom: 1px solid var(--line); }
 .person:last-child { border-bottom: 0; }
 .person__swatch { width: 13px; height: 13px; border-radius: 3px; flex: none; }
 .person__name { flex: 1; font-weight: 500; font-size: 15px; }
+.person__you { font-size: 12px; color: var(--ink-faint); }
 .person__load { flex: none; font-family: var(--mono); font-size: 12px; color: var(--ink-faint); white-space: nowrap; }
+
+.invite { margin-top: 18px; }
+.invite__note { margin: 8px 0 0; font-size: 12.5px; color: var(--ink-faint); }
+
+.more { margin-top: 15px; }
 
 .code-box {
   display: flex; align-items: center; gap: 12px;

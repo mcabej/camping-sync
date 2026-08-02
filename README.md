@@ -18,6 +18,10 @@ until somebody fixes that.
   never an unlabelled checkbox sitting next to an unanswered question.
 - **What am I missing?** — a catalogue of ~90 things people usually bring, each
   with a note explaining why, filtered to hide what you already have.
+- **The Camp tab** — the whole trip on one screen: days to go, all four lists
+  reporting their coverage at once (tap one to go there), the notes everyone
+  needs (gate code, meeting point) shown as text rather than buried in a form,
+  and who has packed what of what they claimed.
 - **Camp smarts** — 15 things first-timers find out the hard way.
 - **Live sync** — clients poll a revision counter every 5s and refetch on change.
 - **Activity feed** — who added, claimed, packed or dropped what.

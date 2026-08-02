@@ -42,6 +42,8 @@ const S = {
   rev: 0,
   sheet: null,       // { kind, ...payload }
   busy: false,
+  editNotes: false,  // the shared notes read as text until you ask to change them
+  expand: { tips: false, feed: false },
 }
 
 const root = document.getElementById('root')
@@ -172,46 +174,59 @@ function ago(iso) {
 
 // ---- shared partials --------------------------------------------------------
 
-// One bar, one line, for whichever section is on screen. It reads left to right:
-// how much is handled, then how much is not.
-function coverageBar(list, section) {
+// The segments and the sentence for one list, in one place: the sticky header
+// draws them on dark canvas, the Camp tab draws all four of them on paper.
+// `empty` is a caller's problem, because the two backgrounds want different ink.
+function barParts(list, section) {
   const c = statsFor(list)
-  const bar = (segs, say, label) => `
-    <div class="cov">
-      <div class="cov__track" role="img" aria-label="${label}">${segs}</div>
-      <p class="cov__say">${say}</p>
-    </div>`
+  const seg = (flex, bg) => `<div class="coverage__seg" style="flex:${flex};background:${bg}"></div>`
 
   if (list === 'activities') {
+    if (!c.ideas) return { empty: 'no ideas yet', say: 'Add what you fancy doing.', aria: 'no ideas yet' }
     const rest = c.ideas - c.wanted
-    if (!c.ideas) return bar('<span class="cov__empty">no ideas yet</span>', 'Add what you fancy doing.', 'empty')
-    return bar(
-      `${c.wanted ? `<div class="coverage__seg" style="flex:${c.wanted};background:var(--m0)"></div>` : ''}
-       ${rest ? `<div class="coverage__seg coverage__seg--quiet" style="flex:${rest}"></div>` : ''}`,
-      `<b>${c.wanted} of ${c.ideas}</b> ${c.ideas === 1 ? 'idea has' : 'ideas have'} a vote`,
-      `${c.wanted} of ${c.ideas} ideas have a vote`)
+    return {
+      segs: `${c.wanted ? seg(c.wanted, 'var(--m0)') : ''}
+             ${rest ? `<div class="coverage__seg coverage__seg--quiet" style="flex:${rest}"></div>` : ''}`,
+      say: `<b>${c.wanted} of ${c.ideas}</b> ${c.ideas === 1 ? 'idea has' : 'ideas have'} a vote`,
+      short: `<b>${c.wanted}</b> of ${c.ideas} voted`,
+      aria: `${c.wanted} of ${c.ideas} ideas have a vote`,
+    }
   }
 
   if (section === 'own') {
+    if (!c.own) return { empty: 'nothing here yet', say: 'Nothing on your personal list.', aria: 'nothing here yet' }
     const left = c.own - c.mine
-    if (!c.own) return bar('<span class="cov__empty">nothing here yet</span>', 'Nothing on your personal list.', 'empty')
-    return bar(
-      `${c.mine ? `<div class="coverage__seg" style="flex:${c.mine};background:${colorOf(meMember())}"></div>` : ''}
-       ${left ? `<div class="coverage__seg coverage__seg--gap" style="flex:${left}"></div>` : ''}`,
-      left === 0 ? '<b>All packed.</b>' : `<b>${left}</b> still to pack`,
-      `you have packed ${c.mine} of ${c.own}`)
+    return {
+      segs: `${c.mine ? seg(c.mine, colorOf(meMember())) : ''}
+             ${left ? `<div class="coverage__seg coverage__seg--gap" style="flex:${left}"></div>` : ''}`,
+      say: left === 0 ? '<b>All packed.</b>' : `<b>${left}</b> still to pack`,
+      aria: `you have packed ${c.mine} of ${c.own}`,
+    }
   }
 
-  if (!c.shared) return bar('<span class="cov__empty">nothing here yet</span>', 'Nothing on this list.', 'empty')
+  if (!c.shared) return { empty: 'nothing here yet', say: 'Nothing on this list.', aria: 'nothing here yet' }
 
   const segs = [...c.perMember.entries()]
     .map(([id, n]) => `<div class="coverage__seg" style="flex:${n};background:${colorOf(memberById(id))}"
            title="${esc(memberById(id).name)}: ${n}"></div>`).join('')
-  const gap = c.open > 0 ? `<div class="coverage__seg coverage__seg--gap" style="flex:${c.open}"></div>` : ''
 
-  return bar(`${segs}${gap}`,
-    c.open === 0 ? `<b>All ${c.shared} covered.</b>` : `<b>${c.open}</b> need someone`,
-    `${c.claimed} of ${c.shared} claimed`)
+  return {
+    segs: `${segs}${c.open > 0 ? `<div class="coverage__seg coverage__seg--gap" style="flex:${c.open}"></div>` : ''}`,
+    say: c.open === 0 ? `<b>All ${c.shared} covered.</b>` : `<b>${c.open}</b> need someone`,
+    aria: `${c.claimed} of ${c.shared} claimed`,
+  }
+}
+
+// One bar, one line, for whichever section is on screen. It reads left to right:
+// how much is handled, then how much is not.
+function coverageBar(list, section) {
+  const p = barParts(list, section)
+  return `
+    <div class="cov">
+      <div class="cov__track" role="img" aria-label="${p.aria}">
+        ${p.empty ? `<span class="cov__empty">${p.empty}</span>` : p.segs}</div>
+      <p class="cov__say">${p.say}</p>
+    </div>`
 }
 
 // The section switcher lives in the sticky header, so the other half of the
@@ -418,43 +433,131 @@ function listPage(tab) {
     </main>`
 }
 
-function campPage() {
-  const load = new Map()
-  for (const it of S.items) {
-    if (!isOwn(it) && it.assignee_id) load.set(it.assignee_id, (load.get(it.assignee_id) ?? 0) + 1)
-  }
+// The dates are the only thing on the trip nobody has to be told twice, so the
+// Camp tab leads with the one number they add up to.
+function countdown(trip) {
+  const day = (s) => { const d = new Date(`${s}T12:00:00`); return Number.isNaN(+d) ? null : d }
+  const start = trip.start_date ? day(trip.start_date) : null
+  if (!start) return null
+  const end = (trip.end_date ? day(trip.end_date) : null) ?? start
+  const today = new Date()
+  today.setHours(12, 0, 0, 0)
 
+  const out = Math.round((start - today) / 86400000)
+  if (out > 1) return { n: out, word: 'days to go' }
+  if (out === 1) return { n: 1, word: 'day to go' }
+  if (today <= end) return { word: 'Happening now' }
+  return { word: 'Back home' }
+}
+
+// Every other tab shows you one list. This is the only place you can see all
+// four at once, which is what the tab is for.
+function readyRow(tab) {
+  const p = barParts(tab.list, 'shared')
+  return `
+    <button class="ready__row" data-act="tab" data-tab="${tab.id}">
+      <span class="ready__name">${tab.label}</span>
+      <span class="ready__track" role="img" aria-label="${tab.title}: ${p.aria}">${p.empty ? '' : p.segs}</span>
+      <span class="ready__say">${p.empty ? '<span class="ready__none">nothing yet</span>' : (p.short ?? p.say)}</span>
+    </button>`
+}
+
+function statusCard() {
+  const c = countdown(S.trip)
+  const mine = statsFor(null)
+  return `
+    <div class="card status">
+      <span class="eyebrow">How it's looking</span>
+      <p class="countdown">
+        ${c?.n ? `<span class="countdown__n">${c.n}</span><span class="countdown__word">${c.word}</span>`
+               : `<span class="countdown__word countdown__word--alone">${c ? c.word : 'No dates yet'}</span>`}
+      </p>
+      <div class="ready">${TABS.filter((t) => t.list).map(readyRow).join('')}</div>
+      ${mine.own ? `<p class="status__mine">Your own kit: <b>${mine.mine} of ${mine.own}</b> packed. Nobody else can see this.</p>` : ''}
+    </div>`
+}
+
+// Written once, read all weekend — so it reads as text, and only turns into a
+// textarea when somebody actually wants to change it.
+function notesCard() {
+  const text = String(S.trip.notes ?? '').trim()
+  if (S.editNotes || !text) {
+    return `
+      <div class="card">
+        <h3>Notes for everyone</h3>
+        <p>The gate code, who's driving, where you're meeting.</p>
+        <form data-act="save-notes">
+          <label class="field"><span class="sr-only">Notes for everyone</span>
+            <textarea name="notes" maxlength="4000" autofocus
+              placeholder="Gate code 1470. Meet at the Co-op car park at 9. Josh has the roof box.">${esc(S.trip.notes)}</textarea></label>
+          <button class="btn btn--primary" type="submit">Save notes</button>
+        </form>
+      </div>`
+  }
+  return `
+    <div class="card">
+      <div class="card__head">
+        <h3>Notes for everyone</h3>
+        <button class="btn btn--sm" data-act="edit-notes">Edit</button>
+      </div>
+      <p class="card__body notes">${esc(text)}</p>
+    </div>`
+}
+
+function peopleCard() {
+  // What somebody is bringing for the group. Personal kit is theirs, and
+  // organising a hike is not a thing you carry.
+  const load = new Map(), packed = new Map()
+  for (const it of S.items) {
+    if (isOwn(it) || isPlan(it) || !it.assignee_id || !memberById(it.assignee_id)) continue
+    load.set(it.assignee_id, (load.get(it.assignee_id) ?? 0) + 1)
+    if (it.packed) packed.set(it.assignee_id, (packed.get(it.assignee_id) ?? 0) + 1)
+  }
   const link = `${location.origin}/t/${S.trip.id}`
 
   return `
-    <main class="page">
-      <div class="page__head">
-        <span class="eyebrow">Camp</span>
-        <h2>The trip</h2>
+    <div class="card">
+      <h3>Who's coming</h3>
+      <p>Colours match the bar on every list. The count is what they're bringing for the group — personal kit stays private to each person.</p>
+      <div class="people">
+        ${S.members.map((m) => {
+          const n = load.get(m.id) ?? 0
+          return `
+            <div class="person">
+              <span class="person__swatch" style="background:${colorOf(m)}"></span>
+              <span class="person__name">${esc(m.name)}${m.id === S.me ? ' <span class="person__you mono">you</span>' : ''}</span>
+              <span class="person__load">${n ? `${packed.get(m.id) ?? 0} of ${n} packed` : 'nothing yet'}</span>
+              ${m.id === S.me ? '' : `<button class="item__kill" data-act="drop-member" data-id="${m.id}" aria-label="Remove ${esc(m.name)}">${ICONS.x}</button>`}
+            </div>`
+        }).join('')}
       </div>
-
-      <div class="card">
-        <h3>Invite your friends</h3>
-        <p>Anyone with this link can add things and claim them. No sign-up.</p>
+      <div class="invite">
         <div class="code-box">
           <span class="code-box__code">${esc(link)}</span>
           <button class="btn btn--sm" data-act="share">Copy</button>
         </div>
+        <p class="invite__note">Anyone with this link can add things and claim them. No sign-up.</p>
       </div>
+    </div>`
+}
 
-      <div class="card">
-        <h3>Who's coming</h3>
-        <p>Colours match the bar at the top of every list. The count is what they're bringing for the group — personal kit is private to each person.</p>
-        <div class="people">
-          ${S.members.map((m) => `
-            <div class="person">
-              <span class="person__swatch" style="background:${colorOf(m)}"></span>
-              <span class="person__name">${esc(m.name)}${m.id === S.me ? ' <span class="mono" style="color:var(--ink-faint);font-size:12px">you</span>' : ''}</span>
-              <span class="person__load">${load.get(m.id) ?? 0} things</span>
-              ${m.id === S.me ? '' : `<button class="item__kill" data-act="drop-member" data-id="${m.id}" aria-label="Remove ${esc(m.name)}">${ICONS.x}</button>`}
-            </div>`).join('')}
-        </div>
-      </div>
+// Both long lists on this page open a few rows at a time, so neither of them
+// buries what comes after it.
+function moreBtn(what, total, shown) {
+  if (total <= shown) return ''
+  return `<button class="btn btn--sm btn--wide more" data-act="expand" data-what="${what}">
+            ${S.expand[what] ? 'Show fewer' : `Show all ${total}`}</button>`
+}
+
+function campPage() {
+  const tips = S.expand.tips ? S.tips : S.tips.slice(0, 3)
+  const events = S.expand.feed ? S.events : S.events.slice(0, 8)
+
+  return `
+    <main class="page">
+      ${statusCard()}
+      ${notesCard()}
+      ${peopleCard()}
 
       <div class="card">
         <h3>Trip details</h3>
@@ -465,8 +568,6 @@ function campPage() {
             <label class="field"><span>Arrive</span><input type="date" name="start_date" value="${esc(S.trip.start_date)}"></label>
             <label class="field"><span>Leave</span><input type="date" name="end_date" value="${esc(S.trip.end_date)}"></label>
           </div>
-          <label class="field"><span>Notes for everyone</span>
-            <textarea name="notes" maxlength="4000" placeholder="Gate code, who's driving, meeting point, whose car has the roof box…">${esc(S.trip.notes)}</textarea></label>
           <button class="btn btn--primary" type="submit">Save details</button>
         </form>
       </div>
@@ -475,24 +576,26 @@ function campPage() {
         <h3>Camp smarts</h3>
         <p>The things people find out the hard way on their first trip.</p>
         <div class="tips">
-          ${S.tips.map((t, i) => `
+          ${tips.map((t, i) => `
             <div class="tip">
               <span class="tip__mark">${i + 1}</span>
               <div><h4>${esc(t.title)}</h4><p>${esc(t.body)}</p></div>
             </div>`).join('')}
         </div>
+        ${moreBtn('tips', S.tips.length, 3)}
       </div>
 
       <div class="card">
         <h3>What's been happening</h3>
         <div class="feed">
-          ${S.events.length ? S.events.map((e) => `
+          ${events.length ? events.map((e) => `
             <div class="feed__row">
               <span class="feed__who">${esc(e.actor || 'Someone')}</span>
               <span class="feed__what">${esc(e.text)}</span>
-              <span class="feed__when">${ago(e.created_at)}</span>
-            </div>`).join('') : '<p style="color:var(--ink-soft);font-size:14px;margin:0">Nothing yet.</p>'}
+              <span class="feed__when" title="${esc(new Date(e.created_at).toLocaleString())}">${ago(e.created_at)}</span>
+            </div>`).join('') : '<p class="card__body">Nothing yet.</p>'}
         </div>
+        ${moreBtn('feed', S.events.length, 8)}
       </div>
     </main>`
 }
@@ -729,6 +832,16 @@ document.addEventListener('click', async (ev) => {
       window.scrollTo(0, 0)
       break
 
+    case 'expand':
+      S.expand[el.dataset.what] = !S.expand[el.dataset.what]
+      render()
+      break
+
+    case 'edit-notes':
+      S.editNotes = true
+      render()
+      break
+
     case 'move-kind':
       await mutate(() => api(`/items/${el.dataset.id}`, { method: 'PATCH', body: { kind: el.dataset.kind } }))
       toast(el.dataset.kind === 'shared' ? 'Moved to the group list.' : 'Moved to personal kit.')
@@ -903,6 +1016,12 @@ document.addEventListener('submit', async (ev) => {
     case 'save-trip':
       await mutate(() => api(`/trips/${S.trip.id}`, { method: 'PATCH', body: f }))
       toast('Saved.')
+      break
+
+    case 'save-notes':
+      S.editNotes = false
+      await mutate(() => api(`/trips/${S.trip.id}`, { method: 'PATCH', body: { notes: f.notes } }))
+      toast('Everyone can see that now.')
       break
   }
 })
