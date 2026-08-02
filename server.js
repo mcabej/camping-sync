@@ -74,6 +74,43 @@ app.get('/api/trips/:id', (req, res) => {
   res.json(state)
 })
 
+// A device remembers the codes it has joined. This turns that bare list into
+// something worth putting on the home page — without an account behind it.
+app.post('/api/trips/summary', (req, res) => {
+  const wanted = (Array.isArray(req.body?.trips) ? req.body.trips : []).slice(0, 40)
+  const tripRow = db.prepare('SELECT id, name, location, start_date, end_date FROM trips WHERE id = ?')
+  const memberRow = db.prepare('SELECT name, hue FROM members WHERE id = ? AND trip_id = ?')
+  const headcount = db.prepare('SELECT COUNT(*) AS c FROM members WHERE trip_id = ?')
+  // Plans are not "brought" by anyone and personal kit is private, so the home
+  // page counts the same thing the coverage bar does: shared things, and gaps.
+  const SHARED = `trip_id = ? AND kind = 'shared' AND list != 'activities'`
+  const sharedCount = db.prepare(`SELECT COUNT(*) AS c FROM items WHERE ${SHARED}`)
+  const openCount = db.prepare(`SELECT COUNT(*) AS c FROM items WHERE ${SHARED} AND assignee_id IS NULL`)
+  const claims = db.prepare(`
+    SELECT m.hue AS hue, COUNT(*) AS n FROM items i
+    JOIN members m ON m.id = i.assignee_id
+    WHERE i.trip_id = ? AND i.kind = 'shared' AND i.list != 'activities'
+    GROUP BY m.hue ORDER BY n DESC`)
+
+  const trips = [], missing = []
+  for (const entry of wanted) {
+    const id = clean(entry?.id, 64)
+    if (!id) continue
+    const trip = tripRow.get(id)
+    // Trips that no longer exist are reported back so the device can forget them.
+    if (!trip) { missing.push(id); continue }
+    trips.push({
+      ...trip,
+      members: headcount.get(id).c,
+      shared: sharedCount.get(id).c,
+      open: openCount.get(id).c,
+      claims: claims.all(id),
+      you: memberRow.get(clean(entry?.memberId, 64), id) ?? null,
+    })
+  }
+  res.json({ trips, missing })
+})
+
 // Cheap endpoint the clients poll; a changed rev means "refetch".
 app.get('/api/trips/:id/rev', (req, res) => {
   const row = db.prepare('SELECT rev FROM trips WHERE id = ?').get(req.params.id)

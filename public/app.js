@@ -44,6 +44,11 @@ const S = {
   busy: false,
   editNotes: false,  // the shared notes read as text until you ask to change them
   expand: { tips: false, feed: false },
+  // Home page: the trips this device has joined. null while we're still asking.
+  trips: null,
+  joinCode: '',
+  joinError: '',
+  showCreate: false,
 }
 
 const root = document.getElementById('root')
@@ -307,45 +312,165 @@ function itemRow(item) {
 
 // ---- views ------------------------------------------------------------------
 
+// The trip you are going on next is a number, not a date range — so the card
+// leads with it, and only falls back to words when there is nothing to count.
+function whenBadge(t) {
+  const c = countdown(t)
+  if (!c) return '<span class="when when--none mono">no dates</span>'
+  if (c.n) return `<span class="when"><b>${c.n}</b><span>${c.n === 1 ? 'day' : 'days'}</span></span>`
+  // Blaze only ever means "nobody has picked this up", so the trip you are on
+  // right now gets the forest, not the trail marker.
+  return c.word === 'Happening now'
+    ? '<span class="when when--live mono">now</span>'
+    : '<span class="when when--none mono">past</span>'
+}
+
+// The trip you are on beats the one you leave for on Friday, which beats the
+// one with no dates, which beats the one you got back from.
+function tripRank(t) {
+  const c = countdown(t)
+  if (!c) return [1, 0]
+  if (c.word === 'Happening now') return [-1, 0]
+  if (c.n) return [0, c.n]
+  return [2, -Date.parse(`${t.start_date}T12:00:00`) || 0]
+}
+const byWhen = (a, b) => {
+  const x = tripRank(a), y = tripRank(b)
+  return x[0] - y[0] || x[1] - y[1]
+}
+
+// The same bar as the one in the app, at a glance and in the same colours: who
+// has got what, then the hatched gap nobody has picked up.
+function tripBar(t) {
+  if (!t.shared) return { track: '', say: 'Nothing on the lists yet' }
+  const segs = t.claims.map(({ hue, n }) =>
+    `<span class="coverage__seg" style="flex:${n};background:${colorOf({ hue })}"></span>`).join('')
+  return {
+    track: `${segs}${t.open ? `<span class="coverage__seg coverage__seg--gap" style="flex:${t.open}"></span>` : ''}`,
+    say: t.open
+      ? `<b class="say--open">${t.open}</b> still need someone`
+      : `<b>All ${t.shared} covered.</b>`,
+  }
+}
+
+function tripCard(t) {
+  const bar = tripBar(t)
+  const meta = [t.location, fmtDates(t), `${t.members} ${t.members === 1 ? 'person' : 'people'}`].filter(Boolean)
+  const you = t.you
+    ? `<span class="trip-card__you"><span class="trip-card__dot" style="background:${colorOf(t.you)}"></span>${esc(t.you.name)}</span>`
+    : '<span class="trip-card__you trip-card__you--out">Add your name</span>'
+
+  return `
+    <div class="trip-card">
+      <a class="trip-card__hit" href="/t/${encodeURIComponent(t.id)}" data-act="open-trip" data-id="${esc(t.id)}">
+        <span class="trip-card__edge" style="background:${t.you ? colorOf(t.you) : 'var(--forest)'}"></span>
+        <span class="trip-card__body">
+          <span class="trip-card__top">
+            <span class="trip-card__name">${esc(t.name)}</span>
+            ${whenBadge(t)}
+          </span>
+          ${meta.length ? `<span class="trip-card__meta">${meta.map(esc).join(' · ')}</span>` : ''}
+          ${bar.track ? `<span class="trip-card__track">${bar.track}</span>` : ''}
+          <span class="trip-card__foot">${you}<span class="trip-card__say">${bar.say}</span></span>
+        </span>
+      </a>
+      <button class="trip-card__forget" data-act="forget-trip" data-id="${esc(t.id)}"
+              aria-label="Remove ${esc(t.name)} from this device">${ICONS.x}</button>
+    </div>`
+}
+
+function tripsBlock() {
+  if (S.trips === null) {
+    return `<section class="landing__block" aria-busy="true">
+              <div class="landing__block-head"><h2>Your trips</h2></div>
+              <div class="trips">${'<div class="skel"></div>'.repeat(2)}</div>
+            </section>`
+  }
+  if (!S.trips.length) return ''
+  return `
+    <section class="landing__block">
+      <div class="landing__block-head">
+        <h2>Your trips</h2>
+        <span class="landing__block-n mono">${S.trips.length}</span>
+      </div>
+      <div class="trips">${[...S.trips].sort(byWhen).map(tripCard).join('')}</div>
+    </section>`
+}
+
+function joinBlock() {
+  return `
+    <section class="landing__card landing__card--join">
+      <h2>Join a trip</h2>
+      <p>Paste the link a friend sent you, or just type the code from the end of it.</p>
+      <form data-act="join-code" class="joinbar${S.joinError ? ' joinbar--bad' : ''}">
+        <label class="sr-only" for="cs-code">Trip link or code</label>
+        <input id="cs-code" name="code" value="${esc(S.joinCode)}" placeholder="pine-hollow-204"
+               autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" maxlength="200">
+        <button class="btn btn--primary" type="submit">Go</button>
+      </form>
+      ${S.joinError ? `<p class="joinbar__err">${esc(S.joinError)}</p>` : ''}
+    </section>`
+}
+
+// Whoever you were last time is almost certainly who you are this time.
+const lastKnownName = () => (S.trips ?? []).map((t) => t.you?.name).find(Boolean) ?? ''
+
+function createBlock(folded) {
+  if (folded && !S.showCreate) {
+    return `<section class="landing__block">
+              <button class="btn btn--wide" data-act="show-create">${ICONS.plus} Start another trip</button>
+            </section>`
+  }
+  return `
+    <section class="landing__card">
+      <h2>Start a trip</h2>
+      <p>Takes about twenty seconds. You'll get a link to send your friends — no accounts, no app to install.</p>
+      <form data-act="create">
+        <label class="field"><span>Your name</span>
+          <input name="organiser" value="${esc(lastKnownName())}" placeholder="Josh" autocomplete="given-name" required maxlength="40"></label>
+        <label class="field"><span>Trip name</span>
+          <input name="name" placeholder="First camping trip" required maxlength="80"></label>
+        <label class="field"><span>Where</span>
+          <input name="location" placeholder="Somewhere with a lake" maxlength="120"></label>
+        <div class="field field--split">
+          <label class="field"><span>Arrive</span><input type="date" name="start_date"></label>
+          <label class="field"><span>Leave</span><input type="date" name="end_date"></label>
+        </div>
+        <button class="btn btn--primary btn--wide" type="submit">Create the trip</button>
+      </form>
+    </section>`
+}
+
+// A first-time visitor needs the pitch and the form. Somebody who already has
+// trips needs their trips — so the hero shrinks and the order flips.
 function viewLanding() {
+  const returning = S.trips === null || S.trips.length > 0
+  const blocks = returning
+    ? `${tripsBlock()}${joinBlock()}${createBlock(true)}`
+    : `${createBlock(false)}${joinBlock()}`
+
   return `
   <div class="landing">
-    <header class="landing__hero">
+    <header class="landing__hero${returning ? ' landing__hero--tight' : ''}">
       <div class="landing__inner">
         <span class="eyebrow">Camping Sync</span>
         <h1>Who's bringing<br>the <em>tent?</em></h1>
-        <p>One shared list for gear, food, drinks and plans. It keeps the tent one person brings apart from the sleeping bag you each need your own of, and the gaps stay visible until somebody fills them.</p>
-        <div class="demo-bar" aria-hidden="true">
-          <div class="demo-bar__label"><span>Sample packing list</span><span>9/14 claimed</span></div>
-          <div class="demo-bar__track">
-            <div class="demo-bar__seg" style="flex:4;background:#2F6B57"></div>
-            <div class="demo-bar__seg" style="flex:3;background:#37698F"></div>
-            <div class="demo-bar__seg" style="flex:2;background:#7A5AA6"></div>
-            <div class="demo-bar__seg demo-bar__seg--gap"></div>
-          </div>
-        </div>
+        ${returning ? '' : `
+          <p>One shared list for gear, food, drinks and plans. It keeps the tent one person brings apart from the sleeping bag you each need your own of, and the gaps stay visible until somebody fills them.</p>
+          <div class="demo-bar" aria-hidden="true">
+            <div class="demo-bar__label"><span>Sample packing list</span><span>9/14 claimed</span></div>
+            <div class="demo-bar__track">
+              <div class="demo-bar__seg" style="flex:4;background:#2F6B57"></div>
+              <div class="demo-bar__seg" style="flex:3;background:#37698F"></div>
+              <div class="demo-bar__seg" style="flex:2;background:#7A5AA6"></div>
+              <div class="demo-bar__seg demo-bar__seg--gap"></div>
+            </div>
+          </div>`}
       </div>
     </header>
 
     <main class="landing__body">
-      <div class="landing__card">
-        <h2>Start a trip</h2>
-        <p>Takes about twenty seconds. You'll get a link to send your friends — no accounts, no app to install.</p>
-        <form data-act="create">
-          <label class="field"><span>Your name</span>
-            <input name="organiser" placeholder="Josh" autocomplete="given-name" required maxlength="40"></label>
-          <label class="field"><span>Trip name</span>
-            <input name="name" placeholder="First camping trip" required maxlength="80"></label>
-          <label class="field"><span>Where</span>
-            <input name="location" placeholder="Somewhere with a lake" maxlength="120"></label>
-          <div class="field field--split">
-            <label class="field"><span>Arrive</span><input type="date" name="start_date"></label>
-            <label class="field"><span>Leave</span><input type="date" name="end_date"></label>
-          </div>
-          <button class="btn btn--primary btn--wide" type="submit">Create the trip</button>
-        </form>
-      </div>
-      <p class="landing__join">Got a code from a friend? Open the link they sent, or add it to the end of this address.</p>
+      <div class="landing__stack">${blocks}</div>
     </main>
   </div>`
 }
@@ -797,18 +922,96 @@ function render() {
 // ---- actions ----------------------------------------------------------------
 
 const meKey = (tripId) => `cs.me.${tripId}`
+const TRIPS_KEY = 'cs.trips'
+
+// There are no accounts, so "your trips" is whatever this device remembers.
+// Most-recent first, with the per-trip member keys as a fallback so trips joined
+// before this list existed still show up.
+function localTrips() {
+  let ids = []
+  try { ids = JSON.parse(localStorage.getItem(TRIPS_KEY) ?? '[]') } catch { /* rewritten below */ }
+  if (!Array.isArray(ids)) ids = []
+  ids = ids.filter((id) => typeof id === 'string' && id)
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i)
+    if (k?.startsWith('cs.me.')) {
+      const id = k.slice(6)
+      if (id && !ids.includes(id)) ids.push(id)
+    }
+  }
+  return ids
+}
+
+const saveTrips = (ids) => localStorage.setItem(TRIPS_KEY, JSON.stringify(ids.slice(0, 40)))
+const rememberTrip = (id) => saveTrips([id, ...localTrips().filter((t) => t !== id)])
+
+function forgetTrip(id) {
+  saveTrips(localTrips().filter((t) => t !== id))
+  localStorage.removeItem(meKey(id))
+  if (S.trips) S.trips = S.trips.filter((t) => t.id !== id)
+}
+
+async function loadTrips() {
+  const ids = localTrips()
+  if (!ids.length) { S.trips = []; return }
+  try {
+    const { trips, missing } = await api('/trips/summary', {
+      method: 'POST',
+      body: { trips: ids.map((id) => ({ id, memberId: localStorage.getItem(meKey(id)) })) },
+    })
+    // A trip that has gone stops haunting the home page.
+    for (const id of missing ?? []) forgetTrip(id)
+    S.trips = trips
+  } catch {
+    S.trips = S.trips ?? []
+  }
+}
+
+function focusJoin() {
+  if (!S.joinError) return
+  const box = root.querySelector('#cs-code')
+  if (box) { box.focus(); box.setSelectionRange(box.value.length, box.value.length) }
+}
+
+// The home page paints straight away and fills its trip list in behind, so a
+// slow network never leaves you looking at nothing.
+async function showLanding(error = '') {
+  S.view = 'landing'
+  S.joinError = error
+  render()
+  focusJoin()
+  await loadTrips()
+  if (S.view !== 'landing') return
+  render()
+  focusJoin()
+}
+
+// People paste the whole link as often as they type the code, and phone
+// keyboards throw in capitals and spaces of their own accord.
+function tripCodeFrom(raw) {
+  const s = String(raw ?? '').trim()
+  const m = s.match(/\/t\/([^/?#\s]+)/i)
+  return decodeURIComponent(m ? m[1] : s).trim().toLowerCase().replace(/\s+/g, '-')
+}
+
+async function goToTrip(code) {
+  history.pushState({}, '', `/t/${encodeURIComponent(code)}`)
+  await openTrip(code)
+}
 
 async function openTrip(code) {
   try {
     const state = await api(`/trips/${encodeURIComponent(code)}`)
     S.me = localStorage.getItem(meKey(code))
     if (S.me && !state.members.some((m) => m.id === S.me)) S.me = null
+    if (S.me) rememberTrip(code)
+    S.joinCode = ''
+    S.joinError = ''
     S.view = S.me ? 'trip' : 'join'
     absorb(state)
   } catch (err) {
-    toast(err.message)
-    S.view = 'landing'
-    render()
+    history.replaceState({}, '', '/')
+    await showLanding(err.message)
   }
 }
 
@@ -816,9 +1019,33 @@ document.addEventListener('click', async (ev) => {
   const el = ev.target.closest('[data-act]')
   if (!el) return
   const act = el.dataset.act
+  // Trip cards are real links, so a modifier-click still opens a new tab.
+  if (el.tagName === 'A' && (ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey)) return
+  if (el.tagName === 'A') ev.preventDefault()
   if (el.tagName === 'BUTTON' && el.type !== 'submit') ev.preventDefault()
 
   switch (act) {
+    case 'open-trip':
+      await goToTrip(el.dataset.id)
+      window.scrollTo(0, 0)
+      break
+
+    case 'forget-trip': {
+      const t = (S.trips ?? []).find((x) => x.id === el.dataset.id)
+      if (t && confirm(`Take "${t.name}" off this device? The trip itself stays put, and the link still works.`)) {
+        forgetTrip(t.id)
+        render()
+        toast('Removed from this device.')
+      }
+      break
+    }
+
+    case 'show-create':
+      S.showCreate = true
+      render()
+      root.querySelector('form[data-act="create"] input')?.focus()
+      break
+
     case 'tab':
       S.tab = el.dataset.tab
       S.section = 'shared'
@@ -965,10 +1192,20 @@ document.addEventListener('submit', async (ev) => {
   const f = Object.fromEntries(new FormData(form))
 
   switch (form.dataset.act) {
+    case 'join-code': {
+      const code = tripCodeFrom(f.code)
+      S.joinCode = String(f.code ?? '')
+      if (!code) { S.joinError = 'Paste the link, or type the code from the end of it.'; render(); focusJoin(); break }
+      S.joinError = ''
+      await goToTrip(code)
+      break
+    }
+
     case 'create': {
       try {
         const { trip, memberId } = await api('/trips', { method: 'POST', body: f })
         if (memberId) localStorage.setItem(meKey(trip.id), memberId)
+        rememberTrip(trip.id)
         S.me = memberId
         S.view = 'trip'
         S.tab = 'pack'
@@ -983,6 +1220,7 @@ document.addEventListener('submit', async (ev) => {
       try {
         const { member } = await api(`/trips/${S.trip.id}/members`, { method: 'POST', body: { name: f.name } })
         localStorage.setItem(meKey(S.trip.id), member.id)
+        rememberTrip(S.trip.id)
         S.me = member.id
         S.view = 'trip'
         absorb(await api(`/trips/${S.trip.id}`))
@@ -1071,7 +1309,7 @@ async function boot() {
 
   const m = location.pathname.match(/^\/t\/([^/]+)/)
   if (m) await openTrip(decodeURIComponent(m[1]))
-  else { S.view = 'landing'; render() }
+  else await showLanding()
 }
 
 boot()
