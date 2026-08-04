@@ -10,11 +10,32 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const app = express()
 app.use(express.json({ limit: '256kb' }))
 
+// Trip state is cut differently for every member — your personal-kit ticks are
+// in it and nobody else's are. Express would otherwise hang an ETag on these
+// responses with nothing saying they vary by viewer, which is an invitation for
+// a cache in the middle to hand one person's answer to the next one.
+app.use('/api', (_req, res, next) => {
+  res.set('Cache-Control', 'no-store')
+  res.set('Vary', 'x-member-id')
+  next()
+})
+
 const clean = (v, max = 400) => String(v ?? '').trim().slice(0, max)
 const LISTS = new Set(['gear', 'food', 'drinks', 'activities'])
 
 // Plans are always a group thing; there is no "bring your own hike".
 const kindOf = (raw, list) => (raw === 'own' && list !== 'activities' ? 'own' : 'shared')
+
+// An 'own' item is one person's private business, so the shared feed never hears
+// about it — an entry saying you added a chess board tells the group both that
+// it exists and that it is yours, which is the whole thing we are hiding.
+const isPrivate = (item) => item.kind === 'own' && !!item.owner_id
+
+// Nobody edits or deletes somebody else's personal kit. Legacy unowned rows stay
+// editable by anyone, because today they are still everyone's list.
+function mayTouch(item, memberId) {
+  return !isPrivate(item) || item.owner_id === memberId
+}
 
 function requireTrip(req, res) {
   const trip = db.prepare('SELECT * FROM trips WHERE id = ?').get(req.params.id)
@@ -139,21 +160,43 @@ app.patch('/api/trips/:id', (req, res) => {
 
 // ---- members ----------------------------------------------------------------
 
+const memberNamed = db.prepare('SELECT * FROM members WHERE trip_id = ? AND lower(name) = lower(?)')
+
+// Two people on one trip must never share a name, or the next person to type it
+// gets an ambiguous question and the people list reads as one person twice.
+function distinctName(tripId, name) {
+  if (!memberNamed.get(tripId, name)) return name
+  for (let n = 2; n < 40; n++) {
+    const candidate = `${name} (${n})`
+    if (!memberNamed.get(tripId, candidate)) return candidate
+  }
+  return `${name} (${uid().slice(0, 4)})`
+}
+
 app.post('/api/trips/:id/members', (req, res) => {
   const trip = requireTrip(req, res)
   if (!trip) return
   const name = clean(req.body?.name, 40)
   if (!name) return res.status(400).json({ error: 'Enter a name so your friends know who is who.' })
 
-  const existing = db.prepare('SELECT * FROM members WHERE trip_id = ? AND lower(name) = lower(?)').get(trip.id, name)
-  if (existing) return res.json({ member: existing, rejoined: true })
+  // A name is not an identity. Someone typing a name already on the trip is
+  // usually themselves on a second phone — but sometimes it is the other Sam,
+  // and handing them the first Sam's member id merges two people into one:
+  // one colour, one set of claims, one personal kit between them. So we ask
+  // which it is rather than guessing, and hand back nothing until they answer.
+  const claim = clean(req.body?.claim, 10)
+  const existing = memberNamed.get(trip.id, name)
+  if (existing && claim !== 'new') {
+    if (claim !== 'rejoin') return res.status(409).json({ conflict: 'name', name: existing.name })
+    return res.json({ member: existing, rejoined: true })
+  }
 
   const count = db.prepare('SELECT COUNT(*) AS c FROM members WHERE trip_id = ?').get(trip.id).c
-  const member = { id: uid(), trip_id: trip.id, name, hue: count % 8, created_at: now() }
+  const member = { id: uid(), trip_id: trip.id, name: distinctName(trip.id, name), hue: count % 8, created_at: now() }
   db.prepare('INSERT INTO members (id, trip_id, name, hue, created_at) VALUES (?, ?, ?, ?, ?)')
     .run(member.id, member.trip_id, member.name, member.hue, member.created_at)
 
-  logEvent(trip.id, name, 'joined the trip')
+  logEvent(trip.id, member.name, 'joined the trip')
   bumpRev(trip.id)
   res.json({ member })
 })
@@ -180,21 +223,34 @@ app.post('/api/trips/:id/items', (req, res) => {
 
   const incoming = Array.isArray(req.body?.items) ? req.body.items : [req.body]
   const ts = now()
-  const insert = db.prepare(`INSERT INTO items (id, trip_id, list, category, title, note, qty, kind, assignee_id, position, created_at, updated_at)
-                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+  const insert = db.prepare(`INSERT INTO items (id, trip_id, list, category, title, note, qty, kind, assignee_id, owner_id, position, created_at, updated_at)
+                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
   const added = []
+
+  // Personal kit needs somebody to belong to, so it can only be added by a
+  // member — there is no such thing as an unowned private item any more.
+  const me = viewerId(req)
+  const isMember = me && db.prepare('SELECT 1 FROM members WHERE id = ? AND trip_id = ?').get(me, trip.id)
+  let refused = false
 
   for (const raw of incoming) {
     const list = clean(raw?.list, 20)
     const title = clean(raw?.title, 120)
     if (!LISTS.has(list) || !title) continue
     const kind = kindOf(clean(raw?.kind, 10), list)
+    if (kind === 'own' && !isMember) { refused = true; continue }
     const id = uid()
     insert.run(
       id, trip.id, list, clean(raw?.category, 60), title, clean(raw?.note, 500), clean(raw?.qty, 40), kind,
-      kind === 'own' ? null : clean(raw?.assignee_id, 64) || null, nextPosition(trip.id, list), ts, ts,
+      kind === 'own' ? null : clean(raw?.assignee_id, 64) || null,
+      kind === 'own' ? me : null, nextPosition(trip.id, list), ts, ts,
     )
-    added.push(title)
+    // Only group kit is news. What you put on your own list is yours alone.
+    if (kind !== 'own') added.push(title)
+  }
+
+  if (refused && !added.length) {
+    return res.status(400).json({ error: 'Join the trip before adding your own kit.' })
   }
 
   if (added.length) {
@@ -202,14 +258,16 @@ app.post('/api/trips/:id/items', (req, res) => {
     logEvent(trip.id, who, added.length === 1
       ? `added ${added[0]}`
       : `added ${added.length} things to the ${clean(incoming[0]?.list, 20)} list`)
-    bumpRev(trip.id)
   }
+  bumpRev(trip.id)
   res.json(getTripState(trip.id, viewerId(req)))
 })
 
 app.patch('/api/items/:id', (req, res) => {
   const item = db.prepare('SELECT * FROM items WHERE id = ?').get(req.params.id)
   if (!item) return res.status(404).json({ error: 'That item is already gone.' })
+  const me = viewerId(req)
+  if (!mayTouch(item, me)) return res.status(403).json({ error: "That's on somebody else's personal list." })
 
   const sets = ['updated_at = ?'], vals = [now()]
   const push = (col, val) => { sets.push(`${col} = ?`); vals.push(val) }
@@ -222,10 +280,16 @@ app.patch('/api/items/:id', (req, res) => {
   // Switching between shared and own resets the other model's state, so it is
   // handled on its own rather than alongside an assignment or a packed tick.
   const newKind = req.body?.kind !== undefined ? kindOf(clean(req.body.kind, 10), item.list) : null
+  if (newKind === 'own' && !me) {
+    return res.status(400).json({ error: 'Join the trip before taking something onto your own list.' })
+  }
   if (newKind) {
     push('kind', newKind)
     push('assignee_id', null)
     push('packed', 0)
+    // Moving a thing onto your own list takes it off everybody else's view of
+    // the trip; moving it back to the group hands it to everyone again.
+    push('owner_id', newKind === 'own' ? me : null)
     if (newKind === 'shared') db.prepare('DELETE FROM own_checks WHERE item_id = ?').run(item.id)
   } else {
     if (req.body?.packed !== undefined) push('packed', req.body.packed ? 1 : 0)
@@ -239,9 +303,14 @@ app.patch('/api/items/:id', (req, res) => {
 
   const who = actorName(item.trip_id, req)
   if (newKind) {
+    // Where a thing went is the group's business when it leaves or joins the
+    // group list. What is on the private list it went to is not, so the wording
+    // stops at the boundary.
     logEvent(item.trip_id, who, newKind === 'own'
-      ? `made ${item.title} one each — everyone brings their own`
+      ? `took ${item.title} off the group list`
       : `made ${item.title} a group item`)
+  } else if (isPrivate(item)) {
+    // Nothing: edits to your own kit are yours.
   } else if (req.body?.assignee_id !== undefined) {
     const a = clean(req.body.assignee_id, 64)
     logEvent(item.trip_id, who, a ? `is bringing ${item.title}` : `dropped ${item.title}`)
@@ -256,19 +325,23 @@ app.patch('/api/items/:id', (req, res) => {
 app.delete('/api/items/:id', (req, res) => {
   const item = db.prepare('SELECT * FROM items WHERE id = ?').get(req.params.id)
   if (!item) return res.status(404).json({ error: 'That item is already gone.' })
+  if (!mayTouch(item, viewerId(req))) return res.status(403).json({ error: "That's on somebody else's personal list." })
   db.prepare('DELETE FROM items WHERE id = ?').run(item.id)
-  logEvent(item.trip_id, actorName(item.trip_id, req), `removed ${item.title}`)
+  // Crossing something off your own list is not an announcement.
+  if (!isPrivate(item)) logEvent(item.trip_id, actorName(item.trip_id, req), `removed ${item.title}`)
   bumpRev(item.trip_id)
   res.json(getTripState(item.trip_id, viewerId(req)))
 })
 
-// Personal kit: each person ticks off their own, so there is nothing to claim.
+// Ticking off your own kit. The row is already yours, so this only ever records
+// that you have packed it — and only you can do it.
 app.post('/api/items/:id/own', (req, res) => {
   const item = db.prepare('SELECT * FROM items WHERE id = ?').get(req.params.id)
   if (!item) return res.status(404).json({ error: 'That item is already gone.' })
   const memberId = clean(req.body?.memberId, 64)
   const member = db.prepare('SELECT * FROM members WHERE id = ? AND trip_id = ?').get(memberId, item.trip_id)
   if (!member) return res.status(400).json({ error: 'Join the trip before ticking things off.' })
+  if (!mayTouch(item, member.id)) return res.status(403).json({ error: "That's on somebody else's personal list." })
 
   const has = db.prepare('SELECT 1 FROM own_checks WHERE item_id = ? AND member_id = ?').get(item.id, member.id)
   if (has) db.prepare('DELETE FROM own_checks WHERE item_id = ? AND member_id = ?').run(item.id, member.id)

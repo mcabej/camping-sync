@@ -13,9 +13,11 @@ const TABS = [
 ]
 
 // The two ways a thing gets brought. This distinction runs through the whole app.
+// The wording earns its keep here: people read "Personal kit" as "my own list"
+// and it now is one — private to you, invisible to everyone else on the trip.
 const SECTIONS = {
   shared: { label: 'For the group', note: 'One person brings each of these, and everyone uses it.' },
-  own: { label: 'Personal kit', note: 'One each. Only you can see how much of yours is packed.' },
+  own: { label: 'Personal kit', note: 'Your list, private to you. Nobody else on this trip can see it.' },
 }
 
 const ICONS = {
@@ -48,6 +50,9 @@ const S = {
   trips: null,
   joinCode: '',
   joinError: '',
+  // Set when the name you typed is already on the trip: { name, asking } where
+  // asking is 'who' (are you them?) or 'name' (tell the two of you apart).
+  joinClash: null,
   showCreate: false,
 }
 
@@ -77,7 +82,13 @@ async function api(path, opts = {}) {
   if (S.me) headers['x-member-id'] = S.me
   const res = await fetch(`/api${path}`, { ...opts, headers, body: opts.body ? JSON.stringify(opts.body) : undefined })
   const data = await res.json().catch(() => ({}))
-  if (!res.ok) throw new Error(data.error || 'Something went wrong. Try again.')
+  if (!res.ok) {
+    // Some refusals are a question rather than a failure — a name clash on join
+    // needs the body, not just the message, so it rides along on the error.
+    const err = new Error(data.error || 'Something went wrong. Try again.')
+    err.payload = data
+    throw err
+  }
   return data
 }
 
@@ -475,6 +486,33 @@ function viewLanding() {
   </div>`
 }
 
+// The one question the app cannot answer for you. Getting it wrong in the
+// "same person" direction quietly gives two people one packing list, so the
+// wording leads with the other Sam rather than with the convenient answer.
+function joinClashCard() {
+  const { name, asking } = S.joinClash
+  if (asking === 'name') {
+    return `
+      <div class="landing__card">
+        <h2>Two of you called ${esc(name)}</h2>
+        <p>Add something that tells you apart — a surname, an initial, whatever the group already calls you.</p>
+        <form data-act="join-distinct">
+          <label class="field"><span>Your name</span>
+            <input name="name" value="${esc(name)} " placeholder="${esc(name)} B" required maxlength="40" autofocus></label>
+          <button class="btn btn--primary btn--wide" type="submit">Join the trip</button>
+          <button class="btn btn--wide" type="button" data-act="join-back">Back</button>
+        </form>
+      </div>`
+  }
+  return `
+    <div class="landing__card">
+      <h2>There's already a ${esc(name)} here</h2>
+      <p>If that's you coming back on another phone, pick up where you left off. If you're a different ${esc(name)}, you need your own place on the list — otherwise you'd share their claims and their personal kit.</p>
+      <button class="btn btn--primary btn--wide" data-act="join-rejoin">That's me, I'm rejoining</button>
+      <button class="btn btn--wide" data-act="join-new">I'm a different ${esc(name)}</button>
+    </div>`
+}
+
 function viewJoin() {
   return `
   <div class="landing">
@@ -486,6 +524,7 @@ function viewJoin() {
       </div>
     </header>
     <main class="landing__body">
+      ${S.joinClash ? joinClashCard() : `
       <div class="landing__card">
         <h2>Who are you?</h2>
         <p>Your name shows up next to everything you're bringing, so the others know it's handled.</p>
@@ -494,7 +533,7 @@ function viewJoin() {
             <input name="name" placeholder="Sam" autocomplete="given-name" required maxlength="40" autofocus></label>
           <button class="btn btn--primary btn--wide" type="submit">Join the trip</button>
         </form>
-      </div>
+      </div>`}
     </main>
   </div>`
 }
@@ -539,9 +578,9 @@ function listPage(tab) {
 
   const body = items.length === 0
     ? `<div class="empty">
-         <h3>${section === 'own' ? 'No personal kit listed yet' : 'Nothing here yet'}</h3>
+         <h3>${section === 'own' ? 'Your list is empty' : 'Nothing here yet'}</h3>
          <p>${section === 'own'
-            ? 'These are the things nobody can bring for you — a sleeping bag, a headtorch, your own boots.'
+            ? 'The things nobody can bring for you — a sleeping bag, a headtorch, your own boots. Only you will see what you put here.'
             : 'Pull in the usual suspects, or write your own.'}</p>
          <button class="btn btn--blaze" data-act="suggest">What am I missing?</button>
        </div>`
@@ -779,7 +818,7 @@ function sheetAssign(s) {
   if (own) {
     return sheetShell({
       title: item.title,
-      blurb: 'Everyone brings their own one, and only you can see whether yours is packed.',
+      blurb: 'This is on your own list. Nobody else on the trip can see it.',
       body: `${kindSwitch}
         <button class="pick" data-act="own" data-id="${item.id}" aria-pressed="${isMine(item)}">
           <span class="pick__swatch" style="background:${colorOf(me)}"></span>
@@ -896,7 +935,7 @@ function sheetSuggest(s) {
 
   return sheetShell({
     title: 'What am I missing?',
-    blurb: `${pool.length} ${s.section === 'own' ? 'things people bring one each of' : 'things people usually bring'} that aren't on your list yet. Tap the ones you want.`,
+    blurb: `${pool.length} ${s.section === 'own' ? 'things people bring for themselves' : 'things people usually bring'} that aren't on your list yet. Tap the ones you want.`,
     body,
     foot: `<button class="btn btn--primary btn--wide" data-act="add-picked" ${picked.size ? '' : 'disabled'}>
              ${picked.size ? `Add ${picked.size} ${picked.size === 1 ? 'thing' : 'things'}` : 'Pick some things'}</button>`,
@@ -999,17 +1038,50 @@ async function goToTrip(code) {
   await openTrip(code)
 }
 
+// Joining is the one place a name is load-bearing, so it lives in one function:
+// the first ask, the "is that you?" answer, and the disambiguated retry all end
+// up here, and only a member id we asked for by name is ever written to storage.
+async function joinAs(rawName, claim = '') {
+  const name = String(rawName ?? '').trim()
+  if (!name) return
+  try {
+    const { member } = await api(`/trips/${S.trip.id}/members`, {
+      method: 'POST',
+      body: { name, ...(claim ? { claim } : {}) },
+    })
+    localStorage.setItem(meKey(S.trip.id), member.id)
+    rememberTrip(S.trip.id)
+    S.me = member.id
+    S.joinClash = null
+    S.view = 'trip'
+    absorb(await api(`/trips/${S.trip.id}`))
+  } catch (err) {
+    if (err.payload?.conflict === 'name') {
+      S.joinClash = { name: err.payload.name, asking: 'who' }
+      render()
+      return
+    }
+    toast(err.message)
+  }
+}
+
 async function openTrip(code) {
   try {
-    const state = await api(`/trips/${encodeURIComponent(code)}`)
+    // Who we are has to be settled before we ask, because api() puts S.me in
+    // the header and the server only returns the personal-kit ticks belonging
+    // to whoever asked. Asking as the member we were on the last trip comes
+    // back with this trip's ticks stripped out, so your own kit reads unpacked.
     S.me = localStorage.getItem(meKey(code))
+    const state = await api(`/trips/${encodeURIComponent(code)}`)
     if (S.me && !state.members.some((m) => m.id === S.me)) S.me = null
     if (S.me) rememberTrip(code)
     S.joinCode = ''
     S.joinError = ''
+    S.joinClash = null
     S.view = S.me ? 'trip' : 'join'
     absorb(state)
   } catch (err) {
+    S.me = null
     history.replaceState({}, '', '/')
     await showLanding(err.message)
   }
@@ -1039,6 +1111,20 @@ document.addEventListener('click', async (ev) => {
       }
       break
     }
+
+    case 'join-rejoin':
+      await joinAs(S.joinClash.name, 'rejoin')
+      break
+
+    case 'join-new':
+      S.joinClash = { ...S.joinClash, asking: 'name' }
+      render()
+      break
+
+    case 'join-back':
+      S.joinClash = null
+      render()
+      break
 
     case 'show-create':
       S.showCreate = true
@@ -1071,7 +1157,9 @@ document.addEventListener('click', async (ev) => {
 
     case 'move-kind':
       await mutate(() => api(`/items/${el.dataset.id}`, { method: 'PATCH', body: { kind: el.dataset.kind } }))
-      toast(el.dataset.kind === 'shared' ? 'Moved to the group list.' : 'Moved to personal kit.')
+      toast(el.dataset.kind === 'shared'
+        ? 'Moved to the group list — everyone can see it now.'
+        : 'Moved to your own list. Only you can see it now.')
       break
 
     case 'scrim':
@@ -1216,17 +1304,13 @@ document.addEventListener('submit', async (ev) => {
       break
     }
 
-    case 'join': {
-      try {
-        const { member } = await api(`/trips/${S.trip.id}/members`, { method: 'POST', body: { name: f.name } })
-        localStorage.setItem(meKey(S.trip.id), member.id)
-        rememberTrip(S.trip.id)
-        S.me = member.id
-        S.view = 'trip'
-        absorb(await api(`/trips/${S.trip.id}`))
-      } catch (err) { toast(err.message) }
+    case 'join':
+      await joinAs(f.name)
       break
-    }
+
+    case 'join-distinct':
+      await joinAs(f.name, 'new')
+      break
 
     case 'add-member': {
       if (!String(f.name).trim()) break
@@ -1236,7 +1320,13 @@ document.addEventListener('submit', async (ev) => {
         absorb(await api(`/trips/${S.trip.id}`))
         S.sheet = { kind: 'assign', id: itemId }
         renderSheet()
-      } catch (err) { toast(err.message) }
+      } catch (err) {
+        // Adding somebody who is already here is a mistake worth naming, not a
+        // second one of them — they are already in the list to pick from.
+        toast(err.payload?.conflict === 'name'
+          ? `${err.payload.name} is already on the trip.`
+          : err.message)
+      }
       break
     }
 
