@@ -55,10 +55,9 @@ const orphans = db.prepare(`
   FROM items WHERE kind = 'own' AND owner_id IS NULL
   ORDER BY trip_id, created_at`).all()
 
-if (!orphans.length) {
-  console.log(`Nothing to do: no unowned personal-kit items in ${DB_PATH}.`)
-  process.exit(0)
-}
+// No early exit on an empty list: the feed sweep at the end has its own work to
+// do, and a database whose items were claimed by an earlier run may still be
+// carrying entries that name them.
 
 const memberNamed = db.prepare('SELECT id, name FROM members WHERE trip_id = ? AND lower(name) = lower(?)')
 const addedEvent = db.prepare(`
@@ -71,11 +70,22 @@ const checkers = db.prepare(`
 
 // Two people called Sam on one trip would make the feed's actor name ambiguous,
 // so a name that matches more than one member is treated as no evidence at all.
-function fromFeed(item) {
-  const rows = addedEvent.all(item.trip_id, `added ${item.title}`)
+function actorOf(tripId, text) {
+  const rows = addedEvent.all(tripId, text)
   if (rows.length !== 1) return null
-  const matches = memberNamed.all(item.trip_id, rows[0].actor)
-  return matches.length === 1 ? { member: matches[0], why: `feed: "${rows[0].actor} added ${item.title}"` } : null
+  const matches = memberNamed.all(tripId, rows[0].actor)
+  return matches.length === 1 ? { member: matches[0], actor: rows[0].actor } : null
+}
+
+// Either the person who put it on the list, or — for a group item somebody
+// moved across — the person who moved it, which under the old wording is who
+// took it onto their own list.
+function fromFeed(item) {
+  for (const text of [`added ${item.title}`, `made ${item.title} one each — everyone brings their own`]) {
+    const found = actorOf(item.trip_id, text)
+    if (found) return { member: found.member, why: `feed: "${found.actor} ${text}"` }
+  }
+  return null
 }
 
 function fromTicks(item) {
@@ -175,22 +185,33 @@ if (DROP) for (const item of template) drop.run(item.id)
 // whole trip both that the thing exists and whose it is, which is exactly what
 // making the row private just stopped. These entries are the evidence this
 // script runs on, so they can only go once the owners are written.
+// Scoped to one item's title, so a group item's history survives untouched.
 const purgeNamed = db.prepare(
   'DELETE FROM events WHERE trip_id = ? AND lower(text) IN (lower(?), lower(?))')
-// The old build wrote one of these every time somebody ticked a one-each item.
-const purgeTicks = db.prepare(
-  "DELETE FROM events WHERE trip_id = ? AND (lower(text) LIKE 'packed their own %' OR lower(text) LIKE 'unpacked their own %')")
+
+// Two phrasings only the old one-each model ever produced: a per-person tick,
+// and moving something onto a personal list. Nothing in the app writes either
+// any more, and both name an item that was private at the time — including ones
+// since deleted, which the per-item sweep above can no longer see. So they go
+// wholesale rather than title by title.
+const purgeLegacy = db.prepare(`
+  DELETE FROM events WHERE trip_id = ? AND (
+    lower(text) LIKE 'packed their own %'
+    OR lower(text) LIKE 'unpacked their own %'
+    OR lower(text) LIKE 'made % one each — everyone brings their own')`)
 
 let purged = 0
 const purgedTrips = new Set()
 const count = (tripId, n) => { if (n) { purged += n; purgedTrips.add(tripId) } }
 
-for (const d of decided) {
-  count(d.item.trip_id, purgeNamed.run(d.item.trip_id, `added ${d.item.title}`, `removed ${d.item.title}`).changes)
+// Swept over every private item rather than only the ones claimed on this run,
+// so running it twice cleans up anything an earlier pass left behind.
+for (const item of db.prepare("SELECT trip_id, title FROM items WHERE kind = 'own' AND owner_id IS NOT NULL").all()) {
+  count(item.trip_id, purgeNamed.run(item.trip_id, `added ${item.title}`, `removed ${item.title}`).changes)
 }
-// Trips with no newly-private items can still carry the old per-person tick
-// entries, so sweep every trip for those regardless.
-for (const { id } of db.prepare('SELECT id FROM trips').all()) count(id, purgeTicks.run(id).changes)
+// Trips with no private items at all can still carry the old wording, so sweep
+// every trip for it regardless.
+for (const { id } of db.prepare('SELECT id FROM trips').all()) count(id, purgeLegacy.run(id).changes)
 
 // Every trip whose items moved needs a rev bump, or open clients keep showing
 // the list they already have until something else happens to change it.
