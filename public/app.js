@@ -30,6 +30,7 @@ const ICONS = {
   tickGreen: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5 9.5 18 20 6.5"/></svg>',
   x: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>',
   plus: '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
+  pin: '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s7-6.1 7-11a7 7 0 1 0-14 0c0 4.9 7 11 7 11Z"/><circle cx="12" cy="10" r="2.5"/></svg>',
 }
 
 // ---- state ------------------------------------------------------------------
@@ -45,6 +46,7 @@ const S = {
   sheet: null,       // { kind, ...payload }
   busy: false,
   editNotes: false,  // the shared notes read as text until you ask to change them
+  editWhere: false,  // same for where the trip is, which is read far more than written
   expand: { tips: false, feed: false },
   // Home page: the trips this device has joined. null while we're still asking.
   trips: null,
@@ -168,6 +170,13 @@ function groupByCategory(items) {
   return [...groups.entries()]
 }
 
+// Where the trip is, is stored in full — "Wasdale Head Campsite, Wasdale Head,
+// CA20 1EX, United Kingdom" — because that is the answer to "where is it".
+// Headers and cards have no room for the country, and the part in front of the
+// first comma is the part anyone would say out loud.
+const firstPart = (s) => String(s ?? '').split(',')[0].trim()
+const shortWhere = (trip) => firstPart(trip?.location)
+
 function fmtDates(trip) {
   const f = (d) => {
     if (!d) return ''
@@ -282,6 +291,16 @@ function ownToggle(item) {
       <span class="stage__box"${mine && me ? ` style="background:${colorOf(me)}"` : ''}>${ICONS.tick}</span>${mine ? "Mine's packed" : "I've not packed mine"}</button>`
 }
 
+// "The sunset spot" means nothing to whoever has not been there. A plan can say
+// where it is, and once it does the chip is the way back to it — tapping it
+// opens the same sheet, which is where the map link lives.
+function placeChip(item) {
+  const place = firstPart(item.place)
+  if (!place) return `<button class="tag" data-act="place" data-id="${item.id}">${ICONS.pin} Add a place</button>`
+  return `<button class="chip chip--place" data-act="place" data-id="${item.id}">
+            ${ICONS.pin}<span class="chip__where">${esc(place)}</span></button>`
+}
+
 // Nobody "brings" a hike, so a plan never shows the orange chip. An organiser is
 // optional and only for the plans that need booking or kit.
 function organiserChip(item) {
@@ -302,7 +321,8 @@ function itemRow(item) {
     controls = `
       <button class="chip chip--vote" data-act="vote" data-id="${item.id}" aria-pressed="${voted}">
         ${voted ? 'Up for it' : 'I want this'} <span class="mono">${item.votes.length}</span></button>
-      ${organiserChip(item)}`
+      ${organiserChip(item)}
+      ${placeChip(item)}`
   } else if (own) {
     controls = `${ownToggle(item)}
       <button class="tag" data-act="move-kind" data-id="${item.id}" data-kind="shared">Move to group</button>`
@@ -366,7 +386,7 @@ function tripBar(t) {
 
 function tripCard(t) {
   const bar = tripBar(t)
-  const meta = [t.location, fmtDates(t), `${t.members} ${t.members === 1 ? 'person' : 'people'}`].filter(Boolean)
+  const meta = [shortWhere(t), fmtDates(t), `${t.members} ${t.members === 1 ? 'person' : 'people'}`].filter(Boolean)
   const you = t.you
     ? `<span class="trip-card__you"><span class="trip-card__dot" style="background:${colorOf(t.you)}"></span>${esc(t.you.name)}</span>`
     : '<span class="trip-card__you trip-card__you--out">Add your name</span>'
@@ -441,8 +461,12 @@ function createBlock(folded) {
           <input name="organiser" value="${esc(lastKnownName())}" placeholder="Josh" autocomplete="given-name" required maxlength="40"></label>
         <label class="field"><span>Trip name</span>
           <input name="name" placeholder="First camping trip" required maxlength="80"></label>
-        <label class="field"><span>Where</span>
-          <input name="location" placeholder="Somewhere with a lake" maxlength="120"></label>
+        <label class="field places"><span>Where</span>
+          <input name="location" placeholder="Somewhere with a lake" maxlength="200"
+                 data-places role="combobox" aria-expanded="false" aria-autocomplete="list"
+                 aria-controls="cs-places" autocomplete="off" spellcheck="false">
+          <input type="hidden" name="lat" data-places-lat>
+          <input type="hidden" name="lon" data-places-lon></label>
         <div class="field field--split">
           <label class="field"><span>Arrive</span><input type="date" name="start_date"></label>
           <label class="field"><span>Leave</span><input type="date" name="end_date"></label>
@@ -520,7 +544,7 @@ function viewJoin() {
       <div class="landing__inner">
         <span class="eyebrow">You've been invited</span>
         <h1>${esc(S.trip.name)}</h1>
-        <p>${esc([S.trip.location, fmtDates(S.trip)].filter(Boolean).join(' · ') || 'Add yourself and start claiming things.')}</p>
+        <p>${esc([shortWhere(S.trip), fmtDates(S.trip)].filter(Boolean).join(' · ') || 'Add yourself and start claiming things.')}</p>
       </div>
     </header>
     <main class="landing__body">
@@ -539,7 +563,7 @@ function viewJoin() {
 }
 
 function topbar() {
-  const meta = [S.trip.location, fmtDates(S.trip)].filter(Boolean).map(esc)
+  const meta = [shortWhere(S.trip), fmtDates(S.trip)].filter(Boolean).map(esc)
   meta.push(`${S.members.length} ${S.members.length === 1 ? 'person' : 'people'}`)
   const list = TABS.find((t) => t.id === S.tab)?.list ?? null
   return `
@@ -641,6 +665,70 @@ function statusCard() {
     </div>`
 }
 
+// One tap to turn-by-turn. A pasted link wins over everything: whoever booked
+// the place knows which pin is the right one, and a lot of campsites sit down a
+// track that a search for the postcode drives straight past. Failing that, a
+// place taken from the search has its own coordinates, which beat sending its
+// words to a different company's search box and hoping.
+function mapsLink(lat, lon, text) {
+  if (Number.isFinite(lat) && Number.isFinite(lon)) {
+    return `https://www.google.com/maps/search/?api=1&query=${lat},${lon}`
+  }
+  const t = String(text ?? '').trim()
+  return t ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(t)}` : ''
+}
+
+function mapsHref(trip) {
+  const pasted = String(trip.map_url ?? '').trim()
+  return pasted || mapsLink(trip.lat, trip.lon, trip.location)
+}
+
+// A plan can be somewhere other than the campsite, and usually the one that
+// matters — nobody needs directions to the tent they are sleeping in.
+const itemHref = (item) => mapsLink(item.lat, item.lon, item.place)
+
+// Where the trip is, in one place and one field. The card owns it because this
+// is what people come back for the night before they drive — the header only
+// ever shows the short version of the same thing.
+function whereCard() {
+  const where = String(S.trip.location ?? '').trim()
+  const link = mapsHref(S.trip)
+
+  if (S.editWhere || !where) {
+    return `
+      <div class="card">
+        <h3>Getting there</h3>
+        <p>Start typing and pick the place — that way everyone gets the pin, not just the name of it. Anything you type by hand is fine too.</p>
+        <form data-act="save-where">
+          <label class="field places"><span>Where</span>
+            <input name="location" value="${esc(where)}" maxlength="200" autofocus
+                   placeholder="Wasdale Head Campsite" data-places role="combobox"
+                   aria-expanded="false" aria-autocomplete="list" aria-controls="cs-places"
+                   autocomplete="off" spellcheck="false">
+            <input type="hidden" name="lat" data-places-lat value="${esc(S.trip.lat ?? '')}">
+            <input type="hidden" name="lon" data-places-lon value="${esc(S.trip.lon ?? '')}"></label>
+          <label class="field"><span>Map link <span style="font-weight:400">(optional)</span></span>
+            <input name="map_url" value="${esc(S.trip.map_url ?? '')}" maxlength="500" inputmode="url"
+                   autocomplete="off" spellcheck="false" placeholder="Paste a Google or Apple Maps link"></label>
+          <button class="btn btn--primary" type="submit">Save</button>
+        </form>
+      </div>`
+  }
+
+  return `
+    <div class="card">
+      <div class="card__head">
+        <h3>Getting there</h3>
+        <button class="btn btn--sm" data-act="edit-where">Edit</button>
+      </div>
+      <p class="card__body notes">${esc(where)}</p>
+      <div class="where__go">
+        ${link ? `<a class="btn btn--primary" href="${esc(link)}" target="_blank" rel="noopener noreferrer">${ICONS.pin} Open in maps</a>` : ''}
+        <button class="btn" data-act="copy-where">Copy address</button>
+      </div>
+    </div>`
+}
+
 // Written once, read all weekend — so it reads as text, and only turns into a
 // textarea when somebody actually wants to change it.
 function notesCard() {
@@ -720,6 +808,7 @@ function campPage() {
   return `
     <main class="page">
       ${statusCard()}
+      ${whereCard()}
       ${notesCard()}
       ${peopleCard()}
 
@@ -727,7 +816,6 @@ function campPage() {
         <h3>Trip details</h3>
         <form data-act="save-trip">
           <label class="field"><span>Trip name</span><input name="name" value="${esc(S.trip.name)}" maxlength="80"></label>
-          <label class="field"><span>Where</span><input name="location" value="${esc(S.trip.location)}" maxlength="120"></label>
           <div class="field field--split">
             <label class="field"><span>Arrive</span><input type="date" name="start_date" value="${esc(S.trip.start_date)}"></label>
             <label class="field"><span>Leave</span><input type="date" name="end_date" value="${esc(S.trip.end_date)}"></label>
@@ -864,6 +952,33 @@ function sheetAssign(s) {
   })
 }
 
+// Where a plan happens, on its own because it is the answer to a different
+// question from who is organising it — and the one people ask on the day.
+function sheetPlace(s) {
+  const item = S.items.find((i) => i.id === s.id)
+  if (!item) return ''
+  const place = String(item.place ?? '').trim()
+  const link = itemHref(item)
+  return sheetShell({
+    title: `Where is ${item.title}?`,
+    blurb: 'Search for it and everyone gets the pin, not just the name of it. Leave it empty if it is wherever you happen to be.',
+    body: `
+      <form data-act="save-place" data-id="${item.id}">
+        <label class="field places"><span>Where</span>
+          <input name="place" value="${esc(place)}" maxlength="200" autofocus
+                 placeholder="Wast Water shoreline" data-places role="combobox"
+                 aria-expanded="false" aria-autocomplete="list" aria-controls="cs-places"
+                 autocomplete="off" spellcheck="false">
+          <input type="hidden" name="lat" data-places-lat value="${esc(item.lat ?? '')}">
+          <input type="hidden" name="lon" data-places-lon value="${esc(item.lon ?? '')}"></label>
+        <button class="btn btn--primary btn--wide" type="submit">Save</button>
+      </form>
+      ${link ? `
+        <a class="btn btn--wide" style="margin-top:10px" href="${esc(link)}"
+           target="_blank" rel="noopener noreferrer">${ICONS.pin} Open in maps</a>` : ''}`,
+  })
+}
+
 function sheetAdd(s) {
   const tab = TABS.find((t) => t.list === s.list)
   const cats = [...new Set([...itemsIn(s.list).map((i) => i.category), ...(S.catalog?.[s.list] ?? []).map((c) => c.cat)])].filter(Boolean)
@@ -882,6 +997,13 @@ function sheetAdd(s) {
         <datalist id="cs-cats">${cats.map((c) => `<option value="${esc(c)}">`).join('')}</datalist>
         <label class="field"><span>Note <span style="font-weight:400">(optional)</span></span>
           <input name="note" maxlength="500" placeholder="Anything the others need to know"></label>
+        ${s.list !== 'activities' ? '' : `
+          <label class="field places"><span>Where <span style="font-weight:400">(optional)</span></span>
+            <input name="place" maxlength="200" placeholder="Wast Water shoreline"
+                   data-places role="combobox" aria-expanded="false" aria-autocomplete="list"
+                   aria-controls="cs-places" autocomplete="off" spellcheck="false">
+            <input type="hidden" name="lat" data-places-lat>
+            <input type="hidden" name="lon" data-places-lon></label>`}
         ${s.list === 'activities' ? '' : `
           <div class="field">
             <span>Who brings it?</span>
@@ -944,7 +1066,7 @@ function sheetSuggest(s) {
 
 function renderSheet() {
   if (!S.sheet) { sheetRoot.innerHTML = ''; return }
-  const map = { assign: sheetAssign, add: sheetAdd, suggest: sheetSuggest }
+  const map = { assign: sheetAssign, add: sheetAdd, suggest: sheetSuggest, place: sheetPlace }
   sheetRoot.innerHTML = map[S.sheet.kind]?.(S.sheet) ?? ''
 }
 
@@ -1150,10 +1272,27 @@ document.addEventListener('click', async (ev) => {
       render()
       break
 
+    case 'place':
+      S.sheet = { kind: 'place', id: el.dataset.id }
+      renderSheet()
+      break
+
     case 'edit-notes':
       S.editNotes = true
       render()
       break
+
+    case 'edit-where':
+      S.editWhere = true
+      render()
+      break
+
+    case 'copy-where': {
+      const where = String(S.trip.location ?? '').trim()
+      try { await navigator.clipboard.writeText(where); toast('Address copied.') }
+      catch { prompt('Copy the address:', where) }
+      break
+    }
 
     case 'move-kind':
       await mutate(() => api(`/items/${el.dataset.id}`, { method: 'PATCH', body: { kind: el.dataset.kind } }))
@@ -1336,7 +1475,10 @@ document.addEventListener('submit', async (ev) => {
       renderSheet()
       await mutate(() => api(`/trips/${S.trip.id}/items`, {
         method: 'POST',
-        body: { list, title: f.title, category: f.category || 'Other', qty: f.qty, note: f.note, kind: f.kind },
+        body: {
+          list, title: f.title, category: f.category || 'Other', qty: f.qty, note: f.note, kind: f.kind,
+          place: f.place, lat: f.lat, lon: f.lon,
+        },
       }))
       break
     }
@@ -1345,6 +1487,33 @@ document.addEventListener('submit', async (ev) => {
       await mutate(() => api(`/trips/${S.trip.id}`, { method: 'PATCH', body: f }))
       toast('Saved.')
       break
+
+    case 'save-where': {
+      S.editWhere = false
+      await mutate(() => api(`/trips/${S.trip.id}`, {
+        method: 'PATCH',
+        body: { location: f.location, lat: f.lat, lon: f.lon, map_url: f.map_url },
+      }))
+      // The server keeps only ordinary web links, so a mistyped one comes back
+      // empty. Better to say so than to leave a button that goes nowhere.
+      const sent = String(f.map_url ?? '').trim()
+      toast(sent && !String(S.trip.map_url ?? '').trim()
+        ? "Saved — that map link didn't look like a link, so it wasn't kept."
+        : 'Saved. Everyone can find it now.')
+      break
+    }
+
+    case 'save-place': {
+      const id = form.dataset.id
+      S.sheet = null
+      renderSheet()
+      await mutate(() => api(`/items/${id}`, {
+        method: 'PATCH',
+        body: { place: f.place, lat: f.lat, lon: f.lon },
+      }))
+      toast(String(f.place ?? '').trim() ? 'Saved. Everyone can find it now.' : 'Place removed.')
+      break
+    }
 
     case 'save-notes':
       S.editNotes = false
@@ -1356,6 +1525,247 @@ document.addEventListener('submit', async (ev) => {
 
 document.addEventListener('keydown', (ev) => {
   if (ev.key === 'Escape' && S.sheet) { S.sheet = null; renderSheet() }
+})
+
+// ---- place search -----------------------------------------------------------
+
+// The "Where" box searches for real places. Picking one writes the whole place
+// into the box and keeps its coordinates in a hidden pair beside it, so the map
+// link works from the moment the trip exists and nobody types an address twice.
+//
+// This deliberately sits outside render(): a whole-page re-render mid-keystroke
+// would take the box you are typing in with it. The menu is built straight into
+// the DOM instead, which also means the next render() cleans it up for free.
+
+const PLACES_MIN = 2
+const PLACES_WAIT = 280
+const PLACES_KEEP = 60
+
+// Only ever one open menu, so one object holds all of it. `complete` is whether
+// the last keystroke is one worth typing ahead of — letters yes, deletions no.
+// Finishing somebody's word while they are trying to erase it is exactly how an
+// autocomplete makes itself hated. `typed` is what they actually put in, kept so
+// Escape can hand it back.
+const P = { input: null, list: [], active: -1, seq: 0, timer: 0, ctrl: null, complete: false, typed: null }
+
+// Queries this tab has already asked about. Typing ahead only helps if it lands
+// under the cursor now rather than in 300ms, and the letters of a word you have
+// typed before can be answered from here without going anywhere.
+const placeMemo = new Map()
+
+function memoPlaces(q, places) {
+  placeMemo.set(q.toLowerCase(), places)
+  if (placeMemo.size > PLACES_KEEP) placeMemo.delete(placeMemo.keys().next().value)
+}
+
+const placesField = (input) => input?.closest('.places') ?? null
+
+// The pin rides along with the box in two hidden fields, so it is saved by the
+// same submit as the words and can never end up describing a different place.
+function setPin(input, lat, lon) {
+  const field = placesField(input)
+  const has = lat != null && lon != null
+  const put = (sel, v) => { const el = field?.querySelector(sel); if (el) el.value = has ? String(v) : '' }
+  put('[data-places-lat]', lat)
+  put('[data-places-lon]', lon)
+}
+
+function closePlaces() {
+  placesField(P.input)?.querySelector('.places__menu')?.remove()
+  P.input?.setAttribute('aria-expanded', 'false')
+  P.input?.removeAttribute('aria-activedescendant')
+  P.list = []
+  P.active = -1
+  P.typed = null
+}
+
+function drawPlaces(empty) {
+  const field = placesField(P.input)
+  if (!field) return
+  let menu = field.querySelector('.places__menu')
+  if (!menu) {
+    menu = document.createElement('div')
+    menu.className = 'places__menu'
+    menu.id = 'cs-places'
+    menu.setAttribute('role', 'listbox')
+    field.appendChild(menu)
+  }
+  menu.innerHTML = P.list.length
+    ? P.list.map((p, i) => `
+        <button type="button" class="places__opt${i === P.active ? ' is-active' : ''}"
+                role="option" id="cs-place-${i}" aria-selected="${i === P.active}" data-place="${i}">
+          <span class="places__name">${esc(p.label)}</span>
+          ${p.detail ? `<span class="places__detail">${esc(p.detail)}</span>` : ''}
+        </button>`).join('')
+    : `<p class="places__msg">${esc(empty)}</p>`
+
+  P.input.setAttribute('aria-expanded', 'true')
+  if (P.active >= 0) {
+    P.input.setAttribute('aria-activedescendant', `cs-place-${P.active}`)
+    menu.querySelector('.is-active')?.scrollIntoView({ block: 'nearest' })
+  } else {
+    P.input.removeAttribute('aria-activedescendant')
+  }
+}
+
+// The address-bar move: the rest of the best match appears in the box already
+// selected, so carrying on typing overwrites it, Enter or → takes it, and
+// Backspace removes exactly the part you did not type. It is only ever offered
+// when the match genuinely starts with what is in the box — completing "lake"
+// to "Windermere" would be a guess wearing the clothes of a fact.
+// A phone keyboard composes words as it goes, and replacing the value out from
+// under it corrupts the next keystroke — so the letters are only finished for
+// people typing on a real keyboard. Touch keeps the menu, which is the half of
+// this that works better with a thumb anyway.
+const canTypeAhead = matchMedia('(pointer: fine)').matches
+
+function typeAhead(q) {
+  const input = P.input
+  const top = P.list[0]
+  if (!canTypeAhead || !P.complete || !top || !input) return
+  if (input.value !== q || top.label.length <= q.length) return
+  if (top.label.slice(0, q.length).toLowerCase() !== q.toLowerCase()) return
+  // Only from the end of the line: nobody wants a word finished mid-edit.
+  if (input.selectionStart !== q.length || input.selectionEnd !== q.length) return
+
+  P.typed = q
+  input.value = q + top.label.slice(q.length)
+  input.setSelectionRange(q.length, top.label.length)
+  P.active = 0
+}
+
+// Whether the completion is still sitting there unanswered.
+const ahead = () => P.active === 0 && P.typed !== null
+  && P.input?.selectionEnd > P.input?.selectionStart
+
+function showPlaces(q, places, failed) {
+  if (!P.input?.isConnected) return
+  P.list = places
+  P.active = -1
+  P.typed = null
+  typeAhead(q)
+  drawPlaces(failed
+    ? "Can't reach the place search right now — type it however you like."
+    : `Nothing found for "${q}". Type it however you like.`)
+}
+
+async function searchPlaces(q) {
+  const seq = ++P.seq
+  P.ctrl?.abort()
+  const ctrl = new AbortController()
+  P.ctrl = ctrl
+  try {
+    const res = await fetch(`/api/places?q=${encodeURIComponent(q)}`, { signal: ctrl.signal })
+    const data = await res.json()
+    // A slower earlier answer must not land on top of a newer one.
+    if (seq !== P.seq || !P.input?.isConnected) return
+    const places = Array.isArray(data.places) ? data.places : []
+    if (!data.failed) memoPlaces(q, places)
+    showPlaces(q, places, data.failed)
+  } catch { /* aborted, or offline — leave whatever is on screen */ }
+}
+
+function pickPlace(i, focus = true) {
+  const place = P.list[i]
+  const input = P.input
+  if (!place || !input) return
+  // Taking a place takes the whole place: the line you would write on a postcard
+  // in the box, and its coordinates behind — which is what turns "the lake" into
+  // something the others can actually drive to.
+  input.value = place.where || place.label
+  setPin(input, place.lat, place.lon)
+  P.seq++            // any answer still in flight is now stale
+  closePlaces()
+  if (focus) {
+    input.focus()
+    input.setSelectionRange(input.value.length, input.value.length)
+  }
+}
+
+document.addEventListener('input', (ev) => {
+  const input = ev.target.closest?.('[data-places]')
+  if (!input) return
+  if (P.input && P.input !== input) closePlaces()
+  P.input = input
+  P.complete = !ev.isComposing && !String(ev.inputType ?? '').startsWith('delete')
+
+  // Typing again means the pin no longer points at what the box says, and a pin
+  // that has drifted off the words is worse than none: it sends people
+  // confidently to the wrong field.
+  setPin(input, null, null)
+
+  clearTimeout(P.timer)
+  const q = input.value.trim()
+  if (q.length < PLACES_MIN) { P.seq++; closePlaces(); return }
+
+  // A query we have seen this session answers straight away — which is what
+  // makes typing ahead feel like the box knows rather than like it caught up.
+  const known = placeMemo.get(q.toLowerCase())
+  if (known) { P.seq++; P.ctrl?.abort(); showPlaces(q, known, false); return }
+  P.timer = setTimeout(() => searchPlaces(q), PLACES_WAIT)
+})
+
+document.addEventListener('keydown', (ev) => {
+  const input = ev.target.closest?.('[data-places]')
+  if (!input || input !== P.input) return
+  const n = P.list.length
+
+  if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
+    if (!n) return
+    ev.preventDefault()
+    P.active = ev.key === 'ArrowDown'
+      ? (P.active + 1) % n
+      : (P.active <= 0 ? n - 1 : P.active - 1)
+    // Walking the list puts each place in the box as you pass it, so what you
+    // would end up with by stopping here is never left to be guessed at.
+    if (P.typed === null) P.typed = input.value
+    input.value = P.list[P.active].where || P.list[P.active].label
+    input.setSelectionRange(input.value.length, input.value.length)
+    drawPlaces('')
+    return
+  }
+  // Tab takes the completion on its way past — the whole place, address and
+  // all, not just the letters that happen to be on screen.
+  if (ev.key === 'Tab' && ahead()) { pickPlace(0, false); return }
+
+  // → and End collapse the selection anyway; this makes that mean "yes, that
+  // one" rather than leaving the text of a place nobody has actually chosen.
+  if ((ev.key === 'ArrowRight' || ev.key === 'End') && ahead()) {
+    ev.preventDefault()
+    pickPlace(0)
+    return
+  }
+
+  // Enter only belongs to the menu while something in it is highlighted —
+  // otherwise it is still the key that submits the form.
+  if (ev.key === 'Enter' && P.active >= 0) { ev.preventDefault(); pickPlace(P.active); return }
+
+  if (ev.key === 'Escape' && n) {
+    ev.preventDefault()
+    ev.stopPropagation()
+    // Escape gives back the letters you typed, not the ones we added.
+    if (P.typed !== null) {
+      const typed = P.typed
+      input.value = typed
+      input.setSelectionRange(typed.length, typed.length)
+    }
+    P.seq++
+    closePlaces()
+  }
+})
+
+// mousedown rather than click: the box must not lose focus (and close the menu)
+// before the tap has had a chance to say which place it landed on.
+document.addEventListener('mousedown', (ev) => {
+  const opt = ev.target.closest?.('[data-place]')
+  if (!opt || !placesField(P.input)?.contains(opt)) return
+  ev.preventDefault()
+  pickPlace(Number(opt.dataset.place))
+})
+
+document.addEventListener('focusout', (ev) => {
+  if (ev.target !== P.input) return
+  setTimeout(() => { if (document.activeElement !== P.input) closePlaces() }, 0)
 })
 
 window.addEventListener('popstate', boot)

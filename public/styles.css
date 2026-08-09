@@ -110,6 +110,26 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 .field input:focus, .field textarea:focus { border-color: var(--forest); outline-offset: 1px; }
 .field textarea { min-height: 96px; resize: vertical; }
 .field--split { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+/* The "Where" box searches for real places; the results hang under it. */
+.places { position: relative; }
+.places__menu {
+  /* Above the fixed tab bar (40), below the sheet scrim (50): a field near the
+     foot of the trip page would otherwise open its menu behind the tabs. */
+  position: absolute; z-index: 45; left: 0; right: 0; top: calc(100% + 5px);
+  max-height: 280px; overflow-y: auto; padding: 4px;
+  background: var(--paper); border: 1.5px solid var(--line-strong);
+  border-radius: var(--r-md); box-shadow: var(--shadow-lift);
+}
+.places__opt {
+  display: block; width: 100%; text-align: left; cursor: pointer;
+  padding: 9px 10px; border: 0; border-radius: var(--r-sm);
+  background: none; font: inherit; color: inherit;
+}
+.places__opt:hover, .places__opt.is-active { background: var(--paper-sunk); }
+.places__name { display: block; font-weight: 600; line-height: 1.3; }
+.places__detail { display: block; margin-top: 2px; font-size: 13px; color: var(--ink-soft); line-height: 1.35; }
+.places__msg { margin: 0; padding: 10px; font-size: 14px; color: var(--ink-soft); }
 /* A date input's min-content width is wider than half a narrow card, so on
    small phones the pair pushed the card out sideways. */
 @media (max-width: 400px) { .field--split { grid-template-columns: 1fr; } }
@@ -499,6 +519,19 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
   transition: color .12s ease, box-shadow .12s ease;
 }
 .tag:hover { color: var(--ink-soft); box-shadow: inset 0 0 0 1.5px var(--line-strong); }
+.tag svg { flex: none; width: 13px; height: 13px; margin-right: 4px; margin-left: -1px; }
+
+/* Where a plan happens. Quieter than a claim — it is information, not a job
+   somebody has taken on. A place typed by hand can run long, and a chip is not
+   the place to read it: the sheet behind it is. */
+.chip--place {
+  background: var(--paper-sunk); color: var(--ink-soft);
+  box-shadow: inset 0 0 0 1.5px var(--line);
+  max-width: min(100%, 26ch);
+}
+.chip--place:hover { color: var(--ink); box-shadow: inset 0 0 0 1.5px var(--line-strong); }
+.chip--place svg { flex: none; width: 13px; height: 13px; margin-left: -2px; }
+.chip__where { overflow: hidden; text-overflow: ellipsis; }
 
 /* ---- two-way switch ----------------------------------------------------- */
 
@@ -543,6 +576,11 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 /* The notes are the one piece of writing on the page, so they keep their line
    breaks and the ink of body copy rather than the grey of a caption. */
 .card > .notes { white-space: pre-wrap; color: var(--ink); font-size: 15px; overflow-wrap: anywhere; }
+
+/* An address is read on a phone, in a car, by somebody who wants the map open —
+   so the link is a full-width target rather than a word in a sentence. */
+.where__go { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.where__go .btn { flex: 1 1 auto; }
 
 /* ---- the whole trip, in five lines --------------------------------------- */
 

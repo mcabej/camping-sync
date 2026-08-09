@@ -23,6 +23,42 @@ app.use('/api', (_req, res, next) => {
 const clean = (v, max = 400) => String(v ?? '').trim().slice(0, max)
 const LISTS = new Set(['gear', 'food', 'drinks', 'activities'])
 
+// The map link ends up in an href that everyone on the trip taps, and anyone
+// with the code can set it. So only ordinary web links are stored: a pasted
+// `maps.app.goo.gl/…` gets the scheme it is missing, and anything that isn't
+// http(s) after that is dropped rather than kept.
+function mapUrl(raw) {
+  const v = clean(raw, 500)
+  if (!v) return ''
+  try {
+    const u = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(v) ? v : `https://${v}`)
+    return u.protocol === 'https:' || u.protocol === 'http:' ? u.href : ''
+  } catch { return '' }
+}
+
+// Where the trip is gets more room than its name: it is one field holding a real
+// place, and a full one runs to a site, a village, a postcode and a country.
+const TRIP_FIELDS = ['name', 'location', 'map_url', 'start_date', 'end_date', 'notes']
+const TRIP_LIMITS = { notes: 4000, location: 200 }
+// A place on an item is the same kind of answer as a place on the trip.
+const PLACE_MAX = TRIP_LIMITS.location
+const tripField = (f, v) => (f === 'map_url' ? mapUrl(v) : clean(v, TRIP_LIMITS[f] ?? 120))
+
+// The pin that comes with a searched-for place. Both halves or neither: half a
+// coordinate is a point in the sea. An empty box is not a zero, so blanks stay
+// null rather than becoming a spot in the Gulf of Guinea.
+function coords(body) {
+  const num = (v, max) => {
+    const s = String(v ?? '').trim()
+    if (!s) return null
+    const n = Number(s)
+    return Number.isFinite(n) && Math.abs(n) <= max ? n : null
+  }
+  const lat = num(body?.lat, 90)
+  const lon = num(body?.lon, 180)
+  return lat === null || lon === null ? [null, null] : [lat, lon]
+}
+
 // Plans are always a group thing; there is no "bring your own hike".
 const kindOf = (raw, list) => (raw === 'own' && list !== 'activities' ? 'own' : 'shared')
 
@@ -61,6 +97,122 @@ function actorName(tripId, req) {
 
 app.get('/api/catalog', (_req, res) => res.json({ catalog: CATALOG, tips: TIPS }))
 
+// ---- place search -----------------------------------------------------------
+
+// "Where" is a real search, and it runs through here rather than straight from
+// the browser. OpenStreetMap asks callers for one identifying User-Agent and at
+// most a request a second — neither of which is true of thirty phones typing on
+// their own. Going through the server gives us one queue and one cache to hold
+// to that, and keeps the keystrokes of everyone's trip planning off a third
+// party's logs beyond the one lookup it takes to answer.
+const PLACES_URL = 'https://nominatim.openstreetmap.org/search'
+const PLACES_UA = 'camping-sync/1.0 (https://camping-sync.up.railway.app)'
+const PLACES_TTL = 60 * 60 * 1000
+const PLACES_KEEP = 400   // cached queries
+const PLACES_WAITING = 6  // lookups allowed to queue before we stop taking more
+
+const placeCache = new Map()
+
+function remember(key, places) {
+  placeCache.set(key, { at: Date.now(), places })
+  // Oldest insertion first, so this drops the least recently missed query.
+  if (placeCache.size > PLACES_KEEP) placeCache.delete(placeCache.keys().next().value)
+}
+
+// One request a second, shared across everybody: each lookup waits its turn in a
+// single chain rather than racing the others out of the door.
+let queue = Promise.resolve()
+let lastCall = 0
+let waiting = 0
+
+function queued(fn) {
+  const turn = queue.then(async () => {
+    const gap = 1100 - (Date.now() - lastCall)
+    if (gap > 0) await new Promise((r) => setTimeout(r, gap))
+    lastCall = Date.now()
+    return fn()
+  })
+  queue = turn.then(() => {}, () => {})
+  return turn
+}
+
+// One field for where the trip is means one string that has to do both jobs:
+// recognisable at a glance, and enough to find the place. Nominatim's
+// display_name is neither — nine parts ending in the country, with the road and
+// the parish in the middle — so what a trip keeps is what you would write on a
+// postcard: the place, the village, the postcode, the country.
+function whereLine(r, label) {
+  const a = r?.address ?? {}
+  const town = a.village || a.town || a.city || a.hamlet || a.suburb || a.municipality || a.county
+  const out = []
+  for (const part of [label, town, a.postcode, a.country]) {
+    const v = String(part ?? '').trim()
+    if (v && !out.some((x) => x.toLowerCase() === v.toLowerCase())) out.push(v)
+  }
+  return out.join(', ').slice(0, TRIP_LIMITS.location)
+}
+
+// A result reads as a name and where that name is: "Wasdale Head Campsite" then
+// "Wasdale Head, Cumberland, England". `where` is what taking it puts in the
+// box, and lat/lon are the pin that comes with it.
+function shapePlace(r) {
+  const full = String(r?.display_name ?? '').trim()
+  if (!full) return null
+  const parts = full.split(',').map((s) => s.trim()).filter(Boolean)
+  const label = String(r?.name ?? '').trim() || parts[0] || full
+  const rest = parts[0] === label ? parts.slice(1) : parts
+  const lat = Number(r?.lat)
+  const lon = Number(r?.lon)
+  return {
+    id: String(r?.place_id ?? label),
+    label: label.slice(0, 120),
+    detail: rest.join(', ').slice(0, 160),
+    where: whereLine(r, label.slice(0, 120)),
+    lat: Number.isFinite(lat) ? lat : null,
+    lon: Number.isFinite(lon) ? lon : null,
+  }
+}
+
+app.get('/api/places', async (req, res) => {
+  const q = clean(req.query?.q, 120)
+  if (q.length < 2) return res.json({ places: [] })
+
+  const key = q.toLowerCase()
+  const hit = placeCache.get(key)
+  if (hit && Date.now() - hit.at < PLACES_TTL) return res.json({ places: hit.places })
+
+  // Better to say the search is busy than to queue a lookup nobody is still
+  // waiting on — the box in front of them has moved on several letters by now.
+  if (waiting >= PLACES_WAITING) return res.json({ places: [], failed: true })
+
+  const url = new URL(PLACES_URL)
+  url.searchParams.set('q', q)
+  url.searchParams.set('format', 'jsonv2')
+  url.searchParams.set('limit', '6')
+  url.searchParams.set('addressdetails', '1')
+
+  waiting++
+  try {
+    const upstream = await queued(() => fetch(url, {
+      headers: {
+        'user-agent': PLACES_UA,
+        'accept-language': clean(req.get('accept-language'), 80) || 'en',
+      },
+      signal: AbortSignal.timeout(6000),
+    }))
+    if (!upstream.ok) throw new Error(`nominatim ${upstream.status}`)
+    const rows = await upstream.json()
+    const places = (Array.isArray(rows) ? rows : []).map(shapePlace).filter(Boolean)
+    remember(key, places)
+    res.json({ places })
+  } catch {
+    // Suggestions are a convenience; the box still takes anything you type.
+    res.json({ places: [], failed: true })
+  } finally {
+    waiting--
+  }
+})
+
 // ---- trips ------------------------------------------------------------------
 
 app.post('/api/trips', (req, res) => {
@@ -69,9 +221,11 @@ app.post('/api/trips', (req, res) => {
   const id = newTripCode()
   const ts = now()
 
-  db.prepare(`INSERT INTO trips (id, name, location, start_date, end_date, notes, created_at)
-              VALUES (?, ?, ?, ?, ?, '', ?)`)
-    .run(id, name, clean(req.body?.location, 120), clean(req.body?.start_date, 20), clean(req.body?.end_date, 20), ts)
+  const [lat, lon] = coords(req.body)
+  db.prepare(`INSERT INTO trips (id, name, location, lat, lon, map_url, start_date, end_date, notes, created_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', ?)`)
+    .run(id, name, tripField('location', req.body?.location), lat, lon,
+      mapUrl(req.body?.map_url), clean(req.body?.start_date, 20), clean(req.body?.end_date, 20), ts)
 
   let memberId = null
   if (organiser) {
@@ -142,17 +296,28 @@ app.get('/api/trips/:id/rev', (req, res) => {
 app.patch('/api/trips/:id', (req, res) => {
   const trip = requireTrip(req, res)
   if (!trip) return
-  const fields = ['name', 'location', 'start_date', 'end_date', 'notes']
-  const sets = [], vals = []
-  for (const f of fields) {
+  const sets = [], vals = [], touched = []
+  for (const f of TRIP_FIELDS) {
     if (req.body?.[f] !== undefined) {
       sets.push(`${f} = ?`)
-      vals.push(clean(req.body[f], f === 'notes' ? 4000 : 120))
+      vals.push(tripField(f, req.body[f]))
+      touched.push(f)
     }
+  }
+  // The pin belongs to the location, so it travels with it: sending a place
+  // without coordinates means the words were typed by hand, and last week's pin
+  // is no longer pointing at them.
+  if (req.body?.location !== undefined) {
+    const [lat, lon] = coords(req.body)
+    sets.push('lat = ?', 'lon = ?')
+    vals.push(lat, lon)
   }
   if (sets.length) {
     db.prepare(`UPDATE trips SET ${sets.join(', ')} WHERE id = ?`).run(...vals, trip.id)
-    logEvent(trip.id, actorName(trip.id, req), 'updated the trip details')
+    // Where everyone is driving to is the one detail worth its own line in the
+    // feed — it is the thing people go back looking for.
+    const where = touched.every((f) => f === 'location' || f === 'map_url')
+    logEvent(trip.id, actorName(trip.id, req), where ? 'set where the trip is' : 'updated the trip details')
   }
   bumpRev(trip.id)
   res.json(getTripState(trip.id, viewerId(req)))
@@ -223,8 +388,8 @@ app.post('/api/trips/:id/items', (req, res) => {
 
   const incoming = Array.isArray(req.body?.items) ? req.body.items : [req.body]
   const ts = now()
-  const insert = db.prepare(`INSERT INTO items (id, trip_id, list, category, title, note, qty, kind, assignee_id, owner_id, position, created_at, updated_at)
-                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+  const insert = db.prepare(`INSERT INTO items (id, trip_id, list, category, title, note, qty, kind, assignee_id, owner_id, place, lat, lon, position, created_at, updated_at)
+                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
   const added = []
 
   // Personal kit needs somebody to belong to, so it can only be added by a
@@ -240,10 +405,12 @@ app.post('/api/trips/:id/items', (req, res) => {
     const kind = kindOf(clean(raw?.kind, 10), list)
     if (kind === 'own' && !isMember) { refused = true; continue }
     const id = uid()
+    const [lat, lon] = coords(raw)
     insert.run(
       id, trip.id, list, clean(raw?.category, 60), title, clean(raw?.note, 500), clean(raw?.qty, 40), kind,
       kind === 'own' ? null : clean(raw?.assignee_id, 64) || null,
-      kind === 'own' ? me : null, nextPosition(trip.id, list), ts, ts,
+      kind === 'own' ? me : null, clean(raw?.place, PLACE_MAX), lat, lon,
+      nextPosition(trip.id, list), ts, ts,
     )
     // Only group kit is news. What you put on your own list is yours alone.
     if (kind !== 'own') added.push(title)
@@ -276,6 +443,17 @@ app.patch('/api/items/:id', (req, res) => {
   if (req.body?.note !== undefined) push('note', clean(req.body.note, 500))
   if (req.body?.qty !== undefined) push('qty', clean(req.body.qty, 40))
   if (req.body?.category !== undefined) push('category', clean(req.body.category, 60))
+
+  // Same rule as the trip's own location: the pin travels with the words, so
+  // rewriting where the sunset spot is never leaves last week's coordinates
+  // pointing at it.
+  const placed = req.body?.place !== undefined
+  if (placed) {
+    const [lat, lon] = coords(req.body)
+    push('place', clean(req.body.place, PLACE_MAX))
+    push('lat', lat)
+    push('lon', lon)
+  }
 
   // Switching between shared and own resets the other model's state, so it is
   // handled on its own rather than alongside an assignment or a packed tick.
@@ -316,6 +494,13 @@ app.patch('/api/items/:id', (req, res) => {
     logEvent(item.trip_id, who, a ? `is bringing ${item.title}` : `dropped ${item.title}`)
   } else if (req.body?.packed !== undefined) {
     logEvent(item.trip_id, who, `${req.body.packed ? 'packed' : 'unpacked'} ${item.title}`)
+  } else if (placed) {
+    // Worth a line: half the point of saying where the sunset spot is, is that
+    // the others find out there is one.
+    const where = clean(req.body.place, PLACE_MAX)
+    logEvent(item.trip_id, who, where
+      ? `said where ${item.title} is`
+      : `took the place off ${item.title}`)
   }
 
   bumpRev(item.trip_id)

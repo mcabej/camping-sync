@@ -22,6 +22,20 @@ until somebody fixes that.
   reporting their coverage at once (tap one to go there), the notes everyone
   needs (gate code, meeting point) shown as text rather than buried in a form,
   and who has packed what of what they claimed.
+- **Getting there** — where the trip is, in **one** field, holding the real
+  place rather than a nickname for it. Headers and cards show what comes before
+  the first comma; the card shows the lot, with one tap to turn-by-turn. Paste a
+  map pin and that wins over everything, because a lot of campsites sit down an
+  unnamed track.
+- **Place search** — the *Where* box looks places up as you type, finishes the
+  name for you the way a browser's address bar does, and drops the rest under
+  the cursor (see below). Take one and the coordinates come with it, so the map
+  link is a pin rather than a hopeful search; type whatever you like when you
+  don't know yet, because "somewhere with a lake" is a real answer in March.
+- **Plans have places** — a plan can say where it happens, which is usually the
+  location that matters: nobody needs directions to the tent they are sleeping
+  in, and "the sunset spot" means nothing to whoever has not been there. The
+  chip on the row opens the same search box, with the map link behind it.
 - **Camp smarts** — 15 things first-timers find out the hard way.
 - **Live sync** — clients poll a revision counter every 5s and refetch on change.
 - **Activity feed** — who added, claimed, packed or dropped what.
@@ -65,6 +79,52 @@ can never be half-claimed and half-one-each. Plans (`activities`) are always
 shared and never show the orange unclaimed chip — nobody "brings" a hike, so
 they're measured by votes and can take an optional organiser instead. Trips created before this split are migrated on boot: the column is
 added and known one-each titles are flipped over, using the catalogue.
+
+Items carry the same trio as a trip — `place`, `lat`, `lon` — filled in by the
+same search. Only plans offer it in the UI, since a place on a bag of sausages
+answers a question nobody asked, but the columns are on every item.
+
+Where a trip is used to be two columns — `location` for what you called it,
+`address` for where it actually was — which let a trip say "the lake" and stop
+there. It is one now: `location` holds the real place, `lat`/`lon` hold the pin
+when it came from the search, and `map_url` is still the override for a place
+the geocoder puts in the wrong field. Boot migrates the old shape by promoting
+any `address` a trip has into `location` and dropping the column; trips that
+only ever had the nickname keep it, since it is the best answer anyone gave.
+
+### Place search
+
+`GET /api/places?q=` proxies [Nominatim](https://nominatim.org), OpenStreetMap's
+geocoder — free, no key, but it asks callers for one identifying `User-Agent`
+and no more than a request a second. Browsers can't promise either, so the
+server does it for everyone: a single queue paced at ~1.1s, an hour-long
+in-memory cache of the last 400 queries, and a busy answer once six lookups are
+already waiting. A failed lookup is not an error — the box still takes anything
+you type, so the endpoint answers `{ places: [], failed: true }` and the menu
+says so.
+
+The box itself is a combobox with inline completion: the rest of the best match
+lands in it already selected, so typing on overwrites it, `Enter` / `Tab` / `→`
+take it whole, `Backspace` removes exactly the part you did not type, and `Esc`
+hands your own letters back. It only ever completes a match that genuinely
+starts with what you typed — finishing "lake" as "Windermere" would be a guess
+dressed as a fact. Type-ahead is off where `pointer: fine` isn't, because
+rewriting the value under a phone's composing keyboard corrupts the next
+keystroke; touch keeps the menu, which suits a thumb better regardless. Queries
+answered once are kept in the tab, so completion for a word you have typed
+before lands under the cursor rather than 300ms later.
+
+Taking a result writes the whole place into `location` and its coordinates into
+`lat`/`lon` — hidden inputs beside the box, so the pin is saved by the same
+submit as the words and can never end up describing somewhere else. Typing over
+the words clears the pin for the same reason: a stale pin is worse than none,
+because it sends people confidently to the wrong field. `display_name` from
+Nominatim is not what gets stored — nine parts ending in the country, with the
+parish in the middle — so `whereLine()` keeps what you would write on a
+postcard: place, village, postcode, country.
+
+If the volume ever outgrows Nominatim's policy, this is one function to point at
+a paid geocoder — nothing else in the app knows where suggestions come from.
 
 ### Auth
 
