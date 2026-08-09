@@ -31,6 +31,7 @@ const ICONS = {
   x: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>',
   plus: '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
   pin: '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s7-6.1 7-11a7 7 0 1 0-14 0c0 4.9 7 11 7 11Z"/><circle cx="12" cy="10" r="2.5"/></svg>',
+  spark: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5 13.8 9l5.7 1.8-5.7 1.8L12 18l-1.8-5.4L4.5 10.8 10.2 9 12 3.5Z"/><path d="M19 3v3M20.5 4.5h-3"/></svg>',
 }
 
 // ---- state ------------------------------------------------------------------
@@ -187,6 +188,25 @@ function fmtDates(trip) {
   const a = f(trip.start_date), b = f(trip.end_date)
   if (a && b) return `${a} – ${b}`
   return a || b || ''
+}
+
+// The header has one line and has to share it with the trip name, so a trip
+// that begins and ends in the same month names the month once.
+function shortDates(trip) {
+  if (trip?.start_date && trip.start_date === trip.end_date) {
+    return fmtDates({ start_date: trip.start_date })
+  }
+  const day = (s) => {
+    if (!s) return null
+    const d = new Date(`${s}T12:00:00`)
+    return Number.isNaN(+d) ? null : d
+  }
+  const a = day(trip?.start_date), b = day(trip?.end_date)
+  if (!a || !b || a.getMonth() !== b.getMonth() || a.getFullYear() !== b.getFullYear()) {
+    return fmtDates(trip ?? {})
+  }
+  const dm = (d) => d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric' })
+  return `${dm(a)} – ${dm(b)} ${b.toLocaleDateString(undefined, { month: 'short' })}`
 }
 
 function ago(iso) {
@@ -562,18 +582,17 @@ function viewJoin() {
   </div>`
 }
 
+// One height, always: the trip you are in and the days it runs. Where it is,
+// who is coming and the invite link each have a card on the Camp tab, so the
+// header carries only the two things you want while looking at a list.
 function topbar() {
-  const meta = [shortWhere(S.trip), fmtDates(S.trip)].filter(Boolean).map(esc)
-  meta.push(`${S.members.length} ${S.members.length === 1 ? 'person' : 'people'}`)
   const list = TABS.find((t) => t.id === S.tab)?.list ?? null
+  const when = shortDates(S.trip)
   return `
     <header class="topbar${list ? '' : ' topbar--bare'}">
       <div class="topbar__row">
-        <div class="topbar__title">
-          <h1>${esc(S.trip.name)}</h1>
-          <p class="topbar__meta">${meta.join(' · ')}</p>
-        </div>
-        <button class="topbar__share" data-act="share">Invite</button>
+        <h1 class="topbar__title">${esc(S.trip.name)}</h1>
+        ${when ? `<span class="topbar__when">${esc(when)}</span>` : ''}
       </div>
       ${list ? `${sectionSwitch(list)}${coverageBar(list, activeSection())}` : ''}
     </header>`
@@ -600,6 +619,8 @@ function listPage(tab) {
   const items = itemsIn(tab.list).filter((i) => (section === 'own') === isOwn(i))
   const note = hasOwnSection(tab.list) ? SECTIONS[section].note : tab.note
 
+  // An empty list has nothing to sit at the foot of, so the two ways to fill it
+  // move into the card and the loud one leads.
   const body = items.length === 0
     ? `<div class="empty">
          <h3>${section === 'own' ? 'Your list is empty' : 'Nothing here yet'}</h3>
@@ -607,16 +628,19 @@ function listPage(tab) {
             ? 'The things nobody can bring for you — a sleeping bag, a headtorch, your own boots. Only you will see what you put here.'
             : 'Pull in the usual suspects, or write your own.'}</p>
          <button class="btn btn--blaze" data-act="suggest">What am I missing?</button>
+         <button class="empty__or" data-act="add">or write your own</button>
        </div>`
-    : categoryGroups(items, section)
+    : `${categoryGroups(items, section)}
+       <div class="listfoot">
+         <button class="listfoot__add" data-act="add">
+           <span class="listfoot__plus">${ICONS.plus}</span>Add your own
+         </button>
+         <button class="listfoot__ask" data-act="suggest">${ICONS.spark}What am I missing?</button>
+       </div>`
 
   return `
     <main class="page">
       ${note ? `<p class="page__note">${esc(note)}</p>` : ''}
-      <div class="actions">
-        <button class="btn btn--blaze" data-act="suggest">What am I missing?</button>
-        <button class="btn" data-act="add">${ICONS.plus} Add your own</button>
-      </div>
       ${body}
     </main>`
 }
@@ -1872,17 +1896,6 @@ async function poll() {
 
 setInterval(poll, 5000)
 document.addEventListener('visibilitychange', () => { if (!document.hidden) poll() })
-
-// The sticky header carries the trip name and dates, which you only need on
-// arrival. Once you start scrolling it collapses to the switcher and the bar.
-// The class goes on <html> so a re-render can't lose it.
-let tight = false
-addEventListener('scroll', () => {
-  const now = window.scrollY > 24
-  if (now === tight) return
-  tight = now
-  document.documentElement.classList.toggle('is-scrolled', now)
-}, { passive: true })
 
 // ---- boot -------------------------------------------------------------------
 
