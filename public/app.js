@@ -1540,6 +1540,8 @@ document.addEventListener('keydown', (ev) => {
 const PLACES_MIN = 2
 const PLACES_WAIT = 280
 const PLACES_KEEP = 60
+// Breathing room between the list and whatever edge it stops at.
+const PLACES_EDGE = 8
 
 // Only ever one open menu, so one object holds all of it. `complete` is whether
 // the last keystroke is one worth typing ahead of — letters yes, deletions no.
@@ -1579,6 +1581,30 @@ function closePlaces() {
   P.typed = null
 }
 
+// The list hangs off the box, and on a phone the box can be a finger's width
+// from the top of the keyboard. Give it whatever room is actually left between
+// the sheet it sits in and the part of the screen the keyboard has not taken —
+// and hang it off the top of the box instead when that is the bigger half.
+// Without this the results are drawn somewhere nobody can see or tap.
+function fitPlaces() {
+  const field = placesField(P.input)
+  const menu = field?.querySelector('.places__menu')
+  if (!menu) return
+  const box = field.getBoundingClientRect()
+  const clip = field.closest('.sheet__body')?.getBoundingClientRect()
+  const vv = window.visualViewport
+  const seenTop = vv?.offsetTop ?? 0
+  const top = Math.max(clip?.top ?? 0, seenTop) + PLACES_EDGE
+  const bottom = Math.min(clip?.bottom ?? window.innerHeight, seenTop + (vv?.height ?? window.innerHeight)) - PLACES_EDGE
+  const below = bottom - box.bottom
+  const above = box.top - top
+  const up = above > below
+  menu.classList.toggle('places__menu--up', up)
+  // A floor of two rows: a list too short to show anything is no more use than
+  // one nobody can reach, and the sheet body scrolls if it comes to that.
+  menu.style.maxHeight = `${Math.round(Math.max(96, Math.min(280, up ? above : below)))}px`
+}
+
 function drawPlaces(empty) {
   const field = placesField(P.input)
   if (!field) return
@@ -1599,6 +1625,7 @@ function drawPlaces(empty) {
         </button>`).join('')
     : `<p class="places__msg">${esc(empty)}</p>`
 
+  fitPlaces()
   P.input.setAttribute('aria-expanded', 'true')
   if (P.active >= 0) {
     P.input.setAttribute('aria-activedescendant', `cs-place-${P.active}`)
@@ -1763,10 +1790,69 @@ document.addEventListener('mousedown', (ev) => {
   pickPlace(Number(opt.dataset.place))
 })
 
+// A tap that lands just after a flick of the list doesn't always produce a
+// mousedown, and a place you tapped that stayed unpicked is the sort of thing
+// that gets an app closed. The click behind it is the backstop — by the time it
+// arrives a mousedown pick has already taken the menu out of the document, so
+// this finds nothing left to do.
+document.addEventListener('click', (ev) => {
+  const opt = ev.target.closest?.('[data-place]')
+  if (!opt || !placesField(P.input)?.contains(opt)) return
+  ev.preventDefault()
+  pickPlace(Number(opt.dataset.place))
+})
+
 document.addEventListener('focusout', (ev) => {
   if (ev.target !== P.input) return
   setTimeout(() => { if (document.activeElement !== P.input) closePlaces() }, 0)
 })
+
+// A thumb, unlike a mouse, arrives with a keyboard behind it. Bringing the box
+// to the top of the sheet as it takes focus gives its list the rest of the sheet
+// to hang in, instead of the sliver between the box and the keys.
+const touchTyping = matchMedia('(pointer: coarse)').matches
+
+document.addEventListener('focusin', (ev) => {
+  if (!touchTyping) return
+  const input = ev.target.closest?.('[data-places]')
+  const body = input?.closest('.sheet__body')
+  if (!body) return
+  // After the keyboard has finished coming up: the sheet is a different size by
+  // then, and scrolling to the wrong one lands in the wrong place.
+  setTimeout(() => {
+    if (!input.isConnected) return
+    const gap = input.getBoundingClientRect().top - body.getBoundingClientRect().top
+    body.scrollBy({ top: gap - PLACES_EDGE, behavior: 'smooth' })
+  }, 260)
+})
+
+// The list is positioned against the box, so it has to be measured again when
+// the box moves under it.
+document.addEventListener('scroll', () => { if (P.list.length) fitPlaces() }, { capture: true, passive: true })
+
+// The on-screen keyboard covers the foot of the page without the page ever being
+// told: the layout viewport keeps its full height, so a sheet pinned to the
+// bottom of it opens behind the keys. The visual viewport does know, so the gap
+// between the two is measured here and the CSS stands the sheet on top of it.
+function watchKeyboard() {
+  const vv = window.visualViewport
+  if (!vv) return
+  const apply = () => {
+    // Pinch-zoom shrinks the visual viewport as well, and that is not a keyboard.
+    const gap = vv.scale > 1.05 ? 0 : window.innerHeight - vv.height - vv.offsetTop
+    // Address bars slide in and out by a few dozen pixels as the page scrolls. A
+    // keyboard is never that small, and ignoring the small ones keeps the sheet
+    // from twitching along with the browser chrome.
+    const kb = gap > 120 ? Math.round(gap) : 0
+    document.documentElement.style.setProperty('--kb', `${kb}px`)
+    document.documentElement.classList.toggle('is-kb', kb > 0)
+    if (P.list.length) fitPlaces()
+  }
+  vv.addEventListener('resize', apply)
+  vv.addEventListener('scroll', apply)
+  apply()
+}
+watchKeyboard()
 
 window.addEventListener('popstate', boot)
 
