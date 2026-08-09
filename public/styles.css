@@ -330,11 +330,30 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
   color: #EAF0E6;
   padding: 12px 18px 0;
 }
-.topbar__row { display: flex; align-items: center; gap: 12px; max-width: 720px; margin: 0 auto; }
+/* The trip itself — where it is, who is coming, the invite link — is not a
+   fifth list, so it is not a fifth tab. It lives behind the one thing already
+   on screen that is about the trip: its name. The whole row is the target,
+   because a 30px glyph in a corner is a thing you have to be told about. */
+.topbar__trip {
+  display: flex; align-items: center; gap: 12px; width: 100%;
+  max-width: 720px; margin: 0 auto; padding: 3px 0;
+  text-align: left; color: inherit;
+}
+.topbar__cog {
+  flex: none; width: 30px; height: 30px; border-radius: 50%;
+  display: grid; place-items: center;
+  color: rgba(234, 240, 230, .7); background: rgba(0, 0, 0, .22);
+  transition: background .14s ease, color .14s ease;
+}
+.topbar__cog svg { width: 17px; height: 17px; }
+.topbar__trip:hover .topbar__cog { color: #F4F8F0; background: rgba(0, 0, 0, .34); }
+/* Lit while you are on it, so the way in is visibly also the way out. */
+.topbar__trip[aria-pressed="true"] .topbar__cog { background: var(--paper); color: var(--forest-deep); }
 /* One line, ellipsised. The header is a label for where you are, not a summary
-   of the trip — the Camp tab holds the where, the when and the who. */
+   of the trip — the trip page holds the where, the when and the who. */
 .topbar__title {
   flex: 1; min-width: 0;
+  font-family: var(--display); font-weight: 800; letter-spacing: -0.02em;
   font-size: 15px; color: #F4F8F0;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
@@ -451,6 +470,23 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
   transition: background .12s ease, color .12s ease;
 }
 .item__kill:hover { background: var(--blaze-soft); color: var(--blaze); }
+
+/* ---- yours to pack ------------------------------------------------------ */
+
+/* One page of four lists costs every row the heading it was sitting under, so
+   the row carries it — quiet enough to scan past, there when you stop. */
+.mine__from {
+  display: block; margin-top: 3px;
+  font-family: var(--mono); font-size: 11px; letter-spacing: .03em;
+  color: var(--ink-faint);
+}
+.item--packed .mine__from { color: var(--line-strong); }
+
+.mine__done {
+  margin: 26px 0 0; padding: 15px; text-align: center;
+  font-size: 14px; font-weight: 600; color: var(--forest-deep);
+  background: #E4EEE5; border-radius: var(--r-md);
+}
 
 /* ---- foot of the list --------------------------------------------------- */
 
@@ -727,15 +763,23 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 .tabbar__btn {
   flex: 1; min-width: 0; height: var(--tabbar-h);
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
-  font-size: 10.5px; font-weight: 600; color: var(--ink-faint);
+  font-size: 11px; font-weight: 600; color: var(--ink-faint);
   border-top: 2.5px solid transparent; margin-top: -1.5px;
   transition: color .12s ease;
 }
+/* A wrapped label would push its icon off centre and stagger the whole bar,
+   which is worse than a label that runs close to the edge. Four tabs leave
+   ~80px each on the narrowest phone, so this only ever guards a long trip
+   name's worth of bad luck. */
+.tabbar__btn > span:last-child { white-space: nowrap; }
 .tabbar__btn svg { width: 21px; height: 21px; }
 .tabbar__btn[aria-current="page"] { color: var(--forest-deep); border-top-color: var(--blaze); }
 
 /* The count sits on the corner of the icon with a ring of the bar's own colour,
-   so it reads as a badge rather than smearing into the glyph underneath. */
+   so it reads as a badge rather than smearing into the glyph underneath.
+   Blaze by default, because on a list that is what a count means: nobody has
+   picked these up. Mine overrides it inline with your own colour — those are
+   picked up, by you, and they are only waiting on your car boot. */
 .tabbar__icon { position: relative; display: grid; place-items: center; }
 .tabbar__flag {
   position: absolute; top: -4px; left: 12px;

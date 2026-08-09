@@ -4,13 +4,36 @@
 
 const MEMBER_COLORS = ['#2F6B57', '#37698F', '#7A5AA6', '#8C6A2F', '#B23C6B', '#4E7A2A', '#2E6E77', '#6B5B4A']
 
+// Four places you do something, and no more. A tab bar is a promise that these
+// are the things the app is for, and it stops being one somewhere around five.
+//
+// Eat carries two lists. Food and drink are one shop, one cooler and one
+// question — "who is feeding us" — and keeping them apart cost a whole tab to
+// say something the categories already say.
+//
+// Mine is the one tab that cuts the other way: the lists answer "who is
+// bringing what", and this answers "what am I carrying to the car", which is
+// the only question you have on the morning you leave.
 const TABS = [
-  { id: 'pack', list: 'gear', label: 'Pack', title: 'Packing list' },
-  { id: 'eat', list: 'food', label: 'Eat', title: 'Food', note: 'Plan it by meal. Whoever claims a meal buys for it.' },
-  { id: 'drink', list: 'drinks', label: 'Drink', title: 'Drinks', note: 'About 1 gallon / 4L of water per person per day.' },
-  { id: 'do', list: 'activities', label: 'Do', title: 'Plans', note: 'Vote for what you actually want to do. Nobody has to "bring" a hike.' },
-  { id: 'camp', list: null, label: 'Camp', title: 'The trip' },
+  { id: 'pack', lists: ['gear'], label: 'Pack', title: 'Packing list' },
+  { id: 'eat', lists: ['food', 'drinks'], label: 'Eat', title: 'Food and drink',
+    note: 'Plan it by meal — whoever claims one buys for it. Reckon on about 1 gallon / 4L of water per person per day.' },
+  { id: 'do', lists: ['activities'], label: 'Do', title: 'Plans', note: 'Vote for what you actually want to do. Nobody has to "bring" a hike.' },
+  { id: 'mine', lists: [], label: 'Mine', title: 'Yours to pack' },
 ]
+
+// Where the trip is, who is coming, the invite link: read now and then rather
+// than worked in, so it hangs off the header instead of taking a fifth of the
+// bar. It is reached from the one thing on screen already about the trip — its
+// name — which is where people look for it anyway.
+const CAMP = { id: 'camp', lists: [], label: 'Camp', title: 'The trip' }
+
+const tabById = (id) => TABS.find((t) => t.id === id) ?? TABS[0]
+const currentTab = () => tabById(S.tab)
+const isPlanTab = (tab) => tab.lists.includes('activities')
+
+// What to call each half of the Eat tab when the two have to be told apart.
+const LIST_WORD = { food: 'Food', drinks: 'Drink' }
 
 // The two ways a thing gets brought. This distinction runs through the whole app.
 // The wording earns its keep here: people read "Personal kit" as "my own list"
@@ -22,9 +45,10 @@ const SECTIONS = {
 
 const ICONS = {
   pack: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8h12l1 12H5L6 8Z"/><path d="M9 8V6a3 3 0 0 1 6 0v2"/></svg>',
-  eat: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3v8a2 2 0 0 0 4 0V3"/><path d="M7 11v10"/><path d="M17 3c-1.5 2-2 4-2 6s.5 3 2 3 2-1 2-3-.5-4-2-6Z"/><path d="M17 12v9"/></svg>',
-  drink: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4h12l-1.5 8.5a5 5 0 0 1-9 0L6 4Z"/><path d="M12 17v4"/><path d="M8 21h8"/></svg>',
+  // A fork and a glass: the tab is one shop, and the icon has to say so.
+  eat: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 3v7a2 2 0 0 0 4 0V3"/><path d="M6.5 10v11"/><path d="M13.2 4h7.6l-1.1 7.4a2.9 2.9 0 0 1-5.4 0L13.2 4Z"/><path d="M17 14.5V21"/><path d="M14.2 21h5.6"/></svg>',
   do: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 3 20h18L12 3Z"/><path d="M12 12 7 20h10l-5-8Z"/></svg>',
+  mine: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4h6v3H9V4Z"/><path d="M9 5.5H6.5A1.5 1.5 0 0 0 5 7v12.5A1.5 1.5 0 0 0 6.5 21h11a1.5 1.5 0 0 0 1.5-1.5V7a1.5 1.5 0 0 0-1.5-1.5H15"/><path d="m9 13.5 2 2 4.5-4.5"/></svg>',
   camp: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 3v18M3 12h18"/><path d="M12 3a14 14 0 0 1 0 18a14 14 0 0 1 0-18Z"/></svg>',
   tick: '<svg viewBox="0 0 24 24" fill="none" stroke="#F4F8F0" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5 9.5 18 20 6.5"/></svg>',
   tickGreen: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5 9.5 18 20 6.5"/></svg>',
@@ -39,6 +63,9 @@ const ICONS = {
 const S = {
   view: 'boot',      // boot | landing | join | trip | missing
   tab: 'pack',
+  // The trip page, over the top of whichever tab you were on. Not a tab of its
+  // own, so the bar always has exactly one answer to "where am I".
+  camp: false,
   section: 'shared', // which half of the current list is on screen
   trip: null, members: [], items: [], events: [],
   catalog: null, tips: [],
@@ -124,23 +151,27 @@ const isOwn = (it) => it.kind === 'own'
 const isMine = (it) => !!S.me && it.own.includes(S.me)
 const isPlan = (it) => it.list === 'activities'
 
-// Personal kit exists as a section for any list the catalogue has one-each
+// Everything under one tab, its lists in the order the tab names them — food
+// before drink, so the page reads the way the shop does. Positions restart per
+// list, so this is the only ordering that means anything across two of them.
+const itemsOn = (tab) => tab.lists.flatMap(itemsIn)
+
+// Personal kit exists as a section for any tab the catalogue has one-each
 // suggestions for, even before the trip has added one — otherwise there is
 // nowhere to go looking for it.
-const hasOwnSection = (list) =>
-  itemsIn(list).some(isOwn) || (S.catalog?.[list] ?? []).some((c) => c.own)
+const hasOwnSection = (tab) =>
+  itemsOn(tab).some(isOwn) || tab.lists.some((l) => (S.catalog?.[l] ?? []).some((c) => c.own))
 
-// The section actually on screen, which is 'shared' for any list that has no
+// The section actually on screen, which is 'shared' for any tab that has no
 // personal half at all.
 function activeSection() {
-  const list = TABS.find((t) => t.id === S.tab)?.list
-  return list && hasOwnSection(list) ? S.section : 'shared'
+  const tab = currentTab()
+  return tab.lists.length && hasOwnSection(tab) ? S.section : 'shared'
 }
 
 // Each section answers a different question, so each gets its own tally.
 // Plans are not "brought" by anyone, so they are counted by interest instead.
-function statsFor(list) {
-  const items = list ? itemsIn(list) : S.items
+function statsFor(items) {
   const perMember = new Map()
   let shared = 0, open = 0, own = 0, mine = 0, ideas = 0, wanted = 0
 
@@ -160,6 +191,18 @@ function statsFor(list) {
   }
   return { shared, open, claimed: shared - open, perMember, own, mine, ideas, wanted }
 }
+
+// Everything that is yours to put in the car: the shared things you have put
+// your name to, and your personal kit — which needs no filtering, because the
+// server never sends anyone else's. Plans are not carried, so they stay out.
+function myLoad() {
+  if (!S.me) return []
+  return S.items.filter((it) => !isPlan(it) && (isOwn(it) || it.assignee_id === S.me))
+}
+
+// The two halves tick differently — a group item is packed for everyone, your
+// own kit only for you — so "is this done" is one question with two answers.
+const packedForMe = (it) => (isOwn(it) ? isMine(it) : it.packed)
 
 function groupByCategory(items) {
   const groups = new Map()
@@ -222,11 +265,12 @@ function ago(iso) {
 // The segments and the sentence for one list, in one place: the sticky header
 // draws them on dark canvas, the Camp tab draws all four of them on paper.
 // `empty` is a caller's problem, because the two backgrounds want different ink.
-function barParts(list, section) {
-  const c = statsFor(list)
-  const seg = (flex, bg) => `<div class="coverage__seg" style="flex:${flex};background:${bg}"></div>`
+const seg = (flex, bg) => `<div class="coverage__seg" style="flex:${flex};background:${bg}"></div>`
 
-  if (list === 'activities') {
+function barParts(tab, section) {
+  const c = statsFor(itemsOn(tab))
+
+  if (isPlanTab(tab)) {
     if (!c.ideas) return { empty: 'no ideas yet', say: 'Add what you fancy doing.', aria: 'no ideas yet' }
     const rest = c.ideas - c.wanted
     return {
@@ -262,10 +306,25 @@ function barParts(list, section) {
   }
 }
 
+// The same bar for the one list that is not a list: your own load, wherever on
+// the trip it came from. Your colour for what is in the car, blaze for what is
+// not — which is the same promise the bar makes everywhere else.
+function mineParts() {
+  const load = myLoad()
+  if (!load.length) return { empty: 'nothing yours yet', say: 'Nothing has your name on it.', aria: 'nothing on your list' }
+  const done = load.filter(packedForMe).length
+  const left = load.length - done
+  return {
+    segs: `${done ? seg(done, colorOf(meMember())) : ''}
+           ${left ? `<div class="coverage__seg coverage__seg--gap" style="flex:${left}"></div>` : ''}`,
+    say: left === 0 ? `<b>All ${load.length} packed.</b>` : `<b>${left}</b> still to pack`,
+    aria: `you have packed ${done} of ${load.length}`,
+  }
+}
+
 // One bar, one line, for whichever section is on screen. It reads left to right:
 // how much is handled, then how much is not.
-function coverageBar(list, section) {
-  const p = barParts(list, section)
+function coverageBar(p) {
   return `
     <div class="cov">
       <div class="cov__track" role="img" aria-label="${p.aria}">
@@ -276,9 +335,9 @@ function coverageBar(list, section) {
 
 // The section switcher lives in the sticky header, so the other half of the
 // list is always one tap away rather than a scroll away.
-function sectionSwitch(list) {
-  if (!hasOwnSection(list)) return ''
-  const c = statsFor(list)
+function sectionSwitch(tab) {
+  if (!hasOwnSection(tab)) return ''
+  const c = statsFor(itemsOn(tab))
   const chip = (key, outstanding) => `
     <button class="switch__btn" data-act="section" data-section="${key}" aria-pressed="${S.section === key}">
       ${SECTIONS[key].label}${outstanding ? `<span class="switch__n">${outstanding}</span>` : ''}</button>`
@@ -586,15 +645,28 @@ function viewJoin() {
 // who is coming and the invite link each have a card on the Camp tab, so the
 // header carries only the two things you want while looking at a list.
 function topbar() {
-  const list = TABS.find((t) => t.id === S.tab)?.list ?? null
+  const tab = currentTab()
   const when = shortDates(S.trip)
+  // Your own tab has no list behind it and no second half to switch to, but it
+  // is still a thing with a gap in it — so it keeps the bar and drops the rest.
+  // The trip page brings its own summary, so it gets neither.
+  const under = S.camp ? ''
+    : S.tab === 'mine' ? coverageBar(mineParts())
+    : `${sectionSwitch(tab)}${coverageBar(barParts(tab, activeSection()))}`
+
+  // The trip name is app furniture rather than a page heading — what the page
+  // is actually about is the section you are in, which had no heading at all
+  // until now. So the h1 says both, out loud, to whoever is listening.
   return `
-    <header class="topbar${list ? '' : ' topbar--bare'}">
-      <div class="topbar__row">
-        <h1 class="topbar__title">${esc(S.trip.name)}</h1>
+    <header class="topbar${under ? '' : ' topbar--bare'}">
+      <h1 class="sr-only">${esc(S.trip.name)} — ${esc(S.camp ? CAMP.title : tab.title)}</h1>
+      <button class="topbar__trip" data-act="camp" aria-pressed="${S.camp}">
+        <span class="topbar__title">${esc(S.trip.name)}</span>
         ${when ? `<span class="topbar__when">${esc(when)}</span>` : ''}
-      </div>
-      ${list ? `${sectionSwitch(list)}${coverageBar(list, activeSection())}` : ''}
+        <span class="topbar__cog" aria-hidden="true">${ICONS.camp}</span>
+        <span class="sr-only">Trip details</span>
+      </button>
+      ${under}
     </header>`
 }
 
@@ -616,8 +688,8 @@ function listPage(tab) {
   // Only one section is ever on screen, so the switcher in the header is the
   // whole navigation for it — no scrolling to find the other half.
   const section = activeSection()
-  const items = itemsIn(tab.list).filter((i) => (section === 'own') === isOwn(i))
-  const note = hasOwnSection(tab.list) ? SECTIONS[section].note : tab.note
+  const items = itemsOn(tab).filter((i) => (section === 'own') === isOwn(i))
+  const note = hasOwnSection(tab) ? SECTIONS[section].note : tab.note
 
   // An empty list has nothing to sit at the foot of, so the two ways to fill it
   // move into the card and the loud one leads.
@@ -645,6 +717,68 @@ function listPage(tab) {
     </main>`
 }
 
+// Flattening four lists into one loses the heading each thing was sitting
+// under, and "Roll mat" on its own is a worse row than "Roll mat / Sleep". So
+// the row carries its own category, and says when it is nobody's business but
+// yours — because that changes what the tick beside it means.
+function mineRow(item) {
+  const own = isOwn(item)
+  const from = [item.category || 'Other', own ? 'personal kit' : ''].filter(Boolean).join(' · ')
+  return `
+    <li class="item${packedForMe(item) ? ' item--packed' : ''}">
+      <div class="item__main">
+        <div class="item__title">${esc(item.title)}${item.qty ? `<span class="item__qty">${esc(item.qty)}</span>` : ''}</div>
+        <span class="mine__from">${esc(from)}</span>
+        ${item.note ? `<p class="item__note">${esc(item.note)}</p>` : ''}
+        <div class="item__row">${own ? ownToggle(item) : packToggle(item)}</div>
+      </div>
+    </li>`
+}
+
+// Every other tab is one list, split in two and then split again by category —
+// which is four taps away from the only question you have on the morning you
+// leave. This is that question, answered on one page: everything you are
+// carrying, group and personal together, in the order you would pack it.
+function minePage() {
+  const load = myLoad()
+
+  if (!load.length) {
+    return `
+      <main class="page">
+        <div class="empty">
+          <h3>Nothing has your name on it</h3>
+          <p>Put your name to something on one of the lists, or start a personal kit — the things nobody can bring for you. Whatever you take on shows up here.</p>
+          <button class="btn btn--blaze" data-act="tab" data-tab="pack">Go to the packing list</button>
+        </div>
+      </main>`
+  }
+
+  // Grouped by the tab each thing came from, in tab order, so the page maps
+  // onto the app you already know. Inside a group, what the others are counting
+  // on you for comes before what only you would miss.
+  const groups = TABS.filter((t) => t.lists.length && !isPlanTab(t))
+    .map((tab) => [tab, tab.lists.flatMap((l) => load.filter((it) => it.list === l))])
+    .filter(([, items]) => items.length)
+    .map(([tab, items]) => {
+      const rows = [...items.filter((i) => !isOwn(i)), ...items.filter(isOwn)]
+      return `
+        <section class="group">
+          <div class="group__head"><h3>${esc(tab.label)}</h3>
+            <span class="group__tally">${rows.filter(packedForMe).length}/${rows.length} packed</span></div>
+          <ul class="items">${rows.map(mineRow).join('')}</ul>
+        </section>`
+    }).join('')
+
+  const left = load.filter((it) => !packedForMe(it)).length
+
+  return `
+    <main class="page">
+      <p class="page__note">Everything that is yours to carry — what you have claimed for the group, and your own kit. Ticking here is the same tick as on the lists.</p>
+      ${groups}
+      ${left === 0 ? '<p class="mine__done">That is the lot. Nothing left on your list.</p>' : ''}
+    </main>`
+}
+
 // The dates are the only thing on the trip nobody has to be told twice, so the
 // Camp tab leads with the one number they add up to.
 function countdown(trip) {
@@ -665,7 +799,7 @@ function countdown(trip) {
 // Every other tab shows you one list. This is the only place you can see all
 // four at once, which is what the tab is for.
 function readyRow(tab) {
-  const p = barParts(tab.list, 'shared')
+  const p = barParts(tab, 'shared')
   return `
     <button class="ready__row" data-act="tab" data-tab="${tab.id}">
       <span class="ready__name">${tab.label}</span>
@@ -676,7 +810,7 @@ function readyRow(tab) {
 
 function statusCard() {
   const c = countdown(S.trip)
-  const mine = statsFor(null)
+  const mine = statsFor(S.items)
   return `
     <div class="card status">
       <span class="eyebrow">How it's looking</span>
@@ -684,7 +818,7 @@ function statusCard() {
         ${c?.n ? `<span class="countdown__n">${c.n}</span><span class="countdown__word">${c.word}</span>`
                : `<span class="countdown__word countdown__word--alone">${c ? c.word : 'No dates yet'}</span>`}
       </p>
-      <div class="ready">${TABS.filter((t) => t.list).map(readyRow).join('')}</div>
+      <div class="ready">${TABS.filter((t) => t.lists.length).map(readyRow).join('')}</div>
       ${mine.own ? `<p class="status__mine">Your own kit: <b>${mine.mine} of ${mine.own}</b> packed. Nobody else can see this.</p>` : ''}
     </div>`
 }
@@ -876,16 +1010,30 @@ function campPage() {
     </main>`
 }
 
+// What the badge on a tab counts. For a list it is the group's open question —
+// nobody is bringing this. Your own tab is the one place the other question
+// belongs: how much of your load is still sitting in the house.
+function tabFlag(tab) {
+  if (tab.id === 'mine') return myLoad().filter((it) => !packedForMe(it)).length
+  return tab.lists.length ? statsFor(itemsOn(tab)).open : 0
+}
+
 function tabbar() {
   return `
     <nav class="tabbar" aria-label="Sections">
       ${TABS.map((t) => {
-        // Only the group's unanswered questions. Your own packing is your business,
-        // and it already has a count on the section switcher.
-        const open = t.list ? statsFor(t.list).open : 0
+        const here = !S.camp && S.tab === t.id
+        // No badge on the tab you are standing on — the page behind it is
+        // already the answer, and a count you are looking through is noise.
+        const n = here ? 0 : tabFlag(t)
+        // Blaze means one thing on every screen in this app: nobody has picked
+        // this up. Your own kit is picked up — by you — so its count wears your
+        // colour instead, and the orange keeps saying only the one thing.
+        const flag = n ? `<span class="tabbar__flag"${t.id === 'mine'
+          ? ` style="background:${colorOf(meMember())}"` : ''}>${n > 9 ? '9+' : n}</span>` : ''
         return `<button class="tabbar__btn" data-act="tab" data-tab="${t.id}"
-                  ${S.tab === t.id ? 'aria-current="page"' : ''}>
-                  <span class="tabbar__icon">${ICONS[t.id]}${open ? `<span class="tabbar__flag">${open}</span>` : ''}</span>
+                  ${here ? 'aria-current="page"' : ''}>
+                  <span class="tabbar__icon">${ICONS[t.id]}${flag}</span>
                   <span>${t.label}</span>
                 </button>`
       }).join('')}
@@ -893,8 +1041,9 @@ function tabbar() {
 }
 
 function viewTrip() {
-  const tab = TABS.find((t) => t.id === S.tab) ?? TABS[0]
-  return `<div class="app">${topbar()}${tab.list ? listPage(tab) : campPage()}</div>${tabbar()}`
+  const tab = currentTab()
+  const page = S.camp ? campPage() : tab.id === 'mine' ? minePage() : listPage(tab)
+  return `<div class="app">${topbar()}${page}</div>${tabbar()}`
 }
 
 // ---- sheets -----------------------------------------------------------------
@@ -1004,14 +1153,32 @@ function sheetPlace(s) {
 }
 
 function sheetAdd(s) {
-  const tab = TABS.find((t) => t.list === s.list)
-  const cats = [...new Set([...itemsIn(s.list).map((i) => i.category), ...(S.catalog?.[s.list] ?? []).map((c) => c.cat)])].filter(Boolean)
+  const tab = tabById(s.tab)
+  const cats = [...new Set([
+    ...itemsOn(tab).map((i) => i.category),
+    ...tab.lists.flatMap((l) => (S.catalog?.[l] ?? []).map((c) => c.cat)),
+  ])].filter(Boolean)
+
+  // A tab that holds one list never asks which one. Eat holds two, and a bottle
+  // of wine filed under dinner would be lost to whoever goes looking for it.
+  const listPick = tab.lists.length < 2 ? `<input type="hidden" name="list" value="${esc(s.list)}">` : `
+    <div class="field">
+      <span>Food or drink?</span>
+      <div class="segmented" role="group" aria-label="Food or drink">
+        ${tab.lists.map((l) => `
+          <button type="button" class="segmented__btn" aria-pressed="${l === s.list}"
+                  data-act="pick" data-name="list" data-value="${l}">${LIST_WORD[l]}</button>`).join('')}
+      </div>
+      <input type="hidden" name="list" value="${esc(s.list)}">
+    </div>`
+
   return sheetShell({
     title: `Add to ${tab.title.toLowerCase()}`,
     body: `
-      <form data-act="add-item" data-list="${s.list}">
+      <form data-act="add-item">
         <label class="field"><span>What is it?</span>
           <input name="title" required maxlength="120" autofocus placeholder="${s.list === 'food' ? 'Sausages' : s.list === 'activities' ? 'Sunrise walk to the ridge' : 'Bottle opener'}"></label>
+        ${listPick}
         <div class="field--split" style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
           <label class="field"><span>Group</span>
             <input name="category" list="cs-cats" maxlength="60" placeholder="${esc(cats[0] ?? 'Other')}"></label>
@@ -1021,20 +1188,20 @@ function sheetAdd(s) {
         <datalist id="cs-cats">${cats.map((c) => `<option value="${esc(c)}">`).join('')}</datalist>
         <label class="field"><span>Note <span style="font-weight:400">(optional)</span></span>
           <input name="note" maxlength="500" placeholder="Anything the others need to know"></label>
-        ${s.list !== 'activities' ? '' : `
+        ${!isPlanTab(tab) ? '' : `
           <label class="field places"><span>Where <span style="font-weight:400">(optional)</span></span>
             <input name="place" maxlength="200" placeholder="Wast Water shoreline"
                    data-places role="combobox" aria-expanded="false" aria-autocomplete="list"
                    aria-controls="cs-places" autocomplete="off" spellcheck="false">
             <input type="hidden" name="lat" data-places-lat>
             <input type="hidden" name="lon" data-places-lon></label>`}
-        ${s.list === 'activities' ? '' : `
+        ${isPlanTab(tab) ? '' : `
           <div class="field">
             <span>Who brings it?</span>
             <div class="segmented" role="group" aria-label="Who brings it">
-              <button type="button" class="segmented__btn" aria-pressed="${s.section !== 'own'}" data-act="pick-kind" data-kind="shared">
+              <button type="button" class="segmented__btn" aria-pressed="${s.section !== 'own'}" data-act="pick" data-name="kind" data-value="shared">
                 ${SECTIONS.shared.label}</button>
-              <button type="button" class="segmented__btn" aria-pressed="${s.section === 'own'}" data-act="pick-kind" data-kind="own">
+              <button type="button" class="segmented__btn" aria-pressed="${s.section === 'own'}" data-act="pick" data-name="kind" data-value="own">
                 ${SECTIONS.own.label}</button>
             </div>
             <input type="hidden" name="kind" value="${s.section === 'own' ? 'own' : 'shared'}">
@@ -1045,11 +1212,8 @@ function sheetAdd(s) {
 }
 
 function sheetSuggest(s) {
-  const tab = TABS.find((t) => t.list === s.list)
-  const have = new Set(itemsIn(s.list).map((i) => i.title.toLowerCase()))
-  // Suggest into the section you are standing in, so the two never get mixed up.
-  const pool = (S.catalog?.[s.list] ?? [])
-    .filter((c) => !have.has(c.title.toLowerCase()) && !!c.own === (s.section === 'own'))
+  const tab = tabById(s.tab)
+  const pool = s.pool
   const picked = s.picked ?? new Set()
 
   if (!pool.length) {
@@ -1069,8 +1233,7 @@ function sheetSuggest(s) {
     <div class="sheet__group">
       <span class="eyebrow">${esc(cat)}</span>
       ${list.map((c) => `
-        <button class="pick" data-act="toggle-pick" data-title="${esc(c.title)}" data-cat="${esc(c.cat)}"
-                data-note="${esc(c.note ?? '')}" aria-pressed="${picked.has(c.title)}">
+        <button class="pick" data-act="toggle-pick" data-pick="${esc(c.key)}" aria-pressed="${picked.has(c.key)}">
           <span class="pick__main">
             <span class="pick__title">${esc(c.title)}</span>
             ${c.note ? `<span class="pick__note">${esc(c.note)}</span>` : ''}
@@ -1280,7 +1443,16 @@ document.addEventListener('click', async (ev) => {
 
     case 'tab':
       S.tab = el.dataset.tab
+      S.camp = false
       S.section = 'shared'
+      render()
+      window.scrollTo(0, 0)
+      break
+
+    // The trip page sits over whichever tab you were on, so the way in is also
+    // the way out and you never land back somewhere you did not choose.
+    case 'camp':
+      S.camp = !S.camp
       render()
       window.scrollTo(0, 0)
       break
@@ -1348,10 +1520,13 @@ document.addEventListener('click', async (ev) => {
       await mutate(() => api(`/items/${el.dataset.id}`, { method: 'PATCH', body: { kind: el.dataset.kind } }))
       break
 
-    case 'pick-kind': {
+    // A segmented control inside a form is a hidden field with buttons on it.
+    // Poked in place rather than re-rendered, because a re-render would take
+    // whatever you had already typed into the boxes above it.
+    case 'pick': {
       const box = el.closest('.segmented')
       for (const b of box.querySelectorAll('.segmented__btn')) b.setAttribute('aria-pressed', b === el)
-      box.parentElement.querySelector('input[name="kind"]').value = el.dataset.kind
+      box.parentElement.querySelector(`input[name="${el.dataset.name}"]`).value = el.dataset.value
       break
     }
 
@@ -1389,17 +1564,27 @@ document.addEventListener('click', async (ev) => {
 
     // Both open into whichever section you are looking at.
     case 'add':
-      S.sheet = { kind: 'add', list: TABS.find((t) => t.id === S.tab).list, section: activeSection() }
+      S.sheet = { kind: 'add', tab: S.tab, list: currentTab().lists[0], section: activeSection() }
       renderSheet()
       break
 
-    case 'suggest':
-      S.sheet = { kind: 'suggest', list: TABS.find((t) => t.id === S.tab).list, section: activeSection(), picked: new Set() }
+    // The pool is worked out once, when the sheet opens, and kept: a list that
+    // reshuffles under a finger mid-tap is how you add the wrong thing. Each
+    // entry carries the list it came from, because Eat holds two of them.
+    case 'suggest': {
+      const tab = currentTab()
+      const section = activeSection()
+      const have = new Set(itemsOn(tab).map((i) => i.title.toLowerCase()))
+      const pool = tab.lists.flatMap((l) => (S.catalog?.[l] ?? [])
+        .filter((c) => !have.has(c.title.toLowerCase()) && !!c.own === (section === 'own'))
+        .map((c) => ({ ...c, list: l, key: `${l}::${c.title}` })))
+      S.sheet = { kind: 'suggest', tab: tab.id, section, pool, picked: new Set() }
       renderSheet()
       break
+    }
 
     case 'toggle-pick': {
-      const t = el.dataset.title
+      const t = el.dataset.pick
       S.sheet.picked.has(t) ? S.sheet.picked.delete(t) : S.sheet.picked.add(t)
       el.setAttribute('aria-pressed', S.sheet.picked.has(t))
       const foot = sheetRoot.querySelector('[data-act="add-picked"]')
@@ -1410,13 +1595,13 @@ document.addEventListener('click', async (ev) => {
     }
 
     case 'add-picked': {
-      const { list, picked } = S.sheet
-      const wanted = (S.catalog[list] ?? []).filter((c) => picked.has(c.title))
+      const { pool, picked } = S.sheet
+      const wanted = pool.filter((c) => picked.has(c.key))
       S.sheet = null
       renderSheet()
       await mutate(() => api(`/trips/${S.trip.id}/items`, {
         method: 'POST',
-        body: { items: wanted.map((c) => ({ list, category: c.cat, title: c.title, note: c.note ?? '', kind: c.own ? 'own' : 'shared' })) },
+        body: { items: wanted.map((c) => ({ list: c.list, category: c.cat, title: c.title, note: c.note ?? '', kind: c.own ? 'own' : 'shared' })) },
       }))
       toast(`Added ${wanted.length} ${wanted.length === 1 ? 'thing' : 'things'}.`)
       break
@@ -1494,13 +1679,12 @@ document.addEventListener('submit', async (ev) => {
     }
 
     case 'add-item': {
-      const list = form.dataset.list
       S.sheet = null
       renderSheet()
       await mutate(() => api(`/trips/${S.trip.id}/items`, {
         method: 'POST',
         body: {
-          list, title: f.title, category: f.category || 'Other', qty: f.qty, note: f.note, kind: f.kind,
+          list: f.list, title: f.title, category: f.category || 'Other', qty: f.qty, note: f.note, kind: f.kind,
           place: f.place, lat: f.lat, lon: f.lon,
         },
       }))
