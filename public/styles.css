@@ -95,6 +95,9 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 .btn--blaze:hover { background: #C3461A; box-shadow: none; }
 
 .btn--ghost { background: none; box-shadow: inset 0 0 0 1.5px var(--line); }
+/* Taking a thing off the list: available, never inviting. */
+.btn--quiet { background: none; color: var(--ink-soft); box-shadow: inset 0 0 0 1.5px var(--line); }
+.btn--quiet:hover { color: var(--blaze); background: var(--blaze-soft); box-shadow: inset 0 0 0 1.5px rgba(219, 83, 34, .3); }
 .btn--sm { min-height: 36px; padding: 0 12px; font-size: 14px; }
 .btn--wide { width: 100%; }
 
@@ -393,9 +396,6 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 /* Plans that nobody has voted for are not a problem, so they are not orange. */
 .coverage__seg--quiet { background: rgba(234, 240, 230, .17); }
 
-/* The hatch that means "nobody", reused as a swatch in the assign sheet. */
-.legend__dot--gap { background: repeating-linear-gradient(-45deg, var(--blaze) 0 3px, #A83C15 3px 6px); }
-
 /* ==========================================================================
    Page content
    ========================================================================== */
@@ -473,14 +473,73 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 .item--packed .item__title { color: var(--ink-faint); text-decoration: line-through; }
 
 .item__main { flex: 1; min-width: 0; }
-.item__title { font-size: 15.5px; font-weight: 500; overflow-wrap: anywhere; }
+
+/* The middle of the row is one target: the thing itself, opening everything the
+   item can be asked. Laid out as a block so the tick beside it lines up with the
+   title rather than with the middle of two lines of note. */
+.item__open {
+  display: block; width: 100%; padding: 1px 0; text-align: left; color: inherit;
+}
+.item__title { display: block; font-size: 15.5px; font-weight: 500; overflow-wrap: anywhere; }
 .item__qty { font-family: var(--mono); font-size: 12.5px; color: var(--ink-soft); margin-left: 7px; }
 .item__note {
-  margin: 3px 0 0; font-size: 13px; line-height: 1.45;
+  display: block; margin: 3px 0 0; font-size: 13px; line-height: 1.45;
   color: var(--ink-soft); max-width: 56ch;
 }
+.item__open:hover .item__title { color: var(--forest-deep); }
 .item__row { display: flex; align-items: center; gap: 7px; margin-top: 8px; flex-wrap: wrap; }
+.item__votes { font-family: var(--mono); font-size: 11.5px; color: var(--ink-faint); letter-spacing: .03em; }
 
+/* ---- the tick: your half of the row ------------------------------------- */
+
+/* Where a list keeps its checkbox, doing the two things you do most in the order
+   you do them. An empty ring in blaze is a thing nobody has picked up; tapping
+   it puts your name on it. Your colour means you are bringing it; filled means
+   your share is in the car. Everyone else's ticks are the faces on the right —
+   this one is only ever about you. */
+.tick {
+  flex: none; width: 26px; height: 26px; margin-top: 1px; border-radius: 50%;
+  display: grid; place-items: center;
+  box-shadow: inset 0 0 0 2px var(--line-strong);
+  color: var(--ink-faint);
+  transition: box-shadow .12s ease, background .12s ease, color .12s ease;
+}
+.tick svg { width: 15px; height: 15px; }
+.tick:hover { box-shadow: inset 0 0 0 2px var(--ink-faint); }
+/* Blaze means one thing everywhere in this app: nobody has this. */
+.tick--open { box-shadow: inset 0 0 0 2px var(--blaze); color: var(--blaze); background: var(--blaze-soft); }
+.tick--open:hover { box-shadow: inset 0 0 0 2px var(--blaze); background: #F8DDD0; }
+.tick--mine { box-shadow: inset 0 0 0 2px var(--mine, var(--forest)); }
+.tick--mine:hover { box-shadow: inset 0 0 0 2.5px var(--mine, var(--forest)); }
+.tick--done { background: var(--mine, var(--forest)); box-shadow: none; }
+.tick--done:hover { box-shadow: none; filter: brightness(1.08); }
+
+/* ---- who has it --------------------------------------------------------- */
+
+/* Faces rather than a sentence. Filled means that person's share is packed,
+   outlined means they have put their name down — the same promise the tick on
+   the left of the row makes, so the row reads the same way in both directions. */
+.who {
+  flex: none; display: inline-flex; align-items: center; gap: 7px;
+  min-height: 34px; padding: 0 6px; border-radius: 999px;
+  transition: background .12s ease;
+}
+.who:hover { background: var(--paper-sunk); }
+/* Overlapped, so six people cost about as much room as three. */
+.who__faces { display: inline-flex; align-items: center; }
+.who__face + .who__face { margin-left: -8px; }
+.who__face {
+  width: 24px; height: 24px; border-radius: 50%;
+  display: grid; place-items: center;
+  font-family: var(--mono); font-size: 9.5px; font-weight: 700; letter-spacing: -.02em;
+  color: var(--who); background: var(--paper);
+  box-shadow: inset 0 0 0 2px var(--who), 0 0 0 2px var(--paper);
+}
+.who__face--packed { color: #F4F8F0; background: var(--who); }
+.who__more { font-family: var(--mono); font-size: 10.5px; font-weight: 600; color: var(--ink-faint); }
+
+/* The one × in the app, on the people list: taking somebody off the trip. Items
+   are removed from the sheet behind the row, where there is room to be sure. */
 .item__kill {
   flex: none; width: 30px; height: 30px; border-radius: 7px;
   display: grid; place-items: center; color: var(--ink-faint);
@@ -549,8 +608,10 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 .listfoot__ask:hover { background: #F8DDD0; }
 .listfoot__ask svg { flex: none; margin-left: -2px; }
 
-/* ---- assignment chip: the core interaction ------------------------------ */
+/* ---- chips that are information, not a job ------------------------------ */
 
+/* Who is bringing what left the row for the faces beside it; what is left here
+   is the quiet end of the family — a place, a count, a thing you read. */
 .chip {
   display: inline-flex; align-items: center; gap: 6px;
   min-height: 30px; padding: 0 11px; border-radius: 999px;
@@ -558,49 +619,6 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
   transition: filter .12s ease, background .12s ease;
 }
 .chip:hover { filter: brightness(1.08); }
-.chip--taken { color: #fff; }
-.chip--taken .chip__dot { background: rgba(255, 255, 255, .75); }
-.chip__dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
-
-.chip--open {
-  color: var(--blaze); background: var(--blaze-soft);
-  box-shadow: inset 0 0 0 1.5px rgba(219, 83, 34, .3);
-}
-.chip--open:hover { background: #F8DDD0; }
-
-.chip--vote {
-  color: var(--ink-soft); background: var(--paper-sunk);
-  box-shadow: inset 0 0 0 1.5px var(--line);
-}
-.chip--vote[aria-pressed="true"] {
-  color: #fff; background: var(--forest); box-shadow: none;
-}
-
-/* Your own claims get a ring, so you can scan for them without reading names. */
-.chip--mine { box-shadow: 0 0 0 2px var(--canvas), 0 0 0 3.5px var(--ink); }
-
-/* ---- step two: is it actually packed ------------------------------------ */
-/* Never a bare checkbox. A tick with no words next to it does not say what it
-   means, and the claim chip right beside it made that worse. */
-
-.stage {
-  display: inline-flex; align-items: center; gap: 8px;
-  min-height: 30px; padding: 0 11px 0 8px; border-radius: 999px;
-  font-size: 13px; font-weight: 600; white-space: nowrap;
-  color: var(--ink-soft); background: var(--paper-sunk);
-  box-shadow: inset 0 0 0 1.5px var(--line-strong);
-  transition: box-shadow .12s ease, background .12s ease, color .12s ease;
-}
-.stage:hover { box-shadow: inset 0 0 0 1.5px var(--forest); }
-.stage__box {
-  flex: none; width: 18px; height: 18px; border-radius: 5px;
-  background: var(--paper); box-shadow: inset 0 0 0 1.5px var(--line-strong);
-  display: grid; place-items: center; transition: background .12s ease, box-shadow .12s ease;
-}
-.stage__box svg { width: 11px; height: 11px; opacity: 0; transition: opacity .1s ease; }
-.stage--done { color: var(--forest-deep); background: #E4EEE5; box-shadow: inset 0 0 0 1.5px #A9C7B2; }
-.stage--done .stage__box { background: var(--forest); box-shadow: none; }
-.stage--done .stage__box svg { opacity: 1; }
 
 .tag {
   display: inline-flex; align-items: center; min-height: 26px; padding: 0 9px;

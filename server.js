@@ -260,10 +260,17 @@ app.post('/api/trips/summary', (req, res) => {
   // page counts the same thing the coverage bar does: shared things, and gaps.
   const SHARED = `trip_id = ? AND kind = 'shared' AND list != 'activities'`
   const sharedCount = db.prepare(`SELECT COUNT(*) AS c FROM items WHERE ${SHARED}`)
-  const openCount = db.prepare(`SELECT COUNT(*) AS c FROM items WHERE ${SHARED} AND assignee_id IS NULL`)
+  const openCount = db.prepare(`SELECT COUNT(*) AS c FROM items WHERE ${SHARED}
+                                AND NOT EXISTS (SELECT 1 FROM claims c WHERE c.item_id = items.id)`)
+  // A thing with three people on it is still one thing, so it is one unit of the
+  // bar split three ways. Counting it once per person would let a crowded item
+  // swell the coloured half and quietly shrink the gap nobody has filled.
   const claims = db.prepare(`
-    SELECT m.hue AS hue, COUNT(*) AS n FROM items i
-    JOIN members m ON m.id = i.assignee_id
+    SELECT m.hue AS hue,
+           SUM(1.0 / (SELECT COUNT(*) FROM claims x WHERE x.item_id = c.item_id)) AS n
+    FROM claims c
+    JOIN items i ON i.id = c.item_id
+    JOIN members m ON m.id = c.member_id
     WHERE i.trip_id = ? AND i.kind = 'shared' AND i.list != 'activities'
     GROUP BY m.hue ORDER BY n DESC`)
 
@@ -371,8 +378,8 @@ app.delete('/api/trips/:id/members/:mid', (req, res) => {
   if (!trip) return
   const m = db.prepare('SELECT * FROM members WHERE id = ? AND trip_id = ?').get(req.params.mid, trip.id)
   if (m) {
-    // Their claims go back to nobody, so nothing may still read as packed.
-    db.prepare('UPDATE items SET packed = 0 WHERE assignee_id = ?').run(m.id)
+    // What they had put their name to goes back to nobody — claims cascade with
+    // the member, and each carried that person's own packed tick with it.
     db.prepare('DELETE FROM members WHERE id = ?').run(m.id)
     logEvent(trip.id, actorName(trip.id, req), `removed ${m.name} from the trip`)
     bumpRev(trip.id)
@@ -388,8 +395,8 @@ app.post('/api/trips/:id/items', (req, res) => {
 
   const incoming = Array.isArray(req.body?.items) ? req.body.items : [req.body]
   const ts = now()
-  const insert = db.prepare(`INSERT INTO items (id, trip_id, list, category, title, note, qty, kind, assignee_id, owner_id, place, lat, lon, position, created_at, updated_at)
-                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+  const insert = db.prepare(`INSERT INTO items (id, trip_id, list, category, title, note, qty, kind, owner_id, place, lat, lon, position, created_at, updated_at)
+                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
   const added = []
 
   // Personal kit needs somebody to belong to, so it can only be added by a
@@ -408,7 +415,6 @@ app.post('/api/trips/:id/items', (req, res) => {
     const [lat, lon] = coords(raw)
     insert.run(
       id, trip.id, list, clean(raw?.category, 60), title, clean(raw?.note, 500), clean(raw?.qty, 40), kind,
-      kind === 'own' ? null : clean(raw?.assignee_id, 64) || null,
       kind === 'own' ? me : null, clean(raw?.place, PLACE_MAX), lat, lon,
       nextPosition(trip.id, list), ts, ts,
     )
@@ -456,25 +462,19 @@ app.patch('/api/items/:id', (req, res) => {
   }
 
   // Switching between shared and own resets the other model's state, so it is
-  // handled on its own rather than alongside an assignment or a packed tick.
+  // handled on its own rather than alongside who is bringing it.
   const newKind = req.body?.kind !== undefined ? kindOf(clean(req.body.kind, 10), item.list) : null
   if (newKind === 'own' && !me) {
     return res.status(400).json({ error: 'Join the trip before taking something onto your own list.' })
   }
   if (newKind) {
     push('kind', newKind)
-    push('assignee_id', null)
-    push('packed', 0)
     // Moving a thing onto your own list takes it off everybody else's view of
-    // the trip; moving it back to the group hands it to everyone again.
+    // the trip; moving it back to the group hands it to everyone again. Either
+    // way the names on it stop meaning what they meant.
     push('owner_id', newKind === 'own' ? me : null)
+    db.prepare('DELETE FROM claims WHERE item_id = ?').run(item.id)
     if (newKind === 'shared') db.prepare('DELETE FROM own_checks WHERE item_id = ?').run(item.id)
-  } else {
-    if (req.body?.packed !== undefined) push('packed', req.body.packed ? 1 : 0)
-    if (req.body?.assignee_id !== undefined) {
-      const a = clean(req.body.assignee_id, 64)
-      push('assignee_id', a && db.prepare('SELECT 1 FROM members WHERE id = ? AND trip_id = ?').get(a, item.trip_id) ? a : null)
-    }
   }
 
   db.prepare(`UPDATE items SET ${sets.join(', ')} WHERE id = ?`).run(...vals, item.id)
@@ -489,11 +489,6 @@ app.patch('/api/items/:id', (req, res) => {
       : `made ${item.title} a group item`)
   } else if (isPrivate(item)) {
     // Nothing: edits to your own kit are yours.
-  } else if (req.body?.assignee_id !== undefined) {
-    const a = clean(req.body.assignee_id, 64)
-    logEvent(item.trip_id, who, a ? `is bringing ${item.title}` : `dropped ${item.title}`)
-  } else if (req.body?.packed !== undefined) {
-    logEvent(item.trip_id, who, `${req.body.packed ? 'packed' : 'unpacked'} ${item.title}`)
   } else if (placed) {
     // Worth a line: half the point of saying where the sunset spot is, is that
     // the others find out there is one.
@@ -514,6 +509,62 @@ app.delete('/api/items/:id', (req, res) => {
   db.prepare('DELETE FROM items WHERE id = ?').run(item.id)
   // Crossing something off your own list is not an announcement.
   if (!isPrivate(item)) logEvent(item.trip_id, actorName(item.trip_id, req), `removed ${item.title}`)
+  bumpRev(item.trip_id)
+  res.json(getTripState(item.trip_id, viewerId(req)))
+})
+
+// Who is bringing a group thing. Anyone on the trip can put a name down or take
+// one off, including their own — the list belongs to everybody, and the person
+// who notices that Sam has left is rarely Sam.
+function claimant(req, res) {
+  const item = db.prepare('SELECT * FROM items WHERE id = ?').get(req.params.id)
+  if (!item) { res.status(404).json({ error: 'That item is already gone.' }); return null }
+  if (item.kind === 'own') {
+    res.status(400).json({ error: 'Personal kit is already yours — nobody else brings it.' })
+    return null
+  }
+  const memberId = clean(req.body?.memberId, 64)
+  const member = db.prepare('SELECT * FROM members WHERE id = ? AND trip_id = ?').get(memberId, item.trip_id)
+  if (!member) { res.status(400).json({ error: 'Join the trip before putting your name down.' }); return null }
+  return { item, member }
+}
+
+app.post('/api/items/:id/claim', (req, res) => {
+  const found = claimant(req, res)
+  if (!found) return
+  const { item, member } = found
+
+  const has = db.prepare('SELECT 1 FROM claims WHERE item_id = ? AND member_id = ?').get(item.id, member.id)
+  if (has) db.prepare('DELETE FROM claims WHERE item_id = ? AND member_id = ?').run(item.id, member.id)
+  else db.prepare('INSERT INTO claims (item_id, member_id) VALUES (?, ?)').run(item.id, member.id)
+
+  // Named, because a claim taken off by somebody else is the one change on this
+  // list you would want to know was not you.
+  const who = actorName(item.trip_id, req)
+  const self = member.name === who
+  logEvent(item.trip_id, who,
+    has ? `dropped ${item.title}${self ? '' : ` for ${member.name}`}`
+      : self ? `is bringing ${item.title}` : `put ${member.name} down for ${item.title}`)
+
+  bumpRev(item.trip_id)
+  res.json(getTripState(item.trip_id, viewerId(req)))
+})
+
+// Your half of a group thing being in the car. Each person who is bringing some
+// of it ticks their own, so "packed" is a thing several people can each be half
+// of — and putting a tick against it means you are bringing it, if you were not
+// already on the list.
+app.post('/api/items/:id/packed', (req, res) => {
+  const found = claimant(req, res)
+  if (!found) return
+  const { item, member } = found
+  const packed = req.body?.packed ? 1 : 0
+
+  db.prepare(`INSERT INTO claims (item_id, member_id, packed) VALUES (?, ?, ?)
+              ON CONFLICT(item_id, member_id) DO UPDATE SET packed = excluded.packed`)
+    .run(item.id, member.id, packed)
+
+  logEvent(item.trip_id, actorName(item.trip_id, req), `${packed ? 'packed' : 'unpacked'} ${item.title}`)
   bumpRev(item.trip_id)
   res.json(getTripState(item.trip_id, viewerId(req)))
 })

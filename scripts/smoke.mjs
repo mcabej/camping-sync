@@ -30,9 +30,11 @@ new Function(`${src}\n;Object.assign(globalThis, {${hooks.map((h) => `__${h}: ${
 const { __S: S, __render: render, __viewTrip: viewTrip, __renderSheet: renderSheet, __TABS: TABS } = globalThis
 const { CATALOG } = await import('../lib/catalog.js')
 
-// A trip with a bit of everything: claimed, unclaimed, packed, personal, plans.
+// A trip with a bit of everything: claimed by one, claimed by three, unclaimed,
+// half packed, personal, plans.
+const claim = (id, packed = false) => ({ member_id: id, packed })
 const item = (o) => ({ id: o.t, list: 'gear', category: 'Shelter', title: o.t, note: '', qty: '',
-  kind: 'shared', assignee_id: null, packed: false, place: '', lat: null, lon: null, votes: [], own: [], ...o })
+  kind: 'shared', claims: [], place: '', lat: null, lon: null, votes: [], own: [], ...o })
 
 S.catalog = CATALOG
 S.tips = [{ title: 'a', body: 'b' }]
@@ -40,20 +42,24 @@ S.me = 'm1'
 S.view = 'trip'
 S.trip = { id: 't1', name: 'Wasdale Weekend', location: 'Wasdale Head, CA20 1EX', lat: 54, lon: -3,
   map_url: '', start_date: '2026-09-04', end_date: '2026-09-06', notes: 'Gate code 1470', rev: 1 }
-S.members = [{ id: 'm1', name: 'Josh', hue: 0 }, { id: 'm2', name: 'Sam', hue: 1 }]
+S.members = [{ id: 'm1', name: 'Josh', hue: 0 }, { id: 'm2', name: 'Sam', hue: 1 },
+  { id: 'm3', name: 'Ali Khan', hue: 2 }, { id: 'm4', name: 'Robin', hue: 3 }]
 S.events = [{ actor: 'Sam', text: 'added Tent', created_at: new Date().toISOString() }]
 S.items = [
-  item({ t: 'Tent', assignee_id: 'm1' }),
-  item({ t: 'Camp stove', assignee_id: 'm1', packed: true, category: 'Camp kitchen' }),
-  item({ t: 'Cooler', assignee_id: 'm2', category: 'Camp kitchen' }),
+  item({ t: 'Tent', claims: [claim('m1')] }),
+  item({ t: 'Camp stove', claims: [claim('m1', true)], category: 'Camp kitchen' }),
+  item({ t: 'Cooler', claims: [claim('m2')], category: 'Camp kitchen' }),
   item({ t: 'Firewood' }),
   item({ t: 'Sleeping bag', kind: 'own', category: 'Shelter', own: ['m1'] }),
   item({ t: 'Headlamp', kind: 'own', category: 'Light & power', own: [] }),
-  item({ t: 'Burgers', list: 'food', category: 'Dinner', assignee_id: 'm1' }),
+  item({ t: 'Burgers', list: 'food', category: 'Dinner', claims: [claim('m1')] }),
   item({ t: 'Crisps', list: 'food', category: 'Snacks' }),
-  item({ t: 'Beer', list: 'drinks', category: 'Drinks', assignee_id: 'm1' }),
+  // The whole point of the rework: three people splitting one line on the list,
+  // each with their own tick, and a fourth name that no longer has a face.
+  item({ t: 'Beer', list: 'drinks', category: 'Drinks',
+    claims: [claim('m1', true), claim('m2'), claim('m3'), claim('gone')] }),
   item({ t: 'Drinking water', list: 'drinks', category: 'Drinks' }),
-  item({ t: 'Hike', list: 'activities', category: 'Daytime', votes: ['m1'] }),
+  item({ t: 'Hike', list: 'activities', category: 'Daytime', votes: ['m1'], claims: [claim('m2')] }),
 ]
 
 const find = (html, needle) => html.includes(needle)
@@ -86,6 +92,29 @@ check('the header switch is gone', !find(both, 'class="switch"'))
 check('the filters carry both kinds', find(both, 'data-act="filter-kind" data-value="own"'))
 check('the filters carry categories', find(both, 'data-act="filter-cat" data-value="Camp kitchen"'))
 check('open count rides the group chip', find(both, '<span class="filters__n">1</span>'))
+
+// The row: your tick on the left, the thing in the middle, who has it on the right.
+check('no sentences left on the row',
+  !find(both, 'is bringing it') && !find(both, "Nobody&#39;s bringing this") && !find(both, 'Not packed yet<'))
+check('unclaimed rows wear the blaze ring', find(both, 'class="tick tick--open" data-act="tick" data-id="Firewood"'))
+check('what you are bringing wears your colour', find(both, 'class="tick tick--mine" data-act="tick" data-id="Tent"'))
+check('what you have packed is filled in', find(both, 'class="tick tick--done" data-act="tick" data-id="Camp stove"'))
+check('somebody else\'s claim leaves your tick plain', find(both, 'class="tick" data-act="tick" data-id="Cooler"'))
+check('the middle of the row opens the item', find(both, 'class="item__open" data-act="open-item" data-id="Tent"'))
+check('there is no × on the row any more', !find(both, 'data-act="kill" data-id="Tent"'))
+check('personal kit has no faces beside it', !find(both, 'data-act="open-item" data-id="Sleeping bag">\n      <span class="who__face"'))
+
+S.tab = 'eat'
+const eatRows = viewTrip()
+check('three people on one thing show three faces',
+  (eatRows.match(/who__face/g) ?? []).length >= 3 && find(eatRows, '>JO<') && find(eatRows, '>AK<'))
+check('a claimant who has left the trip is not a face', !find(eatRows, '>?<'))
+check('a packed share is a filled face', find(eatRows, 'who__face who__face--packed'))
+// Burgers and Beer have names on them; Crisps and Drinking water do not, and
+// carry nothing on the right at all.
+check('nothing at all beside a thing nobody has', (eatRows.match(/class="who"/g) ?? []).length === 2)
+check('no + beside the faces', !find(eatRows, 'who__add') && !find(eatRows, 'who__none'))
+S.tab = 'pack'
 
 S.filter = { kind: 'own', cat: '' }
 const own = viewTrip()
@@ -147,7 +176,9 @@ S.tab = 'pack'
 const pack = viewTrip()
 check('Pack tab badge suppressed while on Pack', !find(pack, '<span class="tabbar__flag">1<'))
 check('Eat tab badge shows 2', find(pack, '<span class="tabbar__flag">2<'))
-check('Mine badge shows on other tabs, in your colour', find(pack, 'tabbar__flag" style="background:#2F6B57">4<'))
+// Yours and unpacked: Tent, Burgers, Headlamp. The stove and the beer are your
+// share of them already in the car; the sleeping bag is ticked.
+check('Mine badge shows on other tabs, in your colour', find(pack, 'tabbar__flag" style="background:#2F6B57">3<'))
 check('list badges stay blaze (no inline colour)', find(pack, '<span class="tabbar__flag">2<'))
 
 // Camp is reachable from the header and lights up when you are on it.
@@ -177,8 +208,18 @@ const sug = roots['sheet-root'].innerHTML
 check('suggest pools both lists', find(sug, 'Hot dogs') && find(sug, 'Wine'))
 check('suggest picks are list-keyed', find(sug, 'data-pick="drinks::Wine" aria-pressed="true"'))
 
-S.sheet = { kind: 'assign', id: 'Tent' }; renderSheet()
-check('assign sheet renders', find(roots['sheet-root'].innerHTML, 'Who&#39;s bringing Tent?'))
+S.sheet = { kind: 'item', id: 'Beer' }; renderSheet()
+const itemSheet = roots['sheet-root'].innerHTML
+check('item sheet renders', find(itemSheet, 'Who&#39;s bringing Beer?'))
+const pressedFor = (html, id) => new RegExp(`data-member="${id}"\\s+aria-pressed="true"`).test(html)
+check('item sheet ticks everyone who is on it', pressedFor(itemSheet, 'm1') && pressedFor(itemSheet, 'm3'))
+check('item sheet leaves the rest unticked', !pressedFor(itemSheet, 'm4'))
+check('item sheet says who has packed theirs', find(itemSheet, 'Packed theirs.') && find(itemSheet, 'Not packed yet.'))
+check('item sheet drops "I\'ll bring it" once you are on it', !find(itemSheet, "I'll bring it"))
+check('item sheet carries the way to remove it', find(itemSheet, 'data-act="kill" data-id="Beer"'))
+S.sheet = { kind: 'item', id: 'Crisps' }; renderSheet()
+check('item sheet offers to take it on when you are not on it',
+  find(roots['sheet-root'].innerHTML, "I'll bring it"))
 S.sheet = { kind: 'place', id: 'Hike' }; renderSheet()
 check('place sheet renders', find(roots['sheet-root'].innerHTML, 'Where is Hike?'))
 

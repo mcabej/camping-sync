@@ -156,6 +156,19 @@ const isOwn = (it) => it.kind === 'own'
 const isMine = (it) => !!S.me && it.own.includes(S.me)
 const isPlan = (it) => it.list === 'activities'
 
+// Who is bringing a group thing. More than one person can, because a group of
+// ten does not send one person for all the pillows — so this is a set, and each
+// person in it has their own tick for their own share being in the car.
+const claimsOn = (it) => it.claims ?? []
+const myClaim = (it) => (S.me ? claimsOn(it).find((c) => c.member_id === S.me) : null) ?? null
+const isClaimed = (it) => claimsOn(it).length > 0
+
+// The same list with the people filled in, and anyone who has left the trip
+// dropped: a name nobody can put a face to is not an answer to "who has this".
+const crew = (it) => claimsOn(it)
+  .map((c) => ({ ...c, member: memberById(c.member_id) }))
+  .filter((c) => c.member)
+
 // Everything under one tab, its lists in the order the tab names them — food
 // before drink, so the page reads the way the shop does. Positions restart per
 // list, so this is the only ordering that means anything across two of them.
@@ -199,6 +212,10 @@ const activeSection = () => (activeFilter().kind === 'own' ? 'own' : 'shared')
 
 // Each section answers a different question, so each gets its own tally.
 // Plans are not "brought" by anyone, so they are counted by interest instead.
+//
+// A thing with three names on it is still one thing, so it is one unit of the
+// bar split three ways. Counting it once per person would let a crowded item
+// swell the coloured half and quietly shrink the gap nobody has filled.
 function statsFor(items) {
   const perMember = new Map()
   let shared = 0, open = 0, own = 0, mine = 0, ideas = 0, wanted = 0
@@ -212,9 +229,12 @@ function statsFor(items) {
       if (isMine(it)) mine++
     } else {
       shared++
-      if (it.assignee_id && memberById(it.assignee_id)) {
-        perMember.set(it.assignee_id, (perMember.get(it.assignee_id) ?? 0) + 1)
-      } else open++
+      const on = crew(it)
+      if (!on.length) { open++; continue }
+      for (const c of on) {
+        const had = perMember.get(c.member_id) ?? { share: 0, n: 0 }
+        perMember.set(c.member_id, { share: had.share + 1 / on.length, n: had.n + 1 })
+      }
     }
   }
   return { shared, open, claimed: shared - open, perMember, own, mine, ideas, wanted }
@@ -225,12 +245,16 @@ function statsFor(items) {
 // server never sends anyone else's. Plans are not carried, so they stay out.
 function myLoad() {
   if (!S.me) return []
-  return S.items.filter((it) => !isPlan(it) && (isOwn(it) || it.assignee_id === S.me))
+  return S.items.filter((it) => !isPlan(it) && (isOwn(it) || myClaim(it)))
 }
 
-// The two halves tick differently — a group item is packed for everyone, your
-// own kit only for you — so "is this done" is one question with two answers.
-const packedForMe = (it) => (isOwn(it) ? isMine(it) : it.packed)
+// Everyone ticks their own share, so "is this packed" is a question with as many
+// answers as there are names on it. This is yours.
+const packedForMe = (it) => (isOwn(it) ? isMine(it) : !!myClaim(it)?.packed)
+
+// And this is the item's: done when everybody who put their name down has their
+// share in the car. Half of the bacon in the boot is not the bacon sorted.
+const allPacked = (it) => (isOwn(it) ? isMine(it) : isClaimed(it) && claimsOn(it).every((c) => c.packed))
 
 function groupByCategory(items) {
   const groups = new Map()
@@ -323,7 +347,7 @@ function barParts(tab, section) {
   if (!c.shared) return { empty: 'nothing here yet', say: 'Nothing on this list.', aria: 'nothing here yet' }
 
   const segs = [...c.perMember.entries()]
-    .map(([id, n]) => `<div class="coverage__seg" style="flex:${n};background:${colorOf(memberById(id))}"
+    .map(([id, { share, n }]) => `<div class="coverage__seg" style="flex:${share};background:${colorOf(memberById(id))}"
            title="${esc(memberById(id).name)}: ${n}"></div>`).join('')
 
   return {
@@ -407,30 +431,66 @@ const noMatch = (f) => `
     <button class="btn" data-act="filter-cat" data-value="${esc(f.cat)}">Show the whole list</button>
   </div>`
 
-function assignChip(item) {
-  const m = memberById(item.assignee_id)
-  if (m) {
-    const mine = m.id === S.me ? ' chip--mine' : ''
-    return `<button class="chip chip--taken${mine}" style="background:${colorOf(m)}" data-act="assign" data-id="${item.id}">
-              <span class="chip__dot"></span>${esc(m.name)} is bringing it</button>`
-  }
-  return `<button class="chip chip--open" data-act="assign" data-id="${item.id}">Nobody's bringing this</button>`
+// A person, in the space a face takes. Two letters at most: on a row this is
+// scenery until you look for yourself in it, and then it has to answer at once.
+function initials(name) {
+  const words = String(name ?? '').trim().split(/\s+/).filter(Boolean)
+  if (!words.length) return '?'
+  const letters = words.length > 1 ? words[0][0] + words[words.length - 1][0] : words[0].slice(0, 2)
+  return letters.toUpperCase()
 }
 
-// Step two, and only ever step two: you cannot pack a thing nobody is bringing,
-// so this appears once the item has an owner. Always labelled, never a bare box.
-function packToggle(item) {
-  return `
-    <button class="stage${item.packed ? ' stage--done' : ''}" data-act="pack" data-id="${item.id}" aria-pressed="${item.packed}">
-      <span class="stage__box">${ICONS.tick}</span>${item.packed ? 'Packed' : 'Not packed yet'}</button>`
-}
-
-function ownToggle(item) {
-  const mine = !!S.me && item.own.includes(S.me)
+// The one control you touch most, at the left of the row where a list keeps its
+// checkbox. Three states in the order you meet them: nobody has this yet (blaze
+// ring, tap to put your name down), you are bringing it (your colour, tap when
+// it is in the car), packed (filled). It is only ever about you — everybody
+// else's ticks are the faces on the other side of the row.
+function tickBox(item) {
+  const own = isOwn(item)
+  const claim = own ? null : myClaim(item)
+  const on = own || !!claim
+  const done = packedForMe(item)
   const me = meMember()
+
+  const label = own
+    ? (done ? `Yours is packed — untick ${item.title}` : `Tick ${item.title} when yours is packed`)
+    : !on ? `Put my name to ${item.title}`
+    : done ? `Your share of ${item.title} is packed — untick it`
+    : `Tick ${item.title} when your share is packed`
+
+  const cls = done ? ' tick--done' : on ? ' tick--mine' : isClaimed(item) ? '' : ' tick--open'
   return `
-    <button class="stage${mine ? ' stage--done' : ''}" data-act="own" data-id="${item.id}" aria-pressed="${mine}">
-      <span class="stage__box"${mine && me ? ` style="background:${colorOf(me)}"` : ''}>${ICONS.tick}</span>${mine ? "Mine's packed" : "I've not packed mine"}</button>`
+    <button class="tick${cls}" data-act="tick" data-id="${item.id}" aria-pressed="${done}"
+            ${me ? `style="--mine:${colorOf(me)}"` : ''} aria-label="${esc(label)}">
+      ${done ? ICONS.tick : on ? '' : ICONS.plus}</button>`
+}
+
+// Who is bringing it. Three faces and a count say what "Josh, Sam and Ali are
+// bringing it" says, in a quarter of the row and without changing shape when a
+// fourth person joins in. A filled face has their share packed; an outlined one
+// has put their name down and not packed it yet — the same promise the tick on
+// the left of the row makes.
+//
+// Nothing at all when nobody has it: the blaze ring on the left already says so,
+// and a row with no faces on it is the plainest way of saying nobody is there.
+// The way in is the row itself, which opens the same sheet the faces do.
+const FACES = 3
+
+function whoBtn(item) {
+  const on = crew(item)
+  if (!on.length) return ''
+  const shown = on.slice(0, FACES)
+  const rest = on.length - shown.length
+  const verb = isPlan(item) ? 'organising' : 'bringing'
+
+  return `
+    <button class="who" data-act="open-item" data-id="${item.id}"
+            aria-label="${esc(`${on.map((c) => c.member.name).join(', ')} ${on.length === 1 ? 'is' : 'are'} ${verb} ${item.title} — change who`)}">
+      <span class="who__faces">${shown.map((c) => `
+        <span class="who__face${c.packed ? ' who__face--packed' : ''}"
+              style="--who:${colorOf(c.member)}">${esc(initials(c.member.name))}</span>`).join('')}</span>
+      ${rest ? `<span class="who__more">+${rest}</span>` : ''}
+    </button>`
 }
 
 // "The sunset spot" means nothing to whoever has not been there. A plan can say
@@ -443,48 +503,48 @@ function placeChip(item) {
             ${ICONS.pin}<span class="chip__where">${esc(place)}</span></button>`
 }
 
-// Nobody "brings" a hike, so a plan never shows the orange chip. An organiser is
-// optional and only for the plans that need booking or kit.
-function organiserChip(item) {
-  const m = memberById(item.assignee_id)
-  if (!m) return `<button class="tag" data-act="assign" data-id="${item.id}">Add an organiser</button>`
-  const mine = m.id === S.me ? ' chip--mine' : ''
-  return `<button class="chip chip--taken${mine}" style="background:${colorOf(m)}" data-act="assign" data-id="${item.id}">
-            <span class="chip__dot"></span>${esc(m.name)} is organising</button>`
-}
-
 // `mixed` is whether group things and personal kit are sharing the page. When
 // they are, an own row says so: it is the difference between a tick everyone is
 // counting on and one only you will ever see.
+//
+// Three parts, always in the same places: your tick, the thing itself, and who
+// has it. The middle is the way into everything else the item can do, so the row
+// carries no sentences — the sheet says them, once, when you have asked.
 function itemRow(item, mixed) {
   const own = isOwn(item)
-  const done = own ? isMine(item) : item.packed
+  const plan = isPlan(item)
+  const votes = plan ? item.votes.length : 0
 
-  let controls
-  if (isPlan(item)) {
-    const voted = item.votes.includes(S.me)
-    controls = `
-      <button class="chip chip--vote" data-act="vote" data-id="${item.id}" aria-pressed="${voted}">
-        ${voted ? 'Up for it' : 'I want this'} <span class="mono">${item.votes.length}</span></button>
-      ${organiserChip(item)}
-      ${placeChip(item)}`
-  } else if (own) {
-    controls = `${ownToggle(item)}
-      <button class="tag" data-act="move-kind" data-id="${item.id}" data-kind="shared">Move to group</button>`
-  } else {
-    controls = `${assignChip(item)}${item.assignee_id && memberById(item.assignee_id) ? packToggle(item) : ''}`
-  }
+  const meta = [
+    plan ? placeChip(item) : '',
+    votes ? `<span class="item__votes">${votes} up for it</span>` : '',
+  ].filter(Boolean).join('')
 
   return `
-    <li class="item${done ? ' item--packed' : ''}">
+    <li class="item${allPacked(item) ? ' item--packed' : ''}">
+      ${plan ? voteBox(item) : tickBox(item)}
       <div class="item__main">
-        <div class="item__title">${esc(item.title)}${item.qty ? `<span class="item__qty">${esc(item.qty)}</span>` : ''}</div>
-        ${mixed && own ? '<span class="mine__from">personal kit · only you see this</span>' : ''}
-        ${item.note ? `<p class="item__note">${esc(item.note)}</p>` : ''}
-        <div class="item__row">${controls}</div>
+        <button class="item__open" data-act="open-item" data-id="${item.id}">
+          <span class="item__title">${esc(item.title)}${item.qty ? `<span class="item__qty">${esc(item.qty)}</span>` : ''}</span>
+          ${mixed && own ? '<span class="mine__from">personal kit · only you see this</span>' : ''}
+          ${item.note ? `<span class="item__note">${esc(item.note)}</span>` : ''}
+        </button>
+        ${meta ? `<div class="item__row">${meta}</div>` : ''}
       </div>
-      <button class="item__kill" data-act="kill" data-id="${item.id}" aria-label="Remove ${esc(item.title)}">${ICONS.x}</button>
+      ${own ? '' : whoBtn(item)}
     </li>`
+}
+
+// Nobody brings a hike, so the leading control on a plan answers the only
+// question a plan asks: are you up for it. Same place, same shape, same tap.
+function voteBox(item) {
+  const voted = item.votes.includes(S.me)
+  const me = meMember()
+  return `
+    <button class="tick${voted ? ' tick--done' : ''}" data-act="vote" data-id="${item.id}" aria-pressed="${voted}"
+            ${me ? `style="--mine:${colorOf(me)}"` : ''}
+            aria-label="${voted ? `You are up for ${esc(item.title)}` : `Say you are up for ${esc(item.title)}`}">
+      ${voted ? ICONS.tick : ''}</button>`
 }
 
 // ---- views ------------------------------------------------------------------
@@ -741,7 +801,7 @@ function topbar() {
 // packed. Mixed groups count both and leave the word off.
 function categoryGroups(items, mixed) {
   return groupByCategory(items).map(([cat, list]) => {
-    const done = list.filter((i) => (isOwn(i) ? isMine(i) : i.assignee_id && memberById(i.assignee_id))).length
+    const done = list.filter((i) => (isOwn(i) ? isMine(i) : isClaimed(i))).length
     const tally = list.every(isOwn) ? `${done}/${list.length} packed` : `${done}/${list.length}`
     return `
       <section class="group">
@@ -804,14 +864,24 @@ function listPage() {
 // yours — because that changes what the tick beside it means.
 function mineRow(item) {
   const own = isOwn(item)
-  const from = [item.category || 'Other', own ? 'personal kit' : ''].filter(Boolean).join(' · ')
+  const others = crew(item).filter((c) => c.member_id !== S.me)
+  const from = [
+    catOf(item),
+    own ? 'personal kit' : '',
+    // Whoever else is on it, because "am I the only one bringing the bacon" is
+    // the question you are actually asking on the morning you leave.
+    others.length ? `with ${others.map((c) => c.member.name).join(', ')}` : '',
+  ].filter(Boolean).join(' · ')
+
   return `
     <li class="item${packedForMe(item) ? ' item--packed' : ''}">
+      ${tickBox(item)}
       <div class="item__main">
-        <div class="item__title">${esc(item.title)}${item.qty ? `<span class="item__qty">${esc(item.qty)}</span>` : ''}</div>
-        <span class="mine__from">${esc(from)}</span>
-        ${item.note ? `<p class="item__note">${esc(item.note)}</p>` : ''}
-        <div class="item__row">${own ? ownToggle(item) : packToggle(item)}</div>
+        <button class="item__open" data-act="open-item" data-id="${item.id}">
+          <span class="item__title">${esc(item.title)}${item.qty ? `<span class="item__qty">${esc(item.qty)}</span>` : ''}</span>
+          <span class="mine__from">${esc(from)}</span>
+          ${item.note ? `<span class="item__note">${esc(item.note)}</span>` : ''}
+        </button>
       </div>
     </li>`
 }
@@ -1011,9 +1081,11 @@ function peopleCard() {
   // organising a hike is not a thing you carry.
   const load = new Map(), packed = new Map()
   for (const it of S.items) {
-    if (isOwn(it) || isPlan(it) || !it.assignee_id || !memberById(it.assignee_id)) continue
-    load.set(it.assignee_id, (load.get(it.assignee_id) ?? 0) + 1)
-    if (it.packed) packed.set(it.assignee_id, (packed.get(it.assignee_id) ?? 0) + 1)
+    if (isOwn(it) || isPlan(it)) continue
+    for (const c of crew(it)) {
+      load.set(c.member_id, (load.get(c.member_id) ?? 0) + 1)
+      if (c.packed) packed.set(c.member_id, (packed.get(c.member_id) ?? 0) + 1)
+    }
   }
   const link = `${location.origin}/t/${S.trip.id}`
 
@@ -1154,19 +1226,26 @@ function sheetShell({ title, blurb, body, foot }) {
     </div>`
 }
 
-function sheetAssign(s) {
+// Everything an item can be asked, in the one place the row sends you: who has
+// it, which list it belongs on, and the way to take it off. The names are a
+// multiple choice — the sheet stays open while you tick two more people onto the
+// bacon, because that is the whole point of it being a set.
+function sheetItem(s) {
   const item = S.items.find((i) => i.id === s.id)
   if (!item) return ''
   const me = meMember()
   const own = isOwn(item)
+  const plan = isPlan(item)
 
-  const kindSwitch = isPlan(item) ? '' : `
+  const kindSwitch = plan ? '' : `
     <div class="segmented" role="group" aria-label="How this gets brought">
       <button class="segmented__btn" aria-pressed="${!own}" data-act="set-kind" data-id="${item.id}" data-kind="shared">
         ${SECTIONS.shared.label}</button>
       <button class="segmented__btn" aria-pressed="${own}" data-act="set-kind" data-id="${item.id}" data-kind="own">
         ${SECTIONS.own.label}</button>
     </div>`
+
+  const remove = `<button class="btn btn--wide btn--quiet" data-act="kill" data-id="${item.id}">Remove from the list</button>`
 
   if (own) {
     return sheetShell({
@@ -1179,34 +1258,33 @@ function sheetAssign(s) {
             <span class="pick__note">${isMine(item) ? 'Ticked off.' : 'Not yet.'}</span></span>
           <span class="pick__tick">${ICONS.tickGreen}</span>
         </button>`,
+      foot: remove,
     })
   }
 
-  const rows = S.members.map((m) => `
-    <button class="pick" data-act="set-assignee" data-id="${item.id}" data-member="${m.id}"
-            aria-pressed="${item.assignee_id === m.id}">
-      <span class="pick__swatch" style="background:${colorOf(m)}"></span>
-      <span class="pick__main"><span class="pick__title">${esc(m.name)}${m.id === S.me ? ' (you)' : ''}</span></span>
-      <span class="pick__tick">${ICONS.tickGreen}</span>
-    </button>`).join('')
+  const on = new Map(claimsOn(item).map((c) => [c.member_id, c]))
+  const rows = S.members.map((m) => {
+    const claim = on.get(m.id)
+    return `
+      <button class="pick" data-act="claim" data-id="${item.id}" data-member="${m.id}"
+              aria-pressed="${!!claim}">
+        <span class="pick__swatch" style="background:${colorOf(m)}"></span>
+        <span class="pick__main"><span class="pick__title">${esc(m.name)}${m.id === S.me ? ' (you)' : ''}</span>
+          ${claim ? `<span class="pick__note">${claim.packed ? 'Packed theirs.' : 'Not packed yet.'}</span>` : ''}</span>
+        <span class="pick__tick">${ICONS.tickGreen}</span>
+      </button>`
+  }).join('')
 
-  const plan = isPlan(item)
+  const mine = !!myClaim(item)
   return sheetShell({
     title: plan ? `Who's organising ${item.title}?` : `Who's bringing ${item.title}?`,
     blurb: plan
-      ? 'Optional — only for the plans that need someone to book it or bring the kit.'
-      : 'One person brings it for everyone.',
+      ? 'Optional, and it can be more than one of you — only for the plans that need booking or kit.'
+      : 'As many of you as it takes. Each person ticks off their own share.',
     body: `
       ${kindSwitch}
-      ${me ? `<button class="btn btn--primary btn--wide" style="margin-bottom:14px" data-act="set-assignee" data-id="${item.id}" data-member="${me.id}">${plan ? "I'll organise it" : "I'll bring it"}</button>` : ''}
+      ${me && !mine ? `<button class="btn btn--primary btn--wide" style="margin-bottom:14px" data-act="claim" data-id="${item.id}" data-member="${me.id}">${plan ? "I'll organise it" : "I'll bring it"}</button>` : ''}
       ${rows}
-      <button class="pick" data-act="set-assignee" data-id="${item.id}" data-member=""
-              aria-pressed="${!item.assignee_id}" style="margin-top:10px">
-        <span class="pick__swatch${plan ? '' : ' legend__dot--gap'}"${plan ? ' style="background:var(--line-strong)"' : ''}></span>
-        <span class="pick__main"><span class="pick__title">${plan ? 'Nobody needs to' : 'Nobody yet'}</span>
-          <span class="pick__note">${plan ? 'Most plans do not need an organiser.' : 'Leave it open and it stays orange on the bar.'}</span></span>
-        <span class="pick__tick">${ICONS.tickGreen}</span>
-      </button>
       <div style="margin-top:18px">
         <form data-act="add-member">
           <label class="field"><span>Someone not on the list?</span>
@@ -1214,6 +1292,7 @@ function sheetAssign(s) {
           <button class="btn btn--wide btn--sm" type="submit">Add them</button>
         </form>
       </div>`,
+    foot: remove,
   })
 }
 
@@ -1345,7 +1424,7 @@ function sheetSuggest(s) {
 
 function renderSheet() {
   if (!S.sheet) { sheetRoot.innerHTML = ''; return }
-  const map = { assign: sheetAssign, add: sheetAdd, suggest: sheetSuggest, place: sheetPlace }
+  const map = { item: sheetItem, add: sheetAdd, suggest: sheetSuggest, place: sheetPlace }
   sheetRoot.innerHTML = map[S.sheet.kind]?.(S.sheet) ?? ''
 }
 
@@ -1598,13 +1677,6 @@ document.addEventListener('click', async (ev) => {
       break
     }
 
-    case 'move-kind':
-      await mutate(() => api(`/items/${el.dataset.id}`, { method: 'PATCH', body: { kind: el.dataset.kind } }))
-      toast(el.dataset.kind === 'shared'
-        ? 'Moved to the group list — everyone can see it now.'
-        : 'Moved to your own list. Only you can see it now.')
-      break
-
     case 'scrim':
       if (ev.target !== el) break
       S.sheet = null; renderSheet(); break
@@ -1612,9 +1684,25 @@ document.addEventListener('click', async (ev) => {
     case 'close-sheet':
       S.sheet = null; renderSheet(); break
 
-    case 'pack': {
+    // The one control on the row, and it steps: put your name to it, tick your
+    // share off, untick it. Dropping out again is a decision rather than a
+    // mis-tap, so it lives in the sheet behind the faces.
+    case 'tick': {
+      if (!S.me) { toast('Join the trip first.'); break }
       const it = S.items.find((i) => i.id === el.dataset.id)
-      mutate(() => api(`/items/${it.id}`, { method: 'PATCH', body: { packed: !it.packed } }))
+      if (!it) break
+      if (isOwn(it)) {
+        mutate(() => api(`/items/${it.id}/own`, { method: 'POST', body: { memberId: S.me } }))
+        break
+      }
+      const claim = myClaim(it)
+      if (!claim) {
+        await mutate(() => api(`/items/${it.id}/claim`, { method: 'POST', body: { memberId: S.me } }))
+      } else {
+        await mutate(() => api(`/items/${it.id}/packed`, {
+          method: 'POST', body: { memberId: S.me, packed: !claim.packed },
+        }))
+      }
       break
     }
 
@@ -1626,6 +1714,9 @@ document.addEventListener('click', async (ev) => {
     case 'set-kind':
       // The sheet stays open, so you see the model you just chose.
       await mutate(() => api(`/items/${el.dataset.id}`, { method: 'PATCH', body: { kind: el.dataset.kind } }))
+      toast(el.dataset.kind === 'own'
+        ? 'On your own list now. Only you can see it.'
+        : 'On the group list now — everyone can see it.')
       break
 
     // A segmented control inside a form is a hidden field with buttons on it.
@@ -1646,6 +1737,8 @@ document.addEventListener('click', async (ev) => {
     case 'kill': {
       const it = S.items.find((i) => i.id === el.dataset.id)
       if (it && confirm(`Remove "${it.title}" from the list?`)) {
+        S.sheet = null
+        renderSheet()
         mutate(() => api(`/items/${it.id}`, { method: 'DELETE' }))
       }
       break
@@ -1659,15 +1752,17 @@ document.addEventListener('click', async (ev) => {
       break
     }
 
-    case 'assign':
-      S.sheet = { kind: 'assign', id: el.dataset.id }
+    case 'open-item':
+      S.sheet = { kind: 'item', id: el.dataset.id }
       renderSheet()
       break
 
-    case 'set-assignee':
-      S.sheet = null
-      renderSheet()
-      await mutate(() => api(`/items/${el.dataset.id}`, { method: 'PATCH', body: { assignee_id: el.dataset.member || '' } }))
+    // Names go on and come off one tap at a time, and the sheet stays put: you
+    // are usually adding a second person, not replacing the first.
+    case 'claim':
+      await mutate(() => api(`/items/${el.dataset.id}/claim`, {
+        method: 'POST', body: { memberId: el.dataset.member },
+      }))
       break
 
     // Both open into whichever section you are looking at.
@@ -1774,7 +1869,7 @@ document.addEventListener('submit', async (ev) => {
       try {
         await api(`/trips/${S.trip.id}/members`, { method: 'POST', body: { name: f.name } })
         absorb(await api(`/trips/${S.trip.id}`))
-        S.sheet = { kind: 'assign', id: itemId }
+        S.sheet = { kind: 'item', id: itemId }
         renderSheet()
       } catch (err) {
         // Adding somebody who is already here is a mistake worth naming, not a
