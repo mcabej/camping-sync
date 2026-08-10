@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { OAuth2Client } from 'google-auth-library'
 import OpenAI from 'openai'
+import webpush from 'web-push'
 import { WebSocket, WebSocketServer } from 'ws'
 import {
   db, uid, now, newTripCode, bumpRev, logEvent, getTripState, nextPosition,
@@ -21,6 +22,34 @@ const LISTS = new Set(['gear', 'food', 'drinks', 'activities'])
 const OPENAI_API_KEY = String(process.env.OPENAI_API_KEY ?? '').trim()
 const CAMP_MODEL = clean(process.env.OPENAI_MODEL, 100) || 'gpt-5.6-luna'
 const openai = OPENAI_API_KEY ? new OpenAI({ apiKey: OPENAI_API_KEY }) : null
+
+// Web Push needs one long-lived application key pair. Hosted deployments can
+// supply it as secrets; a single-instance install gets an equally stable pair
+// generated once and retained in its database.
+function pushKeys() {
+  const publicKey = clean(process.env.VAPID_PUBLIC_KEY, 500)
+  const privateKey = clean(process.env.VAPID_PRIVATE_KEY, 500)
+  if (!!publicKey !== !!privateKey) throw new Error('Set both VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY')
+  if (publicKey) return { publicKey, privateKey }
+
+  const get = db.prepare('SELECT value FROM app_settings WHERE key = ?')
+  const storedPublic = get.get('vapid_public')?.value
+  const storedPrivate = get.get('vapid_private')?.value
+  if (storedPublic && storedPrivate) return { publicKey: storedPublic, privateKey: storedPrivate }
+
+  const generated = webpush.generateVAPIDKeys()
+  const put = db.prepare('INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)')
+  put.run('vapid_public', generated.publicKey)
+  put.run('vapid_private', generated.privateKey)
+  return generated
+}
+
+const vapid = pushKeys()
+webpush.setVapidDetails(
+  clean(process.env.VAPID_SUBJECT, 500) || 'mailto:notifications@camping-sync.app',
+  vapid.publicKey,
+  vapid.privateKey,
+)
 
 // ---- identity ---------------------------------------------------------------
 
@@ -178,6 +207,16 @@ app.post('/api/auth/logout', (req, res) => {
   if (!sameOrigin(req)) return res.status(403).json({ error: 'Sign-out must start from this app.' })
   clearSession(req, res)
   res.json({ user: null, memberships: [], clientId: GOOGLE_CLIENT_ID })
+})
+
+app.delete('/api/notifications', (req, res) => {
+  const user = requireUser(req, res)
+  if (!user) return
+  const endpoint = clean(req.body?.endpoint, 2048)
+  if (endpoint) db.prepare(`DELETE FROM push_subscriptions
+    WHERE endpoint = ? AND member_id IN (SELECT id FROM members WHERE user_id = ?)`)
+    .run(endpoint, user.id)
+  res.json({ ok: true })
 })
 
 // The map link ends up in an href that everyone on the trip taps, and anyone
@@ -350,6 +389,58 @@ function broadcastTripEvent(tripId, event) {
 
 const broadcastMessage = (tripId, message) => {
   broadcastTripEvent(tripId, { type: 'message.created', message })
+}
+
+function activeRoomMembers(tripId) {
+  const active = new Set()
+  for (const socket of socketsByTrip.get(tripId) ?? []) {
+    if (socket.readyState === WebSocket.OPEN && socket.inRoom && socketAuthorized(socket)) {
+      active.add(socket.memberId)
+    }
+  }
+  return active
+}
+
+async function notifyMessage(tripId, message, { onlyMemberId = '' } = {}) {
+  const trip = db.prepare('SELECT name FROM trips WHERE id = ?').get(tripId)
+  if (!trip) return
+  const active = activeRoomMembers(tripId)
+  const subscriptions = db.prepare(`
+    SELECT p.endpoint, p.member_id, p.p256dh, p.auth
+    FROM push_subscriptions p
+    LEFT JOIN notification_preferences n ON n.member_id = p.member_id
+    WHERE p.trip_id = ? AND COALESCE(n.muted, 0) = 0`).all(tripId)
+    .filter((sub) => sub.member_id !== message.member_id
+      && (!onlyMemberId || sub.member_id === onlyMemberId)
+      && !active.has(sub.member_id))
+
+  if (!subscriptions.length) return
+  const body = String(message.body ?? '').replace(/\s+/g, ' ').trim()
+  const payload = JSON.stringify({
+    title: trip.name,
+    body: `${message.author_name}: ${body.length > 160 ? `${body.slice(0, 157)}…` : body}`,
+    tag: `planning-room-${tripId}`,
+    url: `/t/${encodeURIComponent(tripId)}/room`,
+    tripId,
+    messageId: message.id,
+  })
+
+  await Promise.allSettled(subscriptions.map(async (sub) => {
+    try {
+      await webpush.sendNotification({
+        endpoint: sub.endpoint,
+        keys: { p256dh: sub.p256dh, auth: sub.auth },
+      }, payload, { TTL: 3600, urgency: 'normal' })
+    } catch (err) {
+      // 404/410 means the browser has permanently retired this endpoint. One
+      // endpoint is one browser subscription, so every trip mapping is stale.
+      if (err?.statusCode === 404 || err?.statusCode === 410) {
+        db.prepare('DELETE FROM push_subscriptions WHERE endpoint = ?').run(sub.endpoint)
+      } else {
+        console.error('Push notification failed:', err?.message ?? 'unknown error')
+      }
+    }
+  }))
 }
 
 // ---- Camp assistant --------------------------------------------------------
@@ -528,7 +619,11 @@ async function runCampAssistant({ tripId, memberId, userId, runId, canWrite }) {
     if (!body) throw new Error('Assistant returned an empty reply')
 
     const message = saveCampMessage(tripId, runId, body)
-    if (message) broadcastMessage(tripId, message)
+    if (message) {
+      broadcastMessage(tripId, message)
+      void notifyMessage(tripId, message, { onlyMemberId: memberId })
+        .catch((err) => console.error('Push notification failed:', err?.message ?? 'unknown error'))
+    }
   } catch (err) {
     console.error('Camp assistant failed:', err?.message ?? 'unknown error')
     const error = 'Camp could not finish that. Check the lists before trying again.'
@@ -537,7 +632,11 @@ async function runCampAssistant({ tripId, memberId, userId, runId, canWrite }) {
     })
     try {
       const message = saveCampMessage(tripId, runId, error)
-      if (message) broadcastMessage(tripId, message)
+      if (message) {
+        broadcastMessage(tripId, message)
+        void notifyMessage(tripId, message, { onlyMemberId: memberId })
+          .catch((pushErr) => console.error('Push notification failed:', pushErr?.message ?? 'unknown error'))
+      }
     } catch { /* the trip may have been deleted while the model was answering */ }
   }
 }
@@ -922,6 +1021,138 @@ const MESSAGE_LIMIT = 50
 const MESSAGE_MAX = 2000
 const messageColumns = 'id, client_id, member_id, role, author_name, body, created_at'
 
+const latestMessageId = (tripId) => Number(db.prepare(
+  'SELECT COALESCE(MAX(id), 0) AS id FROM messages WHERE trip_id = ?',
+).get(tripId)?.id ?? 0)
+
+function ensureNotificationPreference(tripId, memberId) {
+  db.prepare(`INSERT OR IGNORE INTO notification_preferences
+    (member_id, trip_id, muted, last_read_message_id, updated_at)
+    VALUES (?, ?, 0, ?, ?)`).run(memberId, tripId, latestMessageId(tripId), now())
+  return db.prepare(`SELECT muted, last_read_message_id FROM notification_preferences
+                     WHERE member_id = ? AND trip_id = ?`).get(memberId, tripId)
+}
+
+function notificationState(tripId, memberId, endpoint = '') {
+  const pref = ensureNotificationPreference(tripId, memberId)
+  const unread = db.prepare(`SELECT COUNT(*) AS n FROM messages
+    WHERE trip_id = ? AND id > ? AND (member_id IS NULL OR member_id != ?)`)
+    .get(tripId, pref.last_read_message_id, memberId).n
+  const subscribed = endpoint && !!db.prepare(`SELECT 1 FROM push_subscriptions
+    WHERE endpoint = ? AND trip_id = ? AND member_id = ?`).get(endpoint, tripId, memberId)
+  return {
+    available: true, publicKey: vapid.publicKey, subscribed: !!subscribed,
+    muted: !!pref.muted, unread: Number(unread),
+  }
+}
+
+const allowedPushHost = (host) => host === 'fcm.googleapis.com'
+  || host === 'updates.push.services.mozilla.com'
+  || host === 'web.push.apple.com'
+  || host.endsWith('.push.services.mozilla.com')
+  || host.endsWith('.notify.windows.com')
+  || host.endsWith('.push.apple.com')
+
+function pushSubscription(raw) {
+  const endpoint = clean(raw?.endpoint, 2048)
+  const p256dh = clean(raw?.keys?.p256dh, 512)
+  const auth = clean(raw?.keys?.auth, 512)
+  let url
+  try { url = new URL(endpoint) } catch { return null }
+  if (url.protocol !== 'https:' || !allowedPushHost(url.hostname) || !p256dh || !auth) return null
+  return { endpoint, p256dh, auth }
+}
+
+app.get('/api/trips/:id/notifications', (req, res) => {
+  const trip = requireTrip(req, res)
+  if (!trip) return
+  const memberId = requireMember(req, res, trip.id)
+  if (!memberId) return
+  res.json(notificationState(trip.id, memberId, clean(req.query.endpoint, 2048)))
+})
+
+app.put('/api/trips/:id/notifications', (req, res) => {
+  const trip = requireTrip(req, res)
+  if (!trip) return
+  const memberId = requireMember(req, res, trip.id)
+  if (!memberId) return
+  const subscription = pushSubscription(req.body?.subscription)
+  if (!subscription) return res.status(400).json({ error: 'That notification subscription is not valid.' })
+
+  const ts = now()
+  ensureNotificationPreference(trip.id, memberId)
+  if (req.user) {
+    db.prepare(`DELETE FROM push_subscriptions WHERE endpoint = ?
+      AND member_id NOT IN (SELECT id FROM members WHERE user_id = ?)`)
+      .run(subscription.endpoint, req.user.id)
+  } else {
+    db.prepare('DELETE FROM push_subscriptions WHERE endpoint = ? AND member_id != ?')
+      .run(subscription.endpoint, memberId)
+  }
+  // A browser endpoint can represent only the profile currently using it on a
+  // trip. Replacing an old local identity prevents duplicate or private alerts.
+  db.prepare(`DELETE FROM push_subscriptions
+              WHERE endpoint = ? AND trip_id = ? AND member_id != ?`)
+    .run(subscription.endpoint, trip.id, memberId)
+  db.prepare(`INSERT INTO push_subscriptions
+    (endpoint, trip_id, member_id, p256dh, auth, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT (endpoint, member_id) DO UPDATE SET
+      trip_id = excluded.trip_id, p256dh = excluded.p256dh,
+      auth = excluded.auth, updated_at = excluded.updated_at`)
+    .run(subscription.endpoint, trip.id, memberId, subscription.p256dh, subscription.auth, ts, ts)
+  res.json(notificationState(trip.id, memberId, subscription.endpoint))
+})
+
+app.patch('/api/trips/:id/notifications', (req, res) => {
+  const trip = requireTrip(req, res)
+  if (!trip) return
+  const memberId = requireMember(req, res, trip.id)
+  if (!memberId) return
+  if (typeof req.body?.muted !== 'boolean') {
+    return res.status(400).json({ error: 'Choose whether this trip is muted.' })
+  }
+  ensureNotificationPreference(trip.id, memberId)
+  db.prepare(`UPDATE notification_preferences SET muted = ?, updated_at = ?
+              WHERE member_id = ? AND trip_id = ?`)
+    .run(req.body.muted ? 1 : 0, now(), memberId, trip.id)
+  res.json(notificationState(trip.id, memberId, clean(req.body?.endpoint, 2048)))
+})
+
+app.post('/api/trips/:id/notifications/read', (req, res) => {
+  const trip = requireTrip(req, res)
+  if (!trip) return
+  const memberId = requireMember(req, res, trip.id)
+  if (!memberId) return
+  const latest = latestMessageId(trip.id)
+  const rawMessageId = req.body?.messageId
+  const asked = rawMessageId === undefined ? latest : rawMessageId
+  if (typeof asked !== 'number' || !Number.isSafeInteger(asked) || asked < 0) {
+    return res.status(400).json({ error: 'That message position is not valid.' })
+  }
+  ensureNotificationPreference(trip.id, memberId)
+  db.prepare(`UPDATE notification_preferences
+    SET last_read_message_id = MAX(last_read_message_id, ?), updated_at = ?
+    WHERE member_id = ? AND trip_id = ?`).run(Math.min(asked, latest), now(), memberId, trip.id)
+  const pref = db.prepare(`SELECT last_read_message_id FROM notification_preferences
+                           WHERE member_id = ? AND trip_id = ?`).get(memberId, trip.id)
+  const unread = db.prepare(`SELECT COUNT(*) AS n FROM messages
+    WHERE trip_id = ? AND id > ? AND (member_id IS NULL OR member_id != ?)`)
+    .get(trip.id, pref.last_read_message_id, memberId).n
+  res.json({ unread: Number(unread) })
+})
+
+app.delete('/api/trips/:id/notifications', (req, res) => {
+  const trip = requireTrip(req, res)
+  if (!trip) return
+  const memberId = requireMember(req, res, trip.id)
+  if (!memberId) return
+  const endpoint = clean(req.body?.endpoint, 2048)
+  if (endpoint) db.prepare(`DELETE FROM push_subscriptions
+    WHERE endpoint = ? AND trip_id = ? AND member_id = ?`).run(endpoint, trip.id, memberId)
+  res.json({ ok: true })
+})
+
 // The first read returns the newest page in reading order. `before` walks back
 // through history; `after` is the cheap cursor clients poll for new messages.
 // Chat has its own cursor rather than bumping trip.rev, otherwise an active
@@ -1003,7 +1234,11 @@ app.post('/api/trips/:id/messages', (req, res) => {
       conflict: 'message-retry',
     })
   }
-  if (inserted.changes) broadcastMessage(trip.id, message)
+  if (inserted.changes) {
+    broadcastMessage(trip.id, message)
+    void notifyMessage(trip.id, message)
+      .catch((err) => console.error('Push notification failed:', err?.message ?? 'unknown error'))
+  }
 
   let assistant = null
   if (inserted.changes && campMention(body)) {
@@ -1534,13 +1769,28 @@ app.get('/{*path}', sendIndex)
 // The browser upgrades this same origin and sends its HttpOnly session cookie
 // with the handshake. Authentication happens before ws takes ownership of the
 // socket, as recommended by ws; no credential is ever sent in a message.
-const wss = new WebSocketServer({ noServer: true, perMessageDeflate: false, maxPayload: 1024 })
+const wss = new WebSocketServer({ noServer: true, perMessageDeflate: false, maxPayload: 512 })
 
 wss.on('connection', (socket) => {
   socket.isAlive = true
+  socket.inRoom = false
+  socket.eventWindow = { at: Date.now(), count: 0 }
   if (!socketsByTrip.has(socket.tripId)) socketsByTrip.set(socket.tripId, new Set())
   socketsByTrip.get(socket.tripId).add(socket)
   socket.on('pong', () => { socket.isAlive = true })
+  socket.on('message', (raw) => {
+    if (raw.length > 512) return socket.close(1009, 'Message too large')
+    const at = Date.now()
+    if (at - socket.eventWindow.at >= 1000) socket.eventWindow = { at, count: 0 }
+    if (++socket.eventWindow.count > 10) return socket.close(1008, 'Too many messages')
+    if (!socketAuthorized(socket)) return socket.close(4003, 'Membership changed')
+    try {
+      const event = JSON.parse(String(raw))
+      if (event?.type === 'room.presence' && typeof event.active === 'boolean') {
+        socket.inRoom = event.active
+      }
+    } catch { /* presence is optional; ignore incompatible clients */ }
+  })
   socket.on('close', () => removeSocket(socket))
   socket.on('error', () => { /* close/heartbeat handles recovery */ })
 })

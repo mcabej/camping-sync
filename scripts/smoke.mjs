@@ -41,7 +41,7 @@ const src = readFileSync('public/app.js', 'utf8')
 const hooks = ['S', 'render', 'viewTrip', 'renderSheet', 'CAMP', 'TABS',
   'loadFolds', 'saveFolds', 'autoFold', 'pageGroups', 'tripDays',
   'dayTurned', 'turnDay', 'tillMidnight', 'edges', 'perDay', 'daysPicked',
-  'ensureChatSocket', 'stopChatSocket', 'fitChatBox']
+  'ensureChatSocket', 'stopChatSocket', 'fitChatBox', 'campMentionRange', 'completeCampMention']
 new Function(`${src}\n;Object.assign(globalThis, {${hooks.map((h) => `__${h}: ${h}`).join(',')}})`)()
 
 const { __S: S, __render: render, __viewTrip: viewTrip, __renderSheet: renderSheet, __TABS: TABS,
@@ -49,7 +49,8 @@ const { __S: S, __render: render, __viewTrip: viewTrip, __renderSheet: renderShe
   __tripDays: tripDays, __dayTurned: dayTurned, __turnDay: turnDay,
   __tillMidnight: tillMidnight, __edges: edges, __perDay: perDay,
   __daysPicked: daysPicked, __ensureChatSocket: ensureChatSocket,
-  __stopChatSocket: stopChatSocket, __fitChatBox: fitChatBox } = globalThis
+  __stopChatSocket: stopChatSocket, __fitChatBox: fitChatBox,
+  __campMentionRange: campMentionRange, __completeCampMention: completeCampMention } = globalThis
 const { CATALOG } = await import('../lib/catalog.js')
 
 // A trip with a bit of everything: claimed by one, claimed by three, unclaimed,
@@ -355,6 +356,22 @@ check('planning room has paged history and a labelled composer',
   find(roomPageHtml, 'data-act="chat-older"') && find(roomPageHtml, 'class="sr-only" for="chat-text">Message the group'))
 check('planning room exposes its quiet delivery state',
   find(roomPageHtml, 'data-chat-connection') && find(roomPageHtml, '>Connecting</span>'))
+const quietNotify = S.notify
+S.notify = { ...quietNotify, tripId: 't1', available: true, subscribed: false, muted: false }
+check('planning room offers notification control in its focused header',
+  find(viewTrip(), 'data-act="chat-notifications"')
+  && find(viewTrip(), 'aria-label="Turn on Planning Room notifications"'))
+S.notify = { ...S.notify, subscribed: true, unread: 3 }
+check('an enabled notification control can mute the trip',
+  find(viewTrip(), 'aria-label="Mute Planning Room notifications"')
+  && find(viewTrip(), 'roombar__notify--on'))
+S.camp = 'overview'
+const unreadOverview = viewTrip()
+check('unread chat is visible before entering the room',
+  find(unreadOverview, 'class="room-door__unread">3 new')
+  && find(unreadOverview, 'tabbar__flag tabbar__flag--chat">3'))
+S.camp = 'room'
+S.notify = quietNotify
 check('Camp formats structured answers instead of leaking Markdown',
   find(roomPageHtml, 'class="assistant-copy"') && find(roomPageHtml, '<ul>')
   && find(roomPageHtml, '<strong>Shelter:</strong>') && !find(roomPageHtml, '**Shelter:**'))
@@ -365,6 +382,14 @@ S.chat = { ...readyChat, assistantAvailable: true }
 check('planning room teaches the assistant without adding a new control',
   find(viewTrip(), 'placeholder="Message the group or @camp…"')
   && !find(viewTrip(), 'data-act="assistant"'))
+check('planning room offers Camp while its mention is being typed',
+  find(viewTrip(), 'id="chat-mention"') && find(viewTrip(), 'data-act="chat-mention"')
+  && campMentionRange('@ca', 3)?.start === 0 && campMentionRange('@camp', 5)?.end === 5)
+check('Camp autocomplete creates a ready-to-continue mention',
+  completeCampMention('@ca', 3)?.value === '@camp '
+  && completeCampMention(' @c', 3)?.value === ' @camp ')
+check('Camp autocomplete only appears where the assistant can be invoked',
+  campMentionRange('ask @ca', 7) === null && campMentionRange('@camper', 7) === null)
 S.chat = { ...readyChat, messages: [], hasMore: false }
 check('planning room empty state teaches the first move',
   find(viewTrip(), 'No messages yet') && find(viewTrip(), 'decision the group needs to make next'))
@@ -380,8 +405,9 @@ S.chat = readyChat
 // one connection per trip, immediate durable-row delivery, and retry state.
 class FakeSocket {
   static all = []
-  constructor(url) { this.url = url; this.readyState = 0; this.listeners = {}; FakeSocket.all.push(this) }
+  constructor(url) { this.url = url; this.readyState = 0; this.listeners = {}; this.sent = []; FakeSocket.all.push(this) }
   addEventListener(type, fn) { (this.listeners[type] ??= []).push(fn) }
+  send(value) { this.sent.push(value) }
   fire(type, detail = {}) { for (const fn of this.listeners[type] ?? []) fn(detail) }
   close() { this.readyState = 3; this.fire('close') }
 }
@@ -398,6 +424,9 @@ check('one socket connects to the current trip',
 socket.readyState = 1
 socket.fire('open')
 check('an open socket marks delivery live', S.chat.connection === 'live')
+check('an open socket tells the server the room is being viewed',
+  socket.sent.some((value) => JSON.parse(value).type === 'room.presence'
+    && JSON.parse(value).active === true))
 document.activeElement = { id: 'chat-text' }
 socket.fire('message', { data: JSON.stringify({
   type: 'message.created',

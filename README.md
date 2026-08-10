@@ -62,6 +62,10 @@ lost in a separate group chat.
 - **Planning room** — a durable, member-attributed trip thread with paginated
   history and safe retries. Its own delivery cursor keeps conversation from
   making every client refetch the packing lists.
+- **Message notifications** — optional Web Push alerts for Planning Room
+  messages, grouped per trip. Senders and members actively reading the room are
+  skipped; each member can mute a trip, and unread counts remain visible in the
+  app when push is unavailable or disabled.
 - **`@camp` assistant** — signed-in members can ask a trip-aware assistant about
   the details, lists, people and recent planning thread. Replies stream through
   the existing WebSocket and become durable messages when complete. Explicit
@@ -561,6 +565,9 @@ client secret is used by the Google Identity Services ID-token flow.
 | `GOOGLE_CLIENT_ID` | empty               | OAuth web client id; required for sign-in. |
 | `OPENAI_API_KEY`   | empty               | Enables `@camp`; keep it server-side.       |
 | `OPENAI_MODEL`     | `gpt-5.6-luna`      | Responses API model used by `@camp`.        |
+| `VAPID_PUBLIC_KEY` | generated in DB     | Optional fixed Web Push application key.    |
+| `VAPID_PRIVATE_KEY`| generated in DB     | Pair with `VAPID_PUBLIC_KEY`; keep secret.   |
+| `VAPID_SUBJECT`    | app notification email | Web Push contact URI (`mailto:` or URL).  |
 
 ## Deploying
 

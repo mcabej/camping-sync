@@ -48,12 +48,24 @@ try {
   assert.equal(assistant.member_id, null)
   assert.equal(assistant.author_name, 'Camp')
 
+  db.prepare(`INSERT INTO notification_preferences
+    (member_id, trip_id, muted, last_read_message_id, updated_at)
+    VALUES (?, ?, 1, ?, ?)`).run('sam', 'trip', latest[0].id, ts)
+  db.prepare(`INSERT INTO push_subscriptions
+    (endpoint, trip_id, member_id, p256dh, auth, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)`)
+    .run('https://push.example/subscription', 'trip', 'sam', 'public-key', 'auth-key', ts, ts)
+  assert.equal(db.prepare('SELECT muted FROM notification_preferences WHERE member_id = ?').get('sam').muted, 1)
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM push_subscriptions WHERE trip_id = ?').get('trip').n, 1)
+
   db.prepare('DELETE FROM members WHERE id = ?').run('sam')
   const kept = db.prepare('SELECT member_id, author_name FROM messages WHERE id = ?').get(latest[1].id)
   assert.equal(kept.member_id, null)
   assert.equal(kept.author_name, 'Sam')
   assert.equal(db.prepare('SELECT body FROM messages WHERE client_id = ?')
     .get('assistant:run-1').body, 'Bring a tarp for the forecast rain.')
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM push_subscriptions').get().n, 0)
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM notification_preferences').get().n, 0)
 
   db.prepare('DELETE FROM trips WHERE id = ?').run('trip')
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM messages').get().n, 0)

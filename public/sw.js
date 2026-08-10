@@ -51,6 +51,48 @@ self.addEventListener('activate', (event) => {
   })())
 })
 
+self.addEventListener('push', (event) => {
+  event.waitUntil((async () => {
+    let message = {}
+    try { message = event.data?.json() ?? {} } catch { /* malformed payload */ }
+    const url = typeof message.url === 'string' ? message.url : '/'
+    const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
+    const alreadyReading = windows.some((client) => {
+      try { return client.visibilityState === 'visible' && new URL(client.url).pathname === url } catch { return false }
+    })
+
+    await self.registration.showNotification(message.title || 'Camping Sync', {
+      body: message.body || 'There is a new Planning Room message.',
+      icon: '/icons/icon-192.png',
+      badge: '/icons/maskable-192.png',
+      tag: message.tag || 'planning-room',
+      renotify: false,
+      silent: alreadyReading,
+      data: { url },
+    })
+  })())
+})
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close()
+  event.waitUntil((async () => {
+    const url = event.notification.data?.url || '/'
+    const absolute = new URL(url, self.location.origin).href
+    const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
+    const exact = windows.find((client) => client.url === absolute)
+    if (exact) return exact.focus()
+    const existing = windows[0]
+    if (existing) {
+      if ('navigate' in existing && existing.url !== absolute) {
+        const moved = await existing.navigate(absolute).catch(() => null)
+        if (!moved) return self.clients.openWindow(absolute)
+      }
+      return existing.focus()
+    }
+    return self.clients.openWindow(absolute)
+  })())
+})
+
 self.addEventListener('fetch', (event) => {
   const { request } = event
   // A write is never answered from a cache and never replayed later: two people

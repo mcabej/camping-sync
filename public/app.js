@@ -79,6 +79,8 @@ const ICONS = {
   room: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 5.5h13a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H11l-4.8 3v-3h-.7a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2Z"/><path d="M7.5 9.5h9M7.5 13.5h6"/></svg>',
   back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>',
   send: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h13M13 6l6 6-6 6"/></svg>',
+  bell: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg>',
+  bellOff: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M13.7 5.25A6 6 0 0 0 6 9c0 2.1-.27 3.55-.68 4.58M18 9c0 7 3 7 3 9H9M10 21h4M3 3l18 18"/></svg>',
   tick: '<svg viewBox="0 0 24 24" fill="none" stroke="#F4F8F0" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5 9.5 18 20 6.5"/></svg>',
   tickGreen: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5 9.5 18 20 6.5"/></svg>',
   x: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>',
@@ -123,6 +125,10 @@ const S = {
     tripId: '', messages: [], hasMore: false, loading: false,
     loadingOlder: false, busy: false, error: '', draft: '', pending: null,
     connection: 'idle', assistantAvailable: false, streams: {},
+  },
+  notify: {
+    tripId: '', loading: false, available: false, subscribed: false,
+    muted: false, unread: 0, publicKey: '', busy: false,
   },
   catalog: null, tips: [],
   // The forecast for where and when this trip is: `{ key, state, days, advice }`.
@@ -295,6 +301,155 @@ function resetChat(tripId = '') {
   }
 }
 
+const pushSupported = () => typeof Notification !== 'undefined'
+  && 'serviceWorker' in navigator && 'PushManager' in globalThis
+
+async function currentPushSubscription() {
+  if (!pushSupported()) return null
+  const registration = await navigator.serviceWorker.getRegistration()
+  return registration?.pushManager.getSubscription() ?? null
+}
+
+function pushApplicationKey(value) {
+  const padded = `${value}${'='.repeat((4 - value.length % 4) % 4)}`
+  const bytes = atob(padded.replace(/-/g, '+').replace(/_/g, '/'))
+  return Uint8Array.from(bytes, (char) => char.charCodeAt(0))
+}
+
+async function wantNotificationState() {
+  const tripId = S.trip?.id
+  if (!tripId || S.notify.loading || S.notify.tripId === tripId) return
+  S.notify = { ...S.notify, tripId, loading: true, available: false, unread: 0 }
+  try {
+    const subscription = await currentPushSubscription()
+    if (S.trip?.id !== tripId) {
+      if (S.notify.tripId === tripId) S.notify = { ...S.notify, tripId: '', loading: false }
+      void wantNotificationState()
+      return
+    }
+    const query = subscription ? `?endpoint=${encodeURIComponent(subscription.endpoint)}` : ''
+    const state = await api(`/trips/${tripId}/notifications${query}`)
+    if (S.trip?.id !== tripId) {
+      if (S.notify.tripId === tripId) S.notify = { ...S.notify, tripId: '', loading: false }
+      void wantNotificationState()
+      return
+    }
+    S.notify = {
+      tripId, loading: false, available: pushSupported() && !!state.available,
+      subscribed: !!state.subscribed, muted: !!state.muted,
+      unread: Number(state.unread) || 0, publicKey: String(state.publicKey ?? ''), busy: false,
+    }
+  } catch {
+    if (S.notify.tripId === tripId) S.notify = {
+      ...S.notify, tripId: '', loading: false, available: false, busy: false,
+    }
+    if (S.trip?.id !== tripId) void wantNotificationState()
+    return
+  }
+  if (S.trip?.id === tripId) render()
+}
+
+async function enableNotifications() {
+  if (!S.notify.available || S.notify.busy || !S.notify.publicKey) return
+  const tripId = S.trip?.id
+  if (!tripId) return
+  S.notify.busy = true
+  render()
+  try {
+    const permission = await Notification.requestPermission()
+    if (S.trip?.id !== tripId) return
+    if (permission !== 'granted') {
+      toast(permission === 'denied'
+        ? 'Notifications are blocked in your browser settings.'
+        : 'Notifications were left off.')
+      return
+    }
+    const registration = await navigator.serviceWorker.ready
+    if (S.trip?.id !== tripId) return
+    let subscription = await registration.pushManager.getSubscription()
+    if (S.trip?.id !== tripId) return
+    subscription ??= await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: pushApplicationKey(S.notify.publicKey),
+      })
+    if (S.trip?.id !== tripId) return
+    let state = await api(`/trips/${tripId}/notifications`, {
+      method: 'PUT', body: { subscription: subscription.toJSON() },
+    })
+    if (S.trip?.id !== tripId) return
+    if (state.muted) {
+      state = await api(`/trips/${tripId}/notifications`, {
+        method: 'PATCH', body: { muted: false, endpoint: subscription.endpoint },
+      })
+      if (S.trip?.id !== tripId) return
+    }
+    S.notify = {
+      ...S.notify, subscribed: true, muted: false,
+      unread: Number(state.unread) || 0,
+    }
+    toast('Planning Room notifications are on.')
+  } catch (err) {
+    if (S.trip?.id === tripId) toast(err.message || 'Notifications could not be turned on.')
+  } finally {
+    if (S.trip?.id === tripId && S.notify.tripId === tripId) {
+      S.notify.busy = false
+      render()
+    }
+  }
+}
+
+async function toggleTripMute() {
+  if (S.notify.busy) return
+  if (!S.notify.subscribed) return enableNotifications()
+  const tripId = S.trip?.id
+  if (!tripId) return
+  const muted = !S.notify.muted
+  S.notify.busy = true
+  render()
+  try {
+    const subscription = await currentPushSubscription()
+    if (S.trip?.id !== tripId) return
+    const state = await api(`/trips/${tripId}/notifications`, {
+      method: 'PATCH', body: { muted, endpoint: subscription?.endpoint ?? '' },
+    })
+    if (S.trip?.id !== tripId) return
+    S.notify = { ...S.notify, muted: !!state.muted }
+    toast(S.notify.muted ? 'Planning Room notifications muted.' : 'Planning Room notifications on.')
+  } catch (err) {
+    if (S.trip?.id === tripId) toast(err.message)
+  } finally {
+    if (S.trip?.id === tripId && S.notify.tripId === tripId) {
+      S.notify.busy = false
+      render()
+    }
+  }
+}
+
+async function clearBrowserNotifications() {
+  const subscription = await currentPushSubscription().catch(() => null)
+  if (!subscription) return
+  await api('/notifications', {
+    method: 'DELETE', body: { endpoint: subscription.endpoint },
+  }).catch(() => {})
+  await subscription.unsubscribe().catch(() => {})
+}
+
+let readMessagePending = { tripId: '', messageId: 0 }
+function markRoomRead() {
+  if (S.camp !== 'room' || document.hidden || S.chat.tripId !== S.trip?.id) return
+  const messageId = Number(S.chat.messages.at(-1)?.id ?? 0)
+  if (readMessagePending.tripId === S.trip.id
+      && messageId <= readMessagePending.messageId && !S.notify.unread) return
+  readMessagePending = { tripId: S.trip.id, messageId }
+  S.notify.unread = 0
+  const tripId = S.trip.id
+  api(`/trips/${tripId}/notifications/read`, { method: 'POST', body: { messageId } })
+    .then(({ unread }) => {
+      if (S.trip?.id === tripId) S.notify.unread = Number(unread) || 0
+    })
+    .catch(() => { /* unread state catches up on the next successful visit */ })
+}
+
 function mergeMessages(incoming) {
   const byId = new Map(S.chat.messages.map((m) => [Number(m.id), m]))
   for (const message of incoming ?? []) {
@@ -363,6 +518,7 @@ let chatSocketTrip = ''
 let chatReconnectTimer = null
 let chatReconnectAttempt = 0
 let chatNeedsRender = false
+let sentRoomPresence = null
 
 const chatConnectionLabel = (state) => ({
   live: 'Live', connecting: 'Connecting', reconnecting: 'Reconnecting',
@@ -437,6 +593,7 @@ function stopChatSocket(state = 'idle') {
   chatReconnectTimer = null
   chatReconnectAttempt = 0
   chatSocketTrip = ''
+  sentRoomPresence = null
   const socket = chatSocket
   chatSocket = null
   if (socket && socket.readyState < 2) socket.close(1000, 'Leaving trip')
@@ -472,21 +629,30 @@ function connectChatSocket(tripId) {
   try { socket = new globalThis.WebSocket(url) } catch { return scheduleChatReconnect(tripId) }
   chatSocket = socket
   chatSocketTrip = tripId
+  sentRoomPresence = null
 
   socket.addEventListener('open', () => {
     if (chatSocket !== socket || chatSocketTrip !== tripId) return
     chatReconnectAttempt = 0
     setChatConnection('live')
+    syncRoomPresence()
     if (S.chat.error) wantMessages()
     else syncNewMessages(tripId).then((changed) => { if (changed) showChatChanges() }, () => {})
   })
   socket.addEventListener('message', (event) => {
-    if (chatSocket !== socket || S.chat.tripId !== tripId) return
+    if (chatSocket !== socket) return
     try {
       const data = JSON.parse(event.data)
       if (data.type === 'message.created' && data.message) {
-        mergeMessages([data.message])
-        showChatChanges()
+        const viewing = S.camp === 'room' && !document.hidden
+        if (S.chat.tripId === tripId) mergeMessages([data.message])
+        if (viewing) {
+          showChatChanges()
+          markRoomRead()
+        } else if (data.message.member_id !== S.me) {
+          S.notify.unread = Math.max(0, Number(S.notify.unread) || 0) + 1
+          render()
+        }
       } else if (data.type?.startsWith('assistant.')) {
         receiveAssistantEvent(data)
       }
@@ -495,9 +661,20 @@ function connectChatSocket(tripId) {
   socket.addEventListener('close', () => {
     if (chatSocket !== socket) return
     chatSocket = null
+    sentRoomPresence = null
     scheduleChatReconnect(tripId)
   })
   socket.addEventListener('error', () => { /* close schedules the retry */ })
+}
+
+function syncRoomPresence() {
+  if (!chatSocket || chatSocket.readyState !== 1 || typeof chatSocket.send !== 'function') return
+  const active = S.camp === 'room' && !document.hidden
+  if (active === sentRoomPresence) return
+  try {
+    chatSocket.send(JSON.stringify({ type: 'room.presence', active }))
+    sentRoomPresence = active
+  } catch { /* a closing socket will reconnect and announce again */ }
 }
 
 function ensureChatSocket() {
@@ -510,6 +687,7 @@ function ensureChatSocket() {
   if (navigator.onLine === false) return stopChatSocket('offline')
   if (chatSocketTrip === tripId && chatSocket && chatSocket.readyState < 2) {
     setChatConnection(chatSocket.readyState === 1 ? 'live' : 'connecting')
+    syncRoomPresence()
     return
   }
   if (chatSocketTrip && chatSocketTrip !== tripId) stopChatSocket()
@@ -525,6 +703,7 @@ function reconnectChatNow() {
   chatReconnectTimer = null
   const old = chatSocket
   chatSocket = null
+  sentRoomPresence = null
   if (old && old.readyState < 2) old.close()
   chatSocketTrip = S.trip.id
   connectChatSocket(S.trip.id)
@@ -1724,6 +1903,18 @@ function dayBar() {
 // One height, always: which trip you are on, and the two facts that identify
 // it. Nothing here is a control any more — the way to the trip page is the Trip
 // tab — so the header is purely a sign saying where you are standing.
+function roomNotificationButton() {
+  if (!S.notify.available) return '<span class="roombar__balance" aria-hidden="true"></span>'
+  const on = S.notify.subscribed && !S.notify.muted
+  const label = !S.notify.subscribed
+    ? 'Turn on Planning Room notifications'
+    : S.notify.muted ? 'Unmute Planning Room notifications' : 'Mute Planning Room notifications'
+  return `<button class="roombar__notify${on ? ' roombar__notify--on' : ''}" data-act="chat-notifications"
+    aria-label="${label}" title="${label}" ${S.notify.busy ? 'disabled' : ''}>
+    ${S.notify.muted ? ICONS.bellOff : ICONS.bell}
+  </button>`
+}
+
 function topbar() {
   if (S.camp === 'room') {
     return `
@@ -1734,7 +1925,7 @@ function topbar() {
             <span class="sr-only">Back to trip overview</span>
           </a>
           <h1 class="roombar__title" id="planning-room-title">Planning Room</h1>
-          <span class="roombar__balance" aria-hidden="true"></span>
+          ${roomNotificationButton()}
         </div>
       </header>`
   }
@@ -2572,6 +2763,7 @@ function peopleCard() {
 }
 
 function roomDoor() {
+  const unread = S.notify.tripId === S.trip.id ? S.notify.unread : 0
   return `
     <a class="room-door" href="/t/${encodeURIComponent(S.trip.id)}/room" data-act="room">
       <span class="room-door__icon" aria-hidden="true">${ICONS.room}</span>
@@ -2579,7 +2771,9 @@ function roomDoor() {
         <strong>Planning room</strong>
         <span>Questions, decisions and <span class="mono">@camp</span> help live here.</span>
       </span>
-      <span class="room-door__go">Open <span aria-hidden="true">→</span></span>
+      <span class="room-door__go">${unread
+        ? `<span class="room-door__unread">${unread > 99 ? '99+' : unread} new</span>`
+        : 'Open <span aria-hidden="true">→</span>'}</span>
     </a>`
 }
 
@@ -2642,9 +2836,20 @@ function chatCard() {
         </div>`}
         <form class="chat__composer" data-act="send-message">
           <label class="sr-only" for="chat-text">${chat.assistantAvailable ? 'Message the group or @camp' : 'Message the group'}</label>
+          ${chat.assistantAvailable ? `
+            <div class="chat__mention" id="chat-mention" role="listbox" aria-label="Mention Camp" hidden>
+              <button class="chat__mention-option" id="chat-mention-camp" type="button" role="option"
+                aria-selected="true" data-act="chat-mention">
+                <span class="chat__mention-mark" aria-hidden="true">${ICONS.camp}</span>
+                <span class="chat__mention-copy"><strong>Camp</strong><small>Trip assistant</small></span>
+                <span class="chat__mention-handle mono">@camp</span>
+              </button>
+            </div>` : ''}
           <div class="chat__write">
             <textarea id="chat-text" name="text" rows="1" maxlength="2000" required
-              aria-describedby="chat-help" placeholder="${chat.assistantAvailable ? 'Message the group or @camp…' : 'Write a message…'}">${esc(chat.draft)}</textarea>
+              aria-describedby="chat-help" aria-autocomplete="list"
+              ${chat.assistantAvailable ? 'aria-controls="chat-mention"' : ''} aria-expanded="false"
+              placeholder="${chat.assistantAvailable ? 'Message the group or @camp…' : 'Write a message…'}">${esc(chat.draft)}</textarea>
             <button class="btn btn--primary chat__send" type="submit" aria-label="${chat.busy ? 'Sending message' : 'Send message'}"
               ${chat.busy ? 'disabled' : ''}>${chat.busy ? '<span class="chat__sending" aria-hidden="true">…</span>' : ICONS.send}</button>
           </div>
@@ -2759,6 +2964,7 @@ function tabFlag(tab) {
 }
 
 function tabbar() {
+  const roomUnread = S.notify.tripId === S.trip.id ? S.notify.unread : 0
   return `
     <nav class="tabbar" aria-label="Trip sections">
       ${TABS.map((t) => {
@@ -2782,8 +2988,10 @@ function tabbar() {
                 </button>`
       }).join('')}
       <button class="tabbar__btn" data-act="camp" ${S.camp ? 'aria-current="page"' : ''}>
-        <span class="tabbar__icon" aria-hidden="true">${ICONS.camp}</span>
+        <span class="tabbar__icon" aria-hidden="true">${ICONS.camp}${roomUnread
+          ? `<span class="tabbar__flag tabbar__flag--chat">${roomUnread > 9 ? '9+' : roomUnread}</span>` : ''}</span>
         <span class="tabbar__label">${CAMP.label}</span>
+        ${roomUnread ? `<span class="sr-only">${roomUnread} unread Planning Room message${roomUnread === 1 ? '' : 's'}</span>` : ''}
       </button>
     </nav>`
 }
@@ -3400,6 +3608,51 @@ function fitChatBox(box) {
   box.style.overflowY = box.scrollHeight > CHAT_BOX_MAX ? 'auto' : 'hidden'
 }
 
+// Camp is only invoked when it starts the message, so autocomplete is offered
+// only there. That keeps a completed mention honest: choosing it always creates
+// a message the assistant will actually answer.
+function campMentionRange(value, caret = String(value ?? '').length) {
+  const before = String(value ?? '').slice(0, caret)
+  const match = before.match(/^(\s*)@([a-z]*)$/i)
+  if (!match || !'camp'.startsWith(match[2].toLowerCase())) return null
+  return { start: match[1].length, end: caret }
+}
+
+function completeCampMention(value, caret = String(value ?? '').length) {
+  const text = String(value ?? '')
+  const range = campMentionRange(text, caret)
+  if (!range) return null
+  const after = text.slice(range.end)
+  const gap = after && /^\s/.test(after) ? '' : ' '
+  const next = `${text.slice(0, range.start)}@camp${gap}${after}`
+  return { value: next, caret: range.start + 5 + gap.length }
+}
+
+function setCampMentionOpen(box, open) {
+  const list = root.querySelector?.('#chat-mention')
+  if (!box || !list) return
+  list.hidden = !open
+  box.setAttribute('aria-expanded', String(open))
+  if (open) box.setAttribute('aria-activedescendant', 'chat-mention-camp')
+  else box.removeAttribute('aria-activedescendant')
+}
+
+function syncCampMention(box) {
+  setCampMentionOpen(box, !!campMentionRange(box?.value, box?.selectionStart))
+}
+
+function acceptCampMention(box) {
+  const completed = completeCampMention(box?.value, box?.selectionStart)
+  if (!box || !completed) return false
+  box.value = completed.value
+  box.setSelectionRange(completed.caret, completed.caret)
+  S.chat.draft = completed.value
+  setCampMentionOpen(box, false)
+  fitChatBox(box)
+  box.focus()
+  return true
+}
+
 function render({ chatBottom = false } = {}) {
   const y = window.scrollY
   const oldChat = root.querySelector?.('.chat-card--page')
@@ -3463,8 +3716,13 @@ function render({ chatBottom = false } = {}) {
   // waits on it. It answers once per question — see wantWeather — so this being
   // in render() costs a string comparison and nothing else.
   if (S.view === 'trip' && S.camp === 'overview') wantWeather()
-  if (S.view === 'trip' && S.camp === 'room') wantMessages()
+  if (S.view === 'trip') wantNotificationState()
+  if (S.view === 'trip' && S.camp === 'room') {
+    wantMessages()
+    markRoomRead()
+  }
   ensureChatSocket()
+  syncRoomPresence()
 }
 
 // ---- actions ----------------------------------------------------------------
@@ -3682,6 +3940,7 @@ document.addEventListener('click', async (ev) => {
   switch (act) {
     case 'sign-out': {
       try {
+        await clearBrowserNotifications()
         applyAuth(await api('/auth/logout', { method: 'POST' }))
         S.me = null
         toast('Signed out.')
@@ -3760,6 +4019,14 @@ document.addEventListener('click', async (ev) => {
       S.camp = 'room'
       render()
       window.scrollTo(0, 0)
+      break
+
+    case 'chat-notifications':
+      await toggleTripMute()
+      break
+
+    case 'chat-mention':
+      acceptCampMention(root.querySelector('#chat-text'))
       break
 
     case 'chat-older':
@@ -4428,6 +4695,19 @@ document.addEventListener('submit', async (ev) => {
 })
 
 document.addEventListener('keydown', (ev) => {
+  if (ev.target.id === 'chat-text') {
+    const mention = root.querySelector?.('#chat-mention')
+    if (mention && !mention.hidden && (ev.key === 'Enter' || ev.key === 'Tab')) {
+      ev.preventDefault()
+      acceptCampMention(ev.target)
+      return
+    }
+    if (mention && !mention.hidden && ev.key === 'Escape') {
+      ev.preventDefault()
+      setCampMentionOpen(ev.target, false)
+      return
+    }
+  }
   if (ev.key === 'Escape' && S.sheet) { S.sheet = null; renderSheet() }
 })
 
@@ -4451,6 +4731,7 @@ document.addEventListener('input', (ev) => {
   if (ev.target.id === 'chat-text') {
     S.chat.draft = ev.target.value
     fitChatBox(ev.target)
+    syncCampMention(ev.target)
   }
   const box = ev.target.closest?.('[data-find]')
   if (box && !ev.isComposing) typedFind(box)
@@ -4461,10 +4742,20 @@ window.addEventListener('resize', () => fitChatBox(root.querySelector?.('#chat-t
 // Incoming rows are stored while somebody is typing but the composer is not
 // rebuilt under their cursor. The first blur catches the visible thread up.
 document.addEventListener('focusout', (ev) => {
-  if (ev.target.id !== 'chat-text' || !chatNeedsRender) return
+  if (ev.target.id !== 'chat-text') return
+  setTimeout(() => {
+    if (!document.activeElement?.closest?.('#chat-mention')) {
+      setCampMentionOpen(ev.target, false)
+    }
+  }, 0)
+  if (!chatNeedsRender) return
   setTimeout(() => {
     if (chatNeedsRender && document.activeElement?.id !== 'chat-text') showChatChanges()
   }, 0)
+})
+
+document.addEventListener('focusin', (ev) => {
+  if (ev.target.id === 'chat-text') syncCampMention(ev.target)
 })
 
 document.addEventListener('compositionend', (ev) => {
@@ -4872,10 +5163,12 @@ setInterval(poll, 5000)
 // trip, and what has changed on the clock. A phone that was asleep at midnight
 // ran no timer, so this is where the day actually turns most of the time.
 document.addEventListener('visibilitychange', () => {
+  syncRoomPresence()
   if (document.hidden) return
   turnDay()
   poll()
   ensureChatSocket()
+  markRoomRead()
 })
 
 // A phone that walks back into signal should not wait out the rest of the tick.
