@@ -59,6 +59,11 @@ const ICONS = {
   plus: '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
   pin: '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s7-6.1 7-11a7 7 0 1 0-14 0c0 4.9 7 11 7 11Z"/><circle cx="12" cy="10" r="2.5"/></svg>',
   spark: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5 13.8 9l5.7 1.8-5.7 1.8L12 18l-1.8-5.4L4.5 10.8 10.2 9 12 3.5Z"/><path d="M19 3v3M20.5 4.5h-3"/></svg>',
+  // iOS draws its Share button as a box with an arrow leaving it, and the only
+  // way to install on that phone is to say "tap this" and mean that one.
+  share: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3.5"/><path d="m8.5 7 3.5-3.5L15.5 7"/><path d="M7.5 10.5H5.5a1 1 0 0 0-1 1V20a1 1 0 0 0 1 1h13a1 1 0 0 0 1-1v-8.5a1 1 0 0 0-1-1h-2"/></svg>',
+  // The icon the home screen would get, so the offer shows the thing itself.
+  mark: '<svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7.5" fill="#1B382E"/><path d="M16 6 6 26h20z" fill="#E9EDE6"/><path d="M16 14 11 26h10z" fill="#1B382E"/></svg>',
 }
 
 // ---- state ------------------------------------------------------------------
@@ -719,7 +724,7 @@ function viewLanding() {
     </header>
 
     <main class="landing__body">
-      <div class="landing__stack">${blocks}</div>
+      <div class="landing__stack">${blocks}${installBlock()}</div>
     </main>
   </div>`
 }
@@ -1442,6 +1447,9 @@ function render() {
   const y = window.scrollY
   const views = { landing: viewLanding, join: viewJoin, trip: viewTrip }
   root.innerHTML = views[S.view]?.() ?? '<div class="page"><p>Loading…</p></div>'
+  // The install card floats over the bottom of the screen, which on the trip
+  // page already has a tab bar standing on it.
+  document.body.classList.toggle('has-tabbar', S.view === 'trip')
   renderSheet()
   if (S.view === 'trip') window.scrollTo(0, y)
 }
@@ -1697,6 +1705,26 @@ document.addEventListener('click', async (ev) => {
       catch { prompt('Copy the address:', where) }
       break
     }
+
+    // prompt() only counts inside a gesture, and nothing above this point in the
+    // handler has awaited, so this is still one.
+    case 'install-yes':
+      hideInstall()
+      await runInstallPrompt()
+      break
+
+    case 'install-no':
+      if (!wasAskedFor) turnedDown()
+      hideInstall()
+      break
+
+    // Asked for rather than offered, so there is no card to read first — where
+    // there is a real prompt to raise, raise it.
+    case 'install-tip':
+      clearTimeout(installTimer)
+      if (deferred) await runInstallPrompt()
+      else showInstall(true)
+      break
 
     case 'scrim':
       if (ev.target !== el) break
@@ -2353,6 +2381,169 @@ if ('serviceWorker' in navigator) {
   }
 }
 
+// ---- add to home screen -----------------------------------------------------
+
+// Asking to be installed is worth doing once, at a moment when the answer is
+// likely to be yes, and not again after a no. Most of what follows is working
+// out when that moment is — and, more often, that there isn't one.
+
+const UA = navigator.userAgent || ''
+
+// iPadOS has called itself a Mac since 13. The touch points are what give it up.
+const isIOS = /iPad|iPhone|iPod/.test(UA) ||
+  (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
+
+// This app spreads by link, so a good share of arrivals are inside the browser
+// that WhatsApp or Instagram keeps to itself. None of those can install
+// anything, and several show a Share sheet with no Add to Home Screen on it at
+// all — being told to tap something that isn't there is worse than silence.
+// Android's WebView admits to being one; an iOS WKWebView is known by the
+// Safari it leaves out of its user agent.
+const inWebview = /\bwv\b/.test(UA) ||
+  /FBAN|FBAV|FB_IAB|Instagram|LinkedInApp|Line\/|MicroMessenger|Snapchat|TikTok|Twitter|Pinterest|GSA\//i.test(UA) ||
+  (isIOS && !/Safari\//.test(UA))
+
+// On iOS the item belongs to Safari alone. Chrome and Firefox there are Safari
+// underneath and pass the test above, so they are told apart by their own names.
+const iosSafari = isIOS && !inWebview && !/CriOS|FxiOS|EdgiOS|OPiOS/.test(UA)
+
+const isInstalled = () =>
+  window.matchMedia('(display-mode: standalone)').matches ||
+  window.matchMedia('(display-mode: minimal-ui)').matches ||
+  navigator.standalone === true
+
+const INSTALL_KEY = 'cs.install'
+
+function installNotes() {
+  try {
+    const n = JSON.parse(localStorage.getItem(INSTALL_KEY) ?? '{}')
+    return n && typeof n === 'object' ? n : {}
+  } catch { return {} }
+}
+
+// A prompt that cannot remember being turned down would ask again every single
+// visit, so somewhere with no storage is somewhere we say nothing.
+let canRemember = true
+function noteInstall(patch) {
+  try { localStorage.setItem(INSTALL_KEY, JSON.stringify({ ...installNotes(), ...patch })) }
+  catch { canRemember = false }
+}
+
+// Counted here, once per load, so "not the first time you have opened this" is
+// a question we can ask later. Doubles as the check that storage works at all.
+const visits = (installNotes().visits ?? 0) + 1
+noteInstall({ visits })
+
+const MONTH = 30 * 24 * 60 * 60 * 1000
+
+// Being installable is not a reason to ask. Three more things have to hold: the
+// app has already been some use — there is a trip on this device — this is not
+// the first look at it, and we were not turned down recently. Two noes and the
+// question is retired.
+function worthAsking() {
+  if (!canRemember || isInstalled() || inWebview) return false
+  const n = installNotes()
+  if (n.installed || (n.no ?? 0) >= 2) return false
+  if (n.at && Date.now() - n.at < MONTH) return false
+  return visits >= 2 && localTrips().length > 0
+}
+
+const installEl = document.getElementById('install')
+
+let deferred = null   // Chrome's beforeinstallprompt, held back for our moment
+let installTimer
+
+const canInstall = () => !isInstalled() && !inWebview && (!!deferred || iosSafari)
+
+// Closing a card you went looking for is not a refusal, so it is not counted
+// as one — otherwise reading the iOS instructions twice retires the question.
+let wasAskedFor = false
+
+function showInstall(askedFor = false) {
+  wasAskedFor = askedFor
+  // Where Chrome has handed us a prompt there is a button to press. iOS has no
+  // such thing, so the card can only point at the Share sheet and stand aside.
+  const ios = !deferred && iosSafari
+  installEl.innerHTML = `
+    <div class="install" role="region" aria-label="Add to home screen">
+      <span class="install__mark" aria-hidden="true">${ICONS.mark}</span>
+      <div class="install__say">
+        <b>Keep Camping Sync to hand</b>
+        <p>${ios
+          ? `Tap ${ICONS.share} in the toolbar below, then <b>Add to Home Screen</b>.`
+          : 'Opens like an app, and your lists still read with no signal.'}</p>
+      </div>
+      <button class="install__x" data-act="install-no" aria-label="${ios ? 'Close' : 'Not now'}">${ICONS.x}</button>
+      ${ios ? '' : '<button class="btn btn--primary btn--sm install__go" data-act="install-yes">Add to home screen</button>'}
+    </div>`
+  // The home page has a standing offer of its own, and the two of them at once
+  // is the same question asked twice.
+  document.body.classList.add('install-open')
+  requestAnimationFrame(() => {
+    installEl.classList.add('is-up')
+    // The toast lands in this same corner and sits above everything. It is told
+    // how much room the card is taking so it steps over it rather than through.
+    document.body.style.setProperty('--install-h', `${installEl.firstElementChild?.offsetHeight ?? 0}px`)
+  })
+}
+
+function hideInstall() {
+  document.body.style.removeProperty('--install-h')
+  document.body.classList.remove('install-open')
+  installEl.classList.remove('is-up')
+  // Emptied after it has slid out rather than during, so it does not blink away.
+  setTimeout(() => { if (!installEl.classList.contains('is-up')) installEl.innerHTML = '' }, 300)
+}
+
+const turnedDown = () => noteInstall({ no: (installNotes().no ?? 0) + 1, at: Date.now() })
+
+// Never in the first seconds of a visit. The card is a suggestion, and one that
+// lands while you are still finding what you came for is an interruption.
+function considerInstall() {
+  if (installEl.firstChild || !canInstall() || !worthAsking()) return
+  clearTimeout(installTimer)
+  installTimer = setTimeout(() => { if (canInstall() && worthAsking()) showInstall() }, 6000)
+}
+
+// The prompt is single use: Chrome will not hand the event back, so whatever
+// comes of it is the end of the asking for this page at least.
+async function runInstallPrompt() {
+  const ev = deferred
+  deferred = null
+  if (!ev) return
+  ev.prompt()
+  const { outcome } = await ev.userChoice.catch(() => ({ outcome: 'dismissed' }))
+  // Saying yes fires appinstalled, which does the remembering for us.
+  if (outcome !== 'accepted') turnedDown()
+  if (S.view === 'landing') render()
+}
+
+window.addEventListener('beforeinstallprompt', (ev) => {
+  // Chrome's own bar is neither asked for nor placed by us. Holding the event
+  // back is what buys the right to choose the moment.
+  ev.preventDefault()
+  deferred = ev
+  // The home page carries a quiet way in of its own, which until now had
+  // nothing to offer.
+  if (S.view === 'landing') render()
+  considerInstall()
+})
+
+window.addEventListener('appinstalled', () => {
+  deferred = null
+  noteInstall({ installed: true })
+  hideInstall()
+})
+
+// The card asks once. This is how somebody who said no, or who was never in a
+// position to be asked, gets there on their own terms.
+function installBlock() {
+  if (!canInstall()) return ''
+  return `<button class="btn btn--wide btn--ghost btn--sm install__nudge" data-act="install-tip">
+            ${ICONS.plus} Add Camping Sync to your home screen
+          </button>`
+}
+
 // ---- boot -------------------------------------------------------------------
 
 async function boot() {
@@ -2365,6 +2556,8 @@ async function boot() {
   const m = location.pathname.match(/^\/t\/([^/]+)/)
   if (m) await openTrip(decodeURIComponent(m[1]))
   else await showLanding()
+
+  considerInstall()
 }
 
 boot()

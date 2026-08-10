@@ -922,6 +922,61 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 }
 #toast.is-up { opacity: 1; transform: translate(-50%, 0); }
 
+/* The install card takes the same corner. A toast is the more urgent of the
+   two and outranks it, so it is moved rather than left to land on top. */
+.install-open #toast {
+  bottom: calc(var(--tabbar-h) + 32px + var(--install-h, 0px) + env(safe-area-inset-bottom));
+}
+
+/* ==========================================================================
+   Add to home screen
+   ========================================================================== */
+
+/* Rides at the bottom like the toast, clearing whatever is already standing
+   there. It is dismissed rather than timed out — it is a suggestion, and one
+   you should get to read at your own pace. */
+#install {
+  position: fixed; left: 0; right: 0; z-index: 55;
+  bottom: calc(14px + env(safe-area-inset-bottom));
+  padding: 0 14px; pointer-events: none;
+}
+.has-tabbar #install { bottom: calc(var(--tabbar-h) + 14px + env(safe-area-inset-bottom)); }
+
+.install {
+  pointer-events: auto; max-width: 440px; margin: 0 auto;
+  display: grid; grid-template-columns: auto 1fr auto; gap: 10px 12px;
+  align-items: start;
+  padding: 13px 12px 14px 14px; border-radius: var(--r-lg);
+  background: var(--paper); box-shadow: inset 0 0 0 1.5px var(--line), var(--shadow-lift);
+  opacity: 0; transform: translateY(14px);
+  transition: opacity .22s ease, transform .22s ease;
+}
+#install.is-up .install { opacity: 1; transform: none; }
+
+.install__mark { width: 34px; height: 34px; }
+.install__mark svg { display: block; width: 100%; height: 100%; border-radius: 8px; }
+
+.install__say b { display: block; font-size: 14.5px; }
+.install__say p { margin: 3px 0 0; font-size: 13px; line-height: 1.45; color: var(--ink-soft); }
+.install__say p b { display: inline; color: var(--ink); }
+.install__say svg { vertical-align: -3px; }
+
+.install__x {
+  width: 28px; height: 28px; margin: -2px -2px 0 0; flex: none;
+  border-radius: 7px; display: grid; place-items: center; color: var(--ink-faint);
+}
+.install__x:hover { background: var(--paper-sunk); color: var(--ink); }
+
+/* Under the words rather than beside them: in the row, on a narrow phone, the
+   sentence is left about four words wide. */
+.install__go { grid-column: 2 / -1; justify-self: start; }
+
+/* The way back to a card that was dismissed. Quiet on purpose — it is an offer,
+   and the page has better things to say. */
+.install__nudge { color: var(--ink-soft); font-weight: 500; }
+.install__nudge svg { opacity: .6; }
+.install-open .install__nudge { display: none; }
+
 /* ==========================================================================
    Wider screens
    ========================================================================== */
