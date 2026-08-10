@@ -36,7 +36,7 @@ until somebody fixes that.
   location that matters: nobody needs directions to the tent they are sleeping
   in, and "the sunset spot" means nothing to whoever has not been there. The
   chip on the row opens the same search box, with the map link behind it.
-- **Camp smarts** — 15 things first-timers find out the hard way.
+- **Camp smarts** — 14 things first-timers find out the hard way.
 - **Live sync** — clients poll a revision counter every 5s and refetch on change.
 - **Activity feed** — who added, claimed, packed or dropped what.
 - **Installs, and works without a signal** — add it to a home screen and it
