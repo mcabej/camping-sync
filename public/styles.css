@@ -117,19 +117,20 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 .field textarea { min-height: 96px; resize: vertical; }
 .field--split { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 
-/* The "Where" box searches for real places; the results hang under it. */
+/* The "Where" box searches for real places; the results hang off it. */
 .places { position: relative; }
 .places__menu {
-  /* Above the fixed tab bar (40), below the sheet scrim (50): a field near the
-     foot of the trip page would otherwise open its menu behind the tabs. */
-  position: absolute; z-index: 45; left: 0; right: 0; top: calc(100% + 5px);
-  max-height: 280px; overflow-y: auto; overscroll-behavior: contain; padding: 4px;
-  background: var(--paper); border: 1.5px solid var(--line-strong);
+  /* Fixed, and placed by fitPlaces(). Anchored to the box it would be trapped
+     inside the sheet body, which scrolls — and so clips — leaving the list the
+     couple of centimetres between the box and the keyboard. Taken out of that
+     box it can use the whole of what the keyboard has left, above the box as
+     readily as below. Above the tab bar (40) and the sheet (50) with it. */
+  position: fixed; z-index: 55; overflow-y: auto; overscroll-behavior: contain;
+  padding: 4px; background: var(--paper); border: 1.5px solid var(--line-strong);
   border-radius: var(--r-md); box-shadow: var(--shadow-lift);
 }
-/* When the room below the box has gone to the keyboard, the list hangs off the
-   top of it instead. */
-.places__menu--up { top: auto; bottom: calc(100% + 5px); }
+/* Nothing to point at while the box itself is scrolled out of sight. */
+.places__menu--off { display: none; }
 .places__opt {
   display: block; width: 100%; text-align: left; cursor: pointer;
   padding: 11px 10px; border: 0; border-radius: var(--r-sm);

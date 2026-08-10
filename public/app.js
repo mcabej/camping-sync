@@ -1974,6 +1974,12 @@ const PLACES_WAIT = 280
 const PLACES_KEEP = 60
 // Breathing room between the list and whatever edge it stops at.
 const PLACES_EDGE = 8
+// The gap between the list and the box it belongs to.
+const PLACES_GAP = 5
+// Below the box is where a list is expected, so it stays there while about four
+// places fit. Less than that and it goes wherever the room actually is.
+const PLACES_ROOM = 240
+const PLACES_TALL = 340
 
 // Only ever one open menu, so one object holds all of it. `complete` is whether
 // the last keystroke is one worth typing ahead of — letters yes, deletions no.
@@ -2014,27 +2020,39 @@ function closePlaces() {
 }
 
 // The list hangs off the box, and on a phone the box can be a finger's width
-// from the top of the keyboard. Give it whatever room is actually left between
-// the sheet it sits in and the part of the screen the keyboard has not taken —
-// and hang it off the top of the box instead when that is the bigger half.
-// Without this the results are drawn somewhere nobody can see or tap.
+// from the top of the keyboard. The room to work with is the part of the screen
+// the keyboard has not taken, top to bottom — the sheet is not a wall, because
+// a list drawn over the question you are answering is still a list you can read
+// and tap, and one squeezed under the box is neither. So: below the box while a
+// few places fit there, above it when that is where the room went, and measured
+// against the visual viewport, which is the only thing that knows about keys.
 function fitPlaces() {
   const field = placesField(P.input)
   const menu = field?.querySelector('.places__menu')
   if (!menu) return
   const box = field.getBoundingClientRect()
-  const clip = field.closest('.sheet__body')?.getBoundingClientRect()
   const vv = window.visualViewport
   const seenTop = vv?.offsetTop ?? 0
-  const top = Math.max(clip?.top ?? 0, seenTop) + PLACES_EDGE
-  const bottom = Math.min(clip?.bottom ?? window.innerHeight, seenTop + (vv?.height ?? window.innerHeight)) - PLACES_EDGE
-  const below = bottom - box.bottom
-  const above = box.top - top
-  const up = above > below
-  menu.classList.toggle('places__menu--up', up)
+  const top = seenTop + PLACES_EDGE
+  const bottom = seenTop + (vv?.height ?? window.innerHeight) - PLACES_EDGE
+
+  // A box scrolled off the top or bottom of what you can see has nothing to
+  // hang a list off; the fixed menu would be left floating on its own.
+  const gone = box.bottom < top || box.top > bottom
+  menu.classList.toggle('places__menu--off', gone)
+  if (gone) return
+
+  const below = bottom - box.bottom - PLACES_GAP
+  const above = box.top - top - PLACES_GAP
+  const up = below < PLACES_ROOM && above > below
+
+  menu.style.left = `${Math.round(box.left)}px`
+  menu.style.width = `${Math.round(box.width)}px`
+  menu.style.top = up ? 'auto' : `${Math.round(box.bottom + PLACES_GAP)}px`
+  menu.style.bottom = up ? `${Math.round(window.innerHeight - box.top + PLACES_GAP)}px` : 'auto'
   // A floor of two rows: a list too short to show anything is no more use than
-  // one nobody can reach, and the sheet body scrolls if it comes to that.
-  menu.style.maxHeight = `${Math.round(Math.max(96, Math.min(280, up ? above : below)))}px`
+  // one nobody can reach, and it scrolls if it really comes to that.
+  menu.style.maxHeight = `${Math.round(Math.max(96, Math.min(PLACES_TALL, up ? above : below)))}px`
 }
 
 function drawPlaces(empty) {
@@ -2240,8 +2258,8 @@ document.addEventListener('focusout', (ev) => {
 })
 
 // A thumb, unlike a mouse, arrives with a keyboard behind it. Bringing the box
-// to the top of the sheet as it takes focus gives its list the rest of the sheet
-// to hang in, instead of the sliver between the box and the keys.
+// to the top of the sheet as it takes focus puts the whole gap down to the keys
+// under it, which is where a list of results is expected to open.
 const touchTyping = matchMedia('(pointer: coarse)').matches
 
 document.addEventListener('focusin', (ev) => {
