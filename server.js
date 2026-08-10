@@ -6,7 +6,7 @@ import { basename, dirname, join } from 'node:path'
 import {
   db, uid, now, newTripCode, bumpRev, logEvent, getTripState, nextPosition,
 } from './lib/db.js'
-import { CATALOG, TIPS } from './lib/catalog.js'
+import { CATALOG, TIPS, WEATHER_ADVICE, catalogEntry } from './lib/catalog.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const app = express()
@@ -215,6 +215,153 @@ app.get('/api/places', async (req, res) => {
   }
 })
 
+// ---- weather ----------------------------------------------------------------
+
+// The one card on the Camp tab that needs nothing from anybody: the trip already
+// knows where it is and when it is, which is the whole of a forecast request.
+//
+// Open-Meteo is free and wants no key, but it is still somebody else's server —
+// so answers are cached for half an hour, and thirty phones opening the same
+// trip at once make one call between them rather than thirty.
+const WEATHER_URL = 'https://api.open-meteo.com/v1/forecast'
+const WEATHER_DAILY = [
+  'weather_code', 'temperature_2m_max', 'temperature_2m_min',
+  'precipitation_sum', 'precipitation_probability_max', 'wind_speed_10m_max',
+].join(',')
+// A forecast is a forecast for about a fortnight. Past that it is a seasonal
+// average wearing a date, which is worse than saying nothing — somebody would
+// pack for it.
+const WEATHER_REACH = 15
+const WEATHER_TTL = 30 * 60 * 1000
+const WEATHER_KEEP = 200
+
+const weatherCache = new Map()
+// Keyed the same way as the cache, and cleared as soon as an answer lands: the
+// second phone to ask waits on the first one's call instead of starting another.
+const weatherFlight = new Map()
+
+const isDay = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s)
+const dayFrom = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10)
+
+// Nulls rather than zeros for anything missing: a day with no wind reading is
+// not a still day, and advice keyed off the numbers has to be able to tell.
+function shapeDays(daily) {
+  const at = (key, i) => {
+    const n = Number(daily?.[key]?.[i])
+    return Number.isFinite(n) ? n : null
+  }
+  return (daily?.time ?? []).map((date, i) => ({
+    date,
+    code: at('weather_code', i),
+    hi: at('temperature_2m_max', i),
+    lo: at('temperature_2m_min', i),
+    rain: at('precipitation_sum', i),
+    pop: at('precipitation_probability_max', i),
+    wind: at('wind_speed_10m_max', i),
+  }))
+}
+
+// The worst the trip has to offer, one number at a time. Averaging would hide
+// the Saturday it rains all day behind two dry ones, and the Saturday is the
+// whole reason anybody would pack differently.
+function worstOf(days) {
+  const worst = (key, seed, beats) => days.reduce((acc, d) => (
+    d[key] !== null && beats(d[key], acc) ? d[key] : acc), seed)
+  const up = (a, b) => a > b
+  return {
+    hi: worst('hi', -Infinity, up),
+    lo: worst('lo', Infinity, (a, b) => a < b),
+    rain: worst('rain', 0, up),
+    pop: worst('pop', 0, up),
+    wind: worst('wind', 0, up),
+    storm: days.some((d) => d.code !== null && d.code >= 95),
+  }
+}
+
+// What the numbers mean for the packing list, resolved into real catalogue
+// entries so the client can offer them as one-tap adds without knowing anything
+// about camping. This is the only camping-specific part of the endpoint: the
+// forecast itself is just a forecast, and a different kind of trip would keep it
+// and swap this out.
+function adviceFor(days) {
+  if (!days.length) return []
+  const w = worstOf(days)
+  return WEATHER_ADVICE.filter((tip) => tip.when(w)).map((tip) => ({
+    id: tip.id,
+    say: typeof tip.say === 'function' ? tip.say(w) : tip.say,
+    gear: tip.gear.map(catalogEntry).filter(Boolean),
+  }))
+}
+
+async function fetchWeather(lat, lon, from, to) {
+  const url = new URL(WEATHER_URL)
+  url.searchParams.set('latitude', String(lat))
+  url.searchParams.set('longitude', String(lon))
+  url.searchParams.set('daily', WEATHER_DAILY)
+  // The days of a trip are the days where it is, not where the server is.
+  url.searchParams.set('timezone', 'auto')
+  url.searchParams.set('start_date', from)
+  url.searchParams.set('end_date', to)
+
+  const upstream = await fetch(url, { signal: AbortSignal.timeout(6000) })
+  if (!upstream.ok) throw new Error(`open-meteo ${upstream.status}`)
+  const body = await upstream.json()
+  // It answers 200 with `error: true` for a date it will not cover, which is a
+  // refusal however it is dressed.
+  if (body?.error) throw new Error(String(body.reason ?? 'open-meteo refused'))
+  const days = shapeDays(body?.daily)
+  return { days, advice: adviceFor(days), at: new Date().toISOString() }
+}
+
+app.get('/api/weather', async (req, res) => {
+  // A trip with words in its location box and no pin behind them has nowhere to
+  // forecast for. Saying so is what tells somebody to pick the place from the
+  // search rather than type it.
+  const [lat, lon] = coords(req.query)
+  if (lat === null) return res.json({ days: [], reason: 'nowhere' })
+
+  const start = clean(req.query?.start, 20)
+  const end = clean(req.query?.end, 20) || start
+  if (!isDay(start) || !isDay(end) || end < start) return res.json({ days: [], reason: 'nowhen' })
+
+  const today = dayFrom(0)
+  const reach = dayFrom(WEATHER_REACH)
+  if (end < today) return res.json({ days: [], reason: 'past' })
+  if (start > reach) return res.json({ days: [], reason: 'far', reach })
+
+  // Yesterday's weather is not news, and the far end of a long trip is past
+  // what anybody can forecast — so the window is the part of the trip that is
+  // both still ahead and still knowable. `cut` is how the card says so.
+  const from = start < today ? today : start
+  const to = end > reach ? reach : end
+  // Three decimal places is about a hundred metres, which is the same forecast
+  // and one cache entry rather than one per phone that rounded differently.
+  const key = `${lat.toFixed(3)},${lon.toFixed(3)},${from},${to}`
+
+  const hit = weatherCache.get(key)
+  if (hit && Date.now() - hit.at < WEATHER_TTL) return res.json({ ...hit.answer, cut: to < end })
+
+  try {
+    let flight = weatherFlight.get(key)
+    if (!flight) {
+      flight = fetchWeather(lat, lon, from, to)
+      weatherFlight.set(key, flight)
+      flight.then(
+        (answer) => {
+          weatherCache.set(key, { at: Date.now(), answer })
+          if (weatherCache.size > WEATHER_KEEP) weatherCache.delete(weatherCache.keys().next().value)
+        },
+        () => {},
+      ).finally(() => weatherFlight.delete(key))
+    }
+    res.json({ ...(await flight), cut: to < end })
+  } catch {
+    // A forecast is a nicety. The card says it could not get one and the trip
+    // carries on being planned without it.
+    res.json({ days: [], reason: 'failed' })
+  }
+})
+
 // ---- trips ------------------------------------------------------------------
 
 app.post('/api/trips', (req, res) => {
@@ -319,6 +466,18 @@ app.patch('/api/trips/:id', (req, res) => {
     sets.push('lat = ?', 'lon = ?')
     vals.push(lat, lon)
   }
+  // Which way the trip is facing is a switch, not a field: it changes the
+  // question every list is asking, so it gets its own line in the feed and is
+  // kept out of the "updated the trip details" bundle below.
+  if (req.body?.going_home !== undefined) {
+    const home = req.body.going_home ? 1 : 0
+    if (home !== trip.going_home) {
+      db.prepare('UPDATE trips SET going_home = ? WHERE id = ?').run(home, trip.id)
+      logEvent(trip.id, actorName(trip.id, req),
+        home ? 'started the pack-down' : 'went back to packing')
+    }
+  }
+
   if (sets.length) {
     db.prepare(`UPDATE trips SET ${sets.join(', ')} WHERE id = ?`).run(...vals, trip.id)
     // Where everyone is driving to is the one detail worth its own line in the
@@ -371,6 +530,35 @@ app.post('/api/trips/:id/members', (req, res) => {
   logEvent(trip.id, member.name, 'joined the trip')
   bumpRev(trip.id)
   res.json({ member })
+})
+
+// What somebody can eat is a fact about the trip rather than a private note:
+// the whole value of writing it down is that whoever ends up cooking finds out
+// without asking the table one at a time. So it is shared like a claim, and like
+// a claim anybody on the trip can fill it in — the person who knows about the
+// nut allergy is as often the one booking the pitch as the one who has it.
+app.patch('/api/trips/:id/members/:mid', (req, res) => {
+  const trip = requireTrip(req, res)
+  if (!trip) return
+  const m = db.prepare('SELECT * FROM members WHERE id = ? AND trip_id = ?').get(req.params.mid, trip.id)
+  if (!m) return res.status(404).json({ error: 'They are not on this trip any more.' })
+
+  if (req.body?.diet !== undefined) {
+    const diet = clean(req.body.diet, 200)
+    if (diet !== m.diet) {
+      db.prepare('UPDATE members SET diet = ? WHERE id = ?').run(diet, m.id)
+      // Named when it is somebody else's, because a line about what you can eat
+      // that you did not write is worth knowing the author of.
+      const who = actorName(trip.id, req)
+      const self = who === m.name
+      logEvent(trip.id, who, diet
+        ? (self ? 'said what they can and cannot eat' : `noted what ${m.name} can and cannot eat`)
+        : (self ? 'cleared their dietary needs' : `cleared the note on what ${m.name} eats`))
+    }
+  }
+
+  bumpRev(trip.id)
+  res.json(getTripState(trip.id, viewerId(req)))
 })
 
 app.delete('/api/trips/:id/members/:mid', (req, res) => {
@@ -586,6 +774,28 @@ app.post('/api/items/:id/own', (req, res) => {
   // Deliberately not logged to the feed — your own packing is nobody else's news.
   bumpRev(item.trip_id)
   res.json(getTripState(item.trip_id, member.id))
+})
+
+// Back in the car, on the way home. The same shape as ticking off your own kit —
+// a set of ticks, toggled one at a time — because by Sunday there is no claiming
+// left to do: whoever brought a thing is who has to find it again.
+//
+// Deliberately not logged. A pack-down is fifty ticks in ten minutes, and a feed
+// of them would bury the trip they belong to.
+app.post('/api/items/:id/stow', (req, res) => {
+  const item = db.prepare('SELECT * FROM items WHERE id = ?').get(req.params.id)
+  if (!item) return res.status(404).json({ error: 'That item is already gone.' })
+  const memberId = clean(req.body?.memberId, 64)
+  const member = db.prepare('SELECT * FROM members WHERE id = ? AND trip_id = ?').get(memberId, item.trip_id)
+  if (!member) return res.status(400).json({ error: 'Join the trip before ticking things off.' })
+  if (!mayTouch(item, member.id)) return res.status(403).json({ error: "That's on somebody else's personal list." })
+
+  const has = db.prepare('SELECT 1 FROM stows WHERE item_id = ? AND member_id = ?').get(item.id, member.id)
+  if (has) db.prepare('DELETE FROM stows WHERE item_id = ? AND member_id = ?').run(item.id, member.id)
+  else db.prepare('INSERT INTO stows (item_id, member_id) VALUES (?, ?)').run(item.id, member.id)
+
+  bumpRev(item.trip_id)
+  res.json(getTripState(item.trip_id, viewerId(req) || member.id))
 })
 
 app.post('/api/items/:id/vote', (req, res) => {

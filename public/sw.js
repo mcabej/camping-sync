@@ -18,10 +18,15 @@ const KEEP = new Set([SHELL, DATA, FONTS])
 
 const FONT_HOSTS = new Set(['fonts.googleapis.com', 'fonts.gstatic.com'])
 
-// Trip state and the catalogue are worth keeping. The revision counter is not:
-// it is a question about right now, and a cached answer to it would tell a
-// phone nothing has changed for as long as it stays offline.
-const CACHEABLE_API = /^\/api\/(catalog|trips\/[^/]+)$/
+// Trip state, the catalogue and the forecast are worth keeping. The revision
+// counter is not: it is a question about right now, and a cached answer to it
+// would tell a phone nothing has changed for as long as it stays offline.
+//
+// A forecast is the one cached answer that goes off on its own, so it carries
+// the time it was fetched and the card says how old it is. Last night's outlook
+// is worth having in a field with no bars; last night's outlook presented as
+// this morning's would not be.
+const CACHEABLE_API = /^\/api\/(catalog|weather|trips\/[^/]+)$/
 
 // Nothing here is huge, but a phone that has opened forty trips should not keep
 // all forty forever. Oldest out first — the Cache API hands keys back in

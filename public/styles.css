@@ -781,7 +781,13 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 .card > p { margin: 0 0 16px; color: var(--ink-soft); font-size: 14px; }
 .card__head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 10px; }
 .card__head h3 { flex: 1; font-size: 18px; }
+/* A number or a timestamp on the heading's own line: the same slot the Edit
+   button takes, for a card whose heading has a fact to carry instead. */
+.card__stamp { flex: none; font-size: 12px; color: var(--ink-faint); }
 .card > .card__body { margin: 0; }
+/* Inside a card the skeleton is the space the answer will take, not a card of
+   its own — so it drops the paper and the shadow it wears on the home page. */
+.card .skel { height: 92px; box-shadow: none; background: var(--paper-sunk); }
 /* The notes are the one piece of writing on the page, so they keep their line
    breaks and the ink of body copy rather than the grey of a caption. */
 .card > .notes { white-space: pre-wrap; color: var(--ink); font-size: 15px; overflow-wrap: anywhere; }
@@ -836,12 +842,27 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 .status__mine b { color: var(--ink); font-weight: 600; }
 
 .people { display: flex; flex-direction: column; gap: 2px; }
-.person { display: flex; align-items: center; gap: 11px; padding: 9px 0; border-bottom: 1px solid var(--line); }
+/* Two lines now — a name, and what they cannot eat — so the row aligns to the
+   top of it rather than to the middle of a block whose height varies. */
+.person { display: flex; align-items: flex-start; gap: 11px; padding: 10px 0; border-bottom: 1px solid var(--line); }
 .person:last-child { border-bottom: 0; }
-.person__swatch { width: 13px; height: 13px; border-radius: 3px; flex: none; }
-.person__name { flex: 1; font-weight: 500; font-size: 15px; }
+.person__swatch { width: 13px; height: 13px; border-radius: 3px; flex: none; margin-top: 4px; }
+.person__main { flex: 1; min-width: 0; }
+.person__name { display: block; font-weight: 500; font-size: 15px; }
 .person__you { font-size: 12px; color: var(--ink-faint); }
-.person__load { flex: none; font-family: var(--mono); font-size: 12px; color: var(--ink-faint); white-space: nowrap; }
+.person__load { flex: none; margin-top: 2px; font-family: var(--mono); font-size: 12px; color: var(--ink-faint); white-space: nowrap; }
+
+/* Unanswered it is a question in the quietest ink on the page; answered it is
+   the answer, in the ink of something worth reading. Either way it is the same
+   tap, because everybody's is everybody's to fill in. */
+.person__diet {
+  display: block; margin-top: 2px; padding: 0; max-width: 100%;
+  background: none; border: 0; text-align: left; cursor: pointer;
+  font: inherit; font-size: 13px; line-height: 1.4; color: var(--ink-faint);
+  overflow-wrap: anywhere;
+}
+.person__diet:hover { color: var(--forest); }
+.person__diet--set { color: var(--ink-soft); }
 
 .invite { margin-top: 18px; }
 .invite__note { margin: 8px 0 0; font-size: 12.5px; color: var(--ink-faint); }
@@ -875,6 +896,90 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 .feed__who { font-weight: 600; flex: none; }
 .feed__what { flex: 1; color: var(--ink-soft); }
 .feed__when { font-family: var(--mono); font-size: 11px; color: var(--ink-faint); flex: none; }
+
+/* ---- the forecast -------------------------------------------------------- */
+
+/* One row per day, and the same five slots on every one of them, so a week is
+   read down the columns rather than parsed a sentence at a time. The word for
+   the weather is the only part allowed to run out of room: the day, the
+   temperatures and the number worth acting on all hold their width. */
+.wx { list-style: none; margin: 0; padding: 0; }
+.wx__day {
+  display: grid; grid-template-columns: 3.6rem 22px 1fr auto 3.4rem;
+  align-items: center; gap: 10px;
+  padding: 8px 0; border-bottom: 1px solid var(--line);
+}
+.wx__day:last-child { border-bottom: 0; }
+.wx__when { font-size: 13.5px; font-weight: 600; white-space: nowrap; }
+.wx__glyph { display: grid; place-items: center; color: var(--forest); }
+.wx__glyph svg { width: 20px; height: 20px; display: block; }
+.wx__word {
+  font-size: 13.5px; color: var(--ink-soft);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* The high is the number people quote and the low is the one that decides
+   whether they sleep, so both are here and only one of them is loud. */
+.wx__temp { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.wx__temp b { font-size: 15px; font-weight: 600; }
+.wx__temp span { margin-left: 5px; font-size: 13px; color: var(--ink-faint); }
+.wx__wet { font-size: 11.5px; color: var(--ink-soft); text-align: right; white-space: nowrap; }
+
+.wx__cut { margin: 12px 0 0; font-size: 12.5px; color: var(--ink-faint); }
+
+/* What the numbers change. This is the half of the card worth reading, so it
+   is separated from the table by a rule rather than a gap, and it ends in
+   things you can act on rather than advice you have to remember. */
+.wx__tips { margin-top: 16px; padding-top: 15px; border-top: 1.5px dashed var(--line-strong); }
+.wx__tip + .wx__tip { margin-top: 15px; }
+.wx__tip p { margin: 0; font-size: 14px; line-height: 1.5; color: var(--ink); }
+.wx__gear { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 9px; }
+.wx__gear .tag { max-width: 100%; }
+
+/* ---- going home ---------------------------------------------------------- */
+
+/* What has not come back. The name of the thing, and who is meant to have it —
+   which on a group thing is only the people who have not said yet, because the
+   two who already loaded theirs are not the ones being asked. */
+.strays { list-style: none; margin: 0; padding: 0; }
+.stray {
+  display: flex; align-items: baseline; gap: 12px;
+  padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 14px;
+}
+.stray:last-child { border-bottom: 0; }
+.stray__what { flex: 1; font-weight: 500; overflow-wrap: anywhere; }
+.stray__who {
+  flex: none; font-family: var(--mono); font-size: 11.5px;
+  color: var(--blaze); white-space: nowrap;
+}
+.strays__more { margin: 10px 0 0; font-size: 11.5px; color: var(--ink-faint); }
+
+/* The one line on your own page that says the question has changed. Standing at
+   the top of the list rather than in the header, because the header is furniture
+   and this is news. */
+.mine__facing {
+  margin: 0 0 14px; padding: 11px 13px; border-radius: var(--r-md);
+  font-size: 13.5px; line-height: 1.5; color: var(--forest-deep);
+  background: #E4EEE5;
+}
+
+/* ---- what people can eat ------------------------------------------------- */
+
+/* Sitting over the food list, in the sunk paper the rest of the app uses for
+   something the page is telling you rather than something you can change. */
+.diets {
+  margin-bottom: 14px; padding: 13px 15px;
+  border-radius: var(--r-md); background: var(--paper-sunk);
+  border: 1.5px solid var(--line);
+}
+.diets > .eyebrow { display: block; margin-bottom: 8px; }
+.diets--sheet { margin: 0 0 16px; }
+.diets__list { list-style: none; margin: 0; padding: 0; }
+.diets__row { display: flex; gap: 10px; align-items: baseline; font-size: 14px; line-height: 1.45; }
+.diets__row + .diets__row { margin-top: 6px; }
+/* The name wears the colour it wears everywhere else, so the line is matched to
+   a face on the trip rather than read as a rule about the food. */
+.diets__who { flex: none; font-weight: 600; color: var(--who); }
+.diets__what { flex: 1; color: var(--ink-soft); overflow-wrap: anywhere; }
 
 /* ==========================================================================
    Tab bar

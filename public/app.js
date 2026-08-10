@@ -37,6 +37,11 @@ const tabById = (id) => TABS.find((t) => t.id === id) ?? TABS[0]
 const currentTab = () => tabById(S.tab)
 const isPlanTab = (tab) => tab.lists.includes('activities')
 
+// Your own page is the one whose heading changes with the trip: on the way out
+// it is what you are carrying to the car, on the way home it is what has to come
+// back off the grass.
+const tabTitle = (tab) => (tab.id === 'mine' && goingHome() ? 'Yours to bring home' : tab.title)
+
 // An item belongs to a list, and the tab is whichever one shows that list. Not
 // the tab you are standing on: your own kit is edited from Mine, and Mine holds
 // no list of its own to take the groups from.
@@ -101,6 +106,10 @@ const S = {
   filter: { kind: '', cat: '', hide: false, q: '' },
   trip: null, members: [], items: [], events: [],
   catalog: null, tips: [],
+  // The forecast for where and when this trip is: `{ key, state, days, advice }`.
+  // Not part of the trip — nobody edits it and it is the same for everybody — so
+  // it is fetched on its own and keyed by the question it answers.
+  wx: null,
   me: null,          // member id
   rev: 0,
   sheet: null,       // { kind, ...payload }
@@ -225,12 +234,30 @@ const catOf = (it) => it.category || 'Other'
 
 const inKind = (it, kind) => !kind || (kind === 'own') === isOwn(it)
 
+// Which way the trip is facing. Off, the lists ask who is bringing what; on,
+// your own page asks what is back in the car. See the pack-down on the Camp tab.
+const goingHome = () => !!S.trip?.going_home
+
+// The second set of ticks, for the way home. Kept apart from `packed` because
+// "I put the stove in the car on Friday" and "the stove is in the car on Sunday"
+// are different facts, and one of them is the only record of who brought what.
+const stowsOn = (it) => it.stows ?? []
+const stowedForMe = (it) => !!S.me && stowsOn(it).includes(S.me)
+
+// Done when everybody who carried a piece of it has their piece back.
+const allStowed = (it) => (isOwn(it)
+  ? stowedForMe(it)
+  : isClaimed(it) && claimsOn(it).every((c) => stowsOn(it).includes(c.member_id)))
+
+// Whichever tick your own page is asking about right now.
+const tickedForMe = (it) => (goingHome() ? stowedForMe(it) : packedForMe(it))
+
 // "Sorted" is whatever the tally at the head of the section already counts as
 // done, so the chip hides exactly what the numbers say is handled: on a list,
 // somebody has put their name to it — or, for your own kit, you have packed it.
 // On your own page everything already has your name on it, so there the only
-// question left is whether it is in the car.
-const isSettled = (it) => (S.tab === 'mine' ? packedForMe(it) : isOwn(it) ? isMine(it) : isClaimed(it))
+// question left is whether it is in the car — going out, or coming home.
+const isSettled = (it) => (S.tab === 'mine' ? tickedForMe(it) : isOwn(it) ? isMine(it) : isClaimed(it))
 
 // Search is the one filter that does not care how the list is organised: you
 // type "sock" because you want the socks, wherever they are filed and whoever
@@ -440,13 +467,16 @@ function barParts(tab, section) {
 function mineParts() {
   const load = myLoad().filter((it) => inKind(it, activeFilter().kind))
   if (!load.length) return { empty: 'nothing yours yet', say: 'Nothing has your name on it.', aria: 'nothing on your list' }
-  const done = load.filter(packedForMe).length
+  const home = goingHome()
+  const done = load.filter(tickedForMe).length
   const left = load.length - done
   return {
     segs: `${done ? seg(done, colorOf(meMember())) : ''}
            ${left ? `<div class="coverage__seg coverage__seg--gap" style="flex:${left}"></div>` : ''}`,
-    say: left === 0 ? `<b>All ${load.length} packed.</b>` : `<b>${left}</b> still to pack`,
-    aria: `you have packed ${done} of ${load.length}`,
+    say: left === 0
+      ? `<b>All ${load.length} ${home ? 'back in.' : 'packed.'}</b>`
+      : `<b>${left}</b> still to ${home ? 'find' : 'pack'}`,
+    aria: `you have ${home ? 'found' : 'packed'} ${done} of ${load.length}`,
   }
 }
 
@@ -536,7 +566,7 @@ function filterBar(all, kinds, count) {
   const settled = all.filter((i) => inKind(i, f.kind) && isSettled(i)).length
   const hideChip = !settled && !f.hide ? '' : `
     <button class="filters__chip" data-act="filter-hide" aria-pressed="${f.hide}">
-      ${ICONS.tickGreen}${S.tab === 'mine' ? 'Hide packed' : 'Hide sorted'}
+      ${ICONS.tickGreen}${S.tab === 'mine' && !goingHome() ? 'Hide packed' : 'Hide sorted'}
       ${settled ? `<span class="filters__n filters__n--quiet">${settled}</span>` : ''}</button>
     <span class="filters__div" aria-hidden="true"></span>`
 
@@ -565,7 +595,7 @@ function noMatch(f) {
   if (f.hide) {
     return `
       <div class="empty">
-        <h3>${S.tab === 'mine' ? 'All packed' : 'All sorted'}</h3>
+        <h3>${S.tab === 'mine' && !goingHome() ? 'All packed' : 'All sorted'}</h3>
         <p>Everything ${f.cat ? `in ${esc(f.cat)} ` : ''}has been dealt with. That is the whole of it hidden.</p>
         <button class="btn" data-act="filter-hide">Show it anyway</button>
       </div>`
@@ -592,24 +622,30 @@ function initials(name) {
 // ring, tap to put your name down), you are bringing it (your colour, tap when
 // it is in the car), packed (filled). It is only ever about you — everybody
 // else's ticks are the faces on the other side of the row.
-function tickBox(item) {
+// On the way home it is the same control asking the other half of the same
+// question — is this in the car — so it keeps its place, its shape and its tap,
+// and only the answer it records changes. There is no third state on that
+// journey: everything on the page is already yours, so nothing needs claiming.
+function tickBox(item, home = false) {
   const own = isOwn(item)
   const claim = own ? null : myClaim(item)
   const on = own || !!claim
-  const done = packedForMe(item)
+  const done = home ? stowedForMe(item) : packedForMe(item)
   const me = meMember()
 
-  const label = own
+  const label = home
+    ? (done ? `${item.title} is back in — untick it` : `Tick ${item.title} when it is back in the car`)
+    : own
     ? (done ? `Yours is packed — untick ${item.title}` : `Tick ${item.title} when yours is packed`)
     : !on ? `Put my name to ${item.title}`
     : done ? `Your share of ${item.title} is packed — untick it`
     : `Tick ${item.title} when your share is packed`
 
-  const cls = done ? ' tick--done' : on ? ' tick--mine' : isClaimed(item) ? '' : ' tick--open'
+  const cls = done ? ' tick--done' : on || home ? ' tick--mine' : isClaimed(item) ? '' : ' tick--open'
   return `
-    <button class="tick${cls}" data-act="tick" data-id="${item.id}" aria-pressed="${done}"
+    <button class="tick${cls}" data-act="${home ? 'stow' : 'tick'}" data-id="${item.id}" aria-pressed="${done}"
             ${me ? `style="--mine:${colorOf(me)}"` : ''} aria-label="${esc(label)}">
-      ${done ? ICONS.tick : on ? '' : ICONS.plus}</button>`
+      ${done ? ICONS.tick : on || home ? '' : ICONS.plus}</button>`
 }
 
 // Who is bringing it. Three faces and a count say what "Josh, Sam and Ali are
@@ -944,7 +980,7 @@ function topbar() {
   // until now. So the h1 says both, out loud, to whoever is listening.
   return `
     <header class="topbar${under ? '' : ' topbar--bare'}">
-      <h1 class="sr-only">${esc(S.trip.name)} — ${esc(S.camp ? CAMP.title : tab.title)}</h1>
+      <h1 class="sr-only">${esc(S.trip.name)} — ${esc(S.camp ? CAMP.title : tabTitle(tab))}</h1>
       <div class="topbar__trip">
         <span class="topbar__title">${esc(S.trip.name)}</span>
         ${meta ? `<span class="topbar__meta">${meta}</span>` : ''}
@@ -1050,6 +1086,7 @@ function listPage() {
   // list is now, and the sheets say what each half means as you use them.
   return `
     <main class="page">
+      ${currentTab().lists.includes('food') ? dietStrip() : ''}
       ${pool.length ? listTools(pool) : ''}
       ${filterBar(all, kinds, count)}
       ${body}
@@ -1062,6 +1099,7 @@ function listPage() {
 // yours — because that changes what the tick beside it means.
 function mineRow(item) {
   const own = isOwn(item)
+  const home = goingHome()
   const others = crew(item).filter((c) => c.member_id !== S.me)
   const from = [
     catOf(item),
@@ -1072,8 +1110,8 @@ function mineRow(item) {
   ].filter(Boolean).join(' · ')
 
   return `
-    <li class="item${packedForMe(item) ? ' item--packed' : ''}">
-      ${tickBox(item)}
+    <li class="item${tickedForMe(item) ? ' item--packed' : ''}">
+      ${tickBox(item, home)}
       <div class="item__main">
         <button class="item__open" data-act="open-item" data-id="${item.id}">
           <span class="item__title">${esc(item.title)}${item.qty ? `<span class="item__qty">${esc(item.qty)}</span>` : ''}</span>
@@ -1090,6 +1128,7 @@ function mineRow(item) {
 // carrying, group and personal together, in the order you would pack it.
 function minePage() {
   const { items: load, kinds } = pageParts()
+  const home = goingHome()
 
   if (!load.length) {
     return `
@@ -1109,26 +1148,29 @@ function minePage() {
   const f = activeFilter()
   const shown = load.filter((it) => matchesFilter(it, f))
   const count = (key) =>
-    [load.filter((it) => (key === 'own') === isOwn(it) && !packedForMe(it)).length, true]
+    [load.filter((it) => (key === 'own') === isOwn(it) && !tickedForMe(it)).length, true]
 
   // Inside a group, what the others are counting on you for comes before what
   // only you would miss.
   const groups = pageGroups().map(([name, items]) => {
     const rows = [...items.filter((i) => !isOwn(i)), ...items.filter(isOwn)]
-    return groupSection(name, `${rows.filter(packedForMe).length}/${rows.length} packed`,
+    return groupSection(name, `${rows.filter(tickedForMe).length}/${rows.length} ${home ? 'back in' : 'packed'}`,
       `<ul class="items">${rows.map(mineRow).join('')}</ul>`)
   }).join('')
 
   // "That is the lot" is a claim about your whole load, so a filter that hides
   // half of it has no business making the claim.
-  const done = !f.kind && !f.cat && !f.hide && !f.q && load.every(packedForMe)
+  const done = !f.kind && !f.cat && !f.hide && !f.q && load.every(tickedForMe)
 
   return `
     <main class="page">
+      ${home ? `<p class="mine__facing">Heading home. Everything below is something you brought — tick it when it is back in the car.</p>` : ''}
       ${listTools(load)}
       ${filterBar(load, kinds, count)}
       ${shown.length ? groups : noMatch(f)}
-      ${done ? '<p class="mine__done">That is the lot. Nothing left on your list.</p>' : ''}
+      ${done ? `<p class="mine__done">${home
+        ? 'That is the lot. Everything of yours is accounted for.'
+        : 'That is the lot. Nothing left on your list.'}</p>` : ''}
     </main>`
 }
 
@@ -1197,6 +1239,191 @@ function mapsHref(trip) {
 // A plan can be somewhere other than the campsite, and usually the one that
 // matters — nobody needs directions to the tent they are sleeping in.
 const itemHref = (item) => mapsLink(item.lat, item.lon, item.place)
+
+// ---- weather ----------------------------------------------------------------
+
+// A forecast is the one thing on the Camp tab nobody has to fill in: the trip
+// already knows where it is and when it is. What it is worth is not the numbers
+// but what they change — a wet Saturday is the reason a tarp exists — so the
+// card ends in things you can put on the list in one tap.
+
+// WMO codes, which is what a forecast actually comes back as: what to call each
+// one, and which of the glyphs below to draw for it.
+const WX_WORDS = {
+  0: ['Clear', 'sun'], 1: ['Mostly clear', 'sun'], 2: ['Partly cloudy', 'part'], 3: ['Overcast', 'cloud'],
+  45: ['Fog', 'fog'], 48: ['Freezing fog', 'fog'],
+  51: ['Light drizzle', 'drizzle'], 53: ['Drizzle', 'drizzle'], 55: ['Heavy drizzle', 'drizzle'],
+  56: ['Freezing drizzle', 'drizzle'], 57: ['Freezing drizzle', 'drizzle'],
+  61: ['Light rain', 'rain'], 63: ['Rain', 'rain'], 65: ['Heavy rain', 'rain'],
+  66: ['Freezing rain', 'rain'], 67: ['Freezing rain', 'rain'],
+  71: ['Light snow', 'snow'], 73: ['Snow', 'snow'], 75: ['Heavy snow', 'snow'], 77: ['Snow grains', 'snow'],
+  80: ['Showers', 'showers'], 81: ['Showers', 'showers'], 82: ['Heavy showers', 'showers'],
+  85: ['Snow showers', 'snow'], 86: ['Snow showers', 'snow'],
+  95: ['Thunderstorms', 'storm'], 96: ['Thunder and hail', 'storm'], 99: ['Thunder and hail', 'storm'],
+}
+
+const WX_ICONS = {
+  sun: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="4.2"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.9 5.9l1.4 1.4M16.7 16.7l1.4 1.4M18.1 5.9l-1.4 1.4M7.3 16.7l-1.4 1.4"/></svg>',
+  part: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="8.5" cy="8" r="3.2"/><path d="M8.5 2.4v1.6M2.9 8h1.6M4.6 4.1l1.1 1.1M12.4 4.1l-1.1 1.1"/><path d="M9 19.5h8.6a3.1 3.1 0 0 0 .3-6.2 4.4 4.4 0 0 0-8.4-.9A3.6 3.6 0 0 0 9 19.5Z"/></svg>',
+  cloud: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7.4 18.5h9.8a3.4 3.4 0 0 0 .3-6.8 4.9 4.9 0 0 0-9.4-1 4 4 0 0 0-.7 7.8Z"/></svg>',
+  fog: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7.4 14h9.8a3.4 3.4 0 0 0 .3-6.8 4.9 4.9 0 0 0-9.4-1 4 4 0 0 0-.7 7.8Z"/><path d="M4.5 17.5h15M7 21h11"/></svg>',
+  drizzle: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7.4 14.5h9.8a3.4 3.4 0 0 0 .3-6.8 4.9 4.9 0 0 0-9.4-1 4 4 0 0 0-.7 7.8Z"/><path d="M9 18v1.2M12.5 18v1.2M16 18v1.2"/></svg>',
+  rain: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7.4 14h9.8a3.4 3.4 0 0 0 .3-6.8 4.9 4.9 0 0 0-9.4-1 4 4 0 0 0-.7 7.8Z"/><path d="M8.6 17.4 7.8 20M12.4 17.4l-.8 2.6M16.2 17.4l-.8 2.6"/></svg>',
+  showers: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="6.6" r="2.6"/><path d="M8 1.8v1.2M3.4 6.6h1.2"/><path d="M9.4 15.8h7.8a3.1 3.1 0 0 0 .3-6.2 4.4 4.4 0 0 0-8.4-.9 3.6 3.6 0 0 0 .3 7.1Z"/><path d="M10.6 18.6l-.7 2.4M15.4 18.6l-.7 2.4"/></svg>',
+  snow: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7.4 13.6h9.8a3.4 3.4 0 0 0 .3-6.8 4.9 4.9 0 0 0-9.4-1 4 4 0 0 0-.7 7.8Z"/><path d="M9 17.4v2.4M7.9 18l2.2 1.2M10.1 18 7.9 19.2M15 17.4v2.4M13.9 18l2.2 1.2M16.1 18l-2.2 1.2"/></svg>',
+  storm: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7.4 13.6h9.8a3.4 3.4 0 0 0 .3-6.8 4.9 4.9 0 0 0-9.4-1 4 4 0 0 0-.7 7.8Z"/><path d="M13.2 16.2h-2.6l-1.4 3.2h2l-1 2.6 3.6-4h-1.8l1.2-1.8Z"/></svg>',
+}
+
+const wxOf = (code) => WX_WORDS[code] ?? ['Unsettled', 'cloud']
+
+// The question a forecast answers, as a string: where, and which days. Change any
+// part of it and the answer on screen belongs to a different trip.
+const wxKey = (t) => (t && t.lat != null && t.lon != null && t.start_date
+  ? `${t.lat},${t.lon},${t.start_date},${t.end_date || t.start_date}`
+  : '')
+
+// Only ever asked once per question, and never at all until the Camp tab is on
+// screen — see the tail of render(). The answer is thrown away when the question
+// changes, which is what stops last week's forecast sitting under a new pin.
+function wantWeather() {
+  const key = wxKey(S.trip)
+  if (!key || S.wx?.key === key) return
+  S.wx = { key, state: 'load' }
+  loadWeather(key)
+}
+
+async function loadWeather(key) {
+  const [lat, lon, start, end] = key.split(',')
+  const q = new URLSearchParams({ lat, lon, start, end })
+  try {
+    const data = await (await fetch(`/api/weather?${q}`)).json()
+    // Somebody moved the trip while this was in the air.
+    if (S.wx?.key !== key) return
+    S.wx = { key, state: 'ok', days: [], advice: [], ...data }
+  } catch {
+    if (S.wx?.key !== key) return
+    S.wx = { key, state: 'fail' }
+  }
+  if (S.camp) render()
+}
+
+const wxDay = (iso) => {
+  const d = new Date(`${iso}T12:00:00`)
+  return Number.isNaN(+d) ? iso : d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric' })
+}
+
+// The first day the forecast will reach a trip that is still too far off, so the
+// card can say when to come back rather than just that it cannot help.
+function wxOpens(start) {
+  const d = new Date(`${start}T12:00:00`)
+  if (Number.isNaN(+d)) return ''
+  d.setDate(d.getDate() - 15)
+  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'long' })
+}
+
+function wxRow(d) {
+  const [word, glyph] = wxOf(d.code)
+  // Two numbers per row and no more. Rain is the one people act on, so it gets
+  // the third slot when there is any to speak of, and the wind takes it when
+  // there is more of that than of rain.
+  const wet = d.pop !== null && d.pop >= 20 ? `${Math.round(d.pop)}%` : ''
+  const blow = !wet && d.wind !== null && d.wind >= 30 ? `${Math.round(d.wind)} km/h` : ''
+  const title = [
+    d.rain !== null ? `${d.rain.toFixed(1)} mm of rain` : '',
+    d.wind !== null ? `wind to ${Math.round(d.wind)} km/h` : '',
+  ].filter(Boolean).join(', ')
+
+  return `
+    <li class="wx__day">
+      <span class="wx__when">${esc(wxDay(d.date))}</span>
+      <span class="wx__glyph" aria-hidden="true">${WX_ICONS[glyph]}</span>
+      <span class="wx__word">${esc(word)}</span>
+      <span class="wx__temp">${d.hi === null ? '' : `<b>${Math.round(d.hi)}°</b>`}${
+        d.lo === null ? '' : `<span>${Math.round(d.lo)}°</span>`}</span>
+      <span class="wx__wet mono" ${title ? `title="${esc(title)}"` : ''}>${esc(wet || blow)}</span>
+    </li>`
+}
+
+// What the forecast means for the list, and the way to act on it. Anything
+// already on the trip is dropped: an offer to add the tarp you packed last night
+// is the app not paying attention.
+function wxAdvice(advice) {
+  const have = new Set(S.items.map((i) => i.title.toLowerCase()))
+  const tips = (advice ?? []).map((a) => ({
+    ...a, gear: (a.gear ?? []).filter((g) => !have.has(g.title.toLowerCase())),
+  }))
+  if (!tips.length) return ''
+
+  return `
+    <div class="wx__tips">
+      ${tips.map((a) => `
+        <div class="wx__tip">
+          <p>${esc(a.say)}</p>
+          ${a.gear.length ? `<div class="wx__gear">${a.gear.map((g) => `
+            <button class="tag" data-act="wx-add" data-tip="${esc(a.id)}" data-title="${esc(g.title)}">
+              ${ICONS.plus}${esc(g.title)}</button>`).join('')}</div>` : ''}
+        </div>`).join('')}
+    </div>`
+}
+
+function weatherCard() {
+  const t = S.trip
+  // Nothing to forecast for and nothing worth nudging about: a trip with no
+  // dates has not got to the point where the weather is a question.
+  if (!t.start_date) return ''
+
+  // A place typed by hand has no coordinates behind it, so there is nowhere to
+  // ask about. Worth one line, because the fix is to pick the place from the
+  // search — and the same pin is what turns the map button into a real one.
+  if (t.lat == null || t.lon == null) {
+    return `
+      <div class="card">
+        <h3>Weather</h3>
+        <p class="card__body">Pick the site from the search under <b>Getting there</b> and the forecast comes with it. A place typed by hand has no coordinates to look one up from.</p>
+      </div>`
+  }
+
+  const wx = S.wx?.key === wxKey(t) ? S.wx : null
+
+  if (!wx || wx.state === 'load') {
+    return `<div class="card" aria-busy="true"><h3>Weather</h3><div class="skel"></div></div>`
+  }
+  // The trip is over. The pack-down card is the one with something to say now.
+  if (wx.reason === 'past') return ''
+
+  if (wx.reason === 'far') {
+    const opens = wxOpens(t.start_date)
+    return `
+      <div class="card">
+        <h3>Weather</h3>
+        <p class="card__body">Too far off to forecast — nothing beyond about a fortnight is worth packing for.${
+          opens ? ` Check back around <b>${esc(opens)}</b>.` : ''}</p>
+      </div>`
+  }
+
+  if (wx.state === 'fail' || !wx.days.length) {
+    return `
+      <div class="card">
+        <h3>Weather</h3>
+        <p class="card__body">Can't reach the forecast right now. It is somebody else's server, and nothing else on the trip depends on it.</p>
+      </div>`
+  }
+
+  // A forecast kept from the last time there was signal is still worth reading,
+  // as long as it says how old it is. "now" would read as "now ago".
+  const age = wx.at ? ago(wx.at) : ''
+
+  return `
+    <div class="card">
+      <div class="card__head">
+        <h3>Weather</h3>
+        ${age ? `<span class="card__stamp mono">${age === 'now' ? 'just checked' : `checked ${age} ago`}</span>` : ''}
+      </div>
+      <ul class="wx">${wx.days.map(wxRow).join('')}</ul>
+      ${wx.cut ? '<p class="wx__cut">The rest of the trip is past what anyone can forecast yet.</p>' : ''}
+      ${wxAdvice(wx.advice)}
+    </div>`
+}
 
 // Where the trip is, in one place and one field. The card owns it because this
 // is what people come back for the night before they drive — the header only
@@ -1267,6 +1494,101 @@ function notesCard() {
     </div>`
 }
 
+// ---- what people can eat ----------------------------------------------------
+
+// Everyone with something to avoid. Shared on purpose, unlike personal kit: the
+// whole value of writing it down is that whoever ends up cooking finds out
+// without going round the table asking.
+const diets = () => S.members.filter((m) => String(m.diet ?? '').trim())
+
+// It belongs at the top of the list people claim food from, not on a page about
+// people: the moment it matters is the moment somebody says they will do Saturday
+// dinner. Drawn only when there is something to say — a heading over an empty
+// list would be on every Eat tab forever, and the way to fill it in is on the
+// Camp tab beside the person it is about.
+function dietStrip() {
+  const needs = diets()
+  if (!needs.length) return ''
+  return `
+    <div class="diets">
+      <span class="eyebrow">At the table</span>
+      <ul class="diets__list">
+        ${needs.map((m) => `
+          <li class="diets__row">
+            <span class="diets__who" style="--who:${colorOf(m)}">${esc(m.name)}</span>
+            <span class="diets__what">${esc(m.diet)}</span>
+          </li>`).join('')}
+      </ul>
+    </div>`
+}
+
+// ---- going home -------------------------------------------------------------
+
+// Everything this device can know about what came on the trip: the group's
+// things that somebody put their name to, and your own kit. Other people's
+// personal kit is not here to be counted, which the card says out loud rather
+// than quietly reporting a number that is only most of the answer.
+const brought = () => S.items.filter((it) => !isPlan(it) && (isOwn(it) ? isMine(it) : isClaimed(it)))
+
+// The pack-down. Off until the trip is actually happening, because "is this back
+// in the car?" is a nonsense question on a Tuesday three weeks out — and offered
+// rather than switched on for you, because only the people there know when they
+// have started packing up.
+function homeCard() {
+  const home = goingHome()
+  const c = countdown(S.trip)
+  const under = c && (c.word === 'Happening now' || c.word === 'Back home')
+  // A trip with no dates never becomes "under way" on its own, so something
+  // being in a car is the only sign there is that it has started.
+  const gone = !c && S.items.some((it) => (isOwn(it) ? isMine(it) : claimsOn(it).some((x) => x.packed)))
+  if (!home && !under && !gone) return ''
+
+  if (!home) {
+    return `
+      <div class="card">
+        <h3>Going home</h3>
+        <p>Turn this on while you are packing up. Everything anybody brought becomes something to find again, and whatever nobody ticks back in is what gets left in the grass.</p>
+        <button class="btn btn--primary btn--wide" data-act="home-on">Start the pack-down</button>
+      </div>`
+  }
+
+  const load = brought()
+  const back = load.filter(allStowed)
+  const strays = load.filter((it) => !allStowed(it))
+  const shown = strays.slice(0, 6)
+
+  return `
+    <div class="card">
+      <div class="card__head">
+        <h3>Going home</h3>
+        <span class="card__stamp mono">${back.length}/${load.length} back in</span>
+      </div>
+      ${strays.length ? `
+        <p>Still out there. A group thing is only back once everybody who carried a piece of it says so.</p>
+        <ul class="strays">
+          ${shown.map((it) => {
+            const who = isOwn(it)
+              ? 'yours'
+              : crew(it).filter((x) => !stowsOn(it).includes(x.member_id))
+                .map((x) => x.member.name).join(', ')
+            return `
+              <li class="stray">
+                <span class="stray__what">${esc(it.title)}</span>
+                <span class="stray__who">${esc(who || 'nobody')}</span>
+              </li>`
+          }).join('')}
+        </ul>
+        ${strays.length > shown.length
+          ? `<p class="strays__more mono">and ${strays.length - shown.length} more</p>` : ''}` : `
+        <p class="card__body">Everything on the lists is accounted for. Have a look round the pitch anyway — that is where the pegs live.</p>`}
+      <div class="where__go">
+        <button class="btn btn--primary" data-act="tab" data-tab="mine">Tick off yours</button>
+        <button class="btn btn--quiet" data-act="home-off">Back to packing</button>
+      </div>
+      <p class="invite__note">Other people's personal kit is private, so it is not in that count — only the group's things and your own.</p>
+    </div>`
+}
+
 function peopleCard() {
   // What somebody is bringing for the group. Personal kit is theirs, and
   // organising a hike is not a thing you carry.
@@ -1287,10 +1609,20 @@ function peopleCard() {
       <div class="people">
         ${S.members.map((m) => {
           const n = load.get(m.id) ?? 0
+          const diet = String(m.diet ?? '').trim()
+          // Every row offers the question, whether or not it has been answered.
+          // It is one quiet line, and it is the only thing that makes the field
+          // findable — a person who has nothing to avoid still has to be able to
+          // fill in the person who does.
           return `
             <div class="person">
               <span class="person__swatch" style="background:${colorOf(m)}"></span>
-              <span class="person__name">${esc(m.name)}${m.id === S.me ? ' <span class="person__you mono">you</span>' : ''}</span>
+              <span class="person__main">
+                <span class="person__name">${esc(m.name)}${m.id === S.me ? ' <span class="person__you mono">you</span>' : ''}</span>
+                <button class="person__diet${diet ? ' person__diet--set' : ''}" data-act="diet" data-id="${m.id}"
+                        aria-label="${diet ? `Change what ${esc(m.name)} can eat` : `Say what ${esc(m.name)} can't eat`}">
+                  ${diet ? esc(diet) : m.id === S.me ? 'Anything you avoid?' : 'Dietary needs?'}</button>
+              </span>
               <span class="person__load">${n ? `${packed.get(m.id) ?? 0} of ${n} packed` : 'nothing yet'}</span>
               ${m.id === S.me ? '' : `<button class="item__kill" data-act="drop-member" data-id="${m.id}" aria-label="Remove ${esc(m.name)}">${ICONS.x}</button>`}
             </div>`
@@ -1321,6 +1653,8 @@ function campPage() {
   return `
     <main class="page">
       ${statusCard()}
+      ${homeCard()}
+      ${weatherCard()}
       ${whereCard()}
       ${notesCard()}
       ${peopleCard()}
@@ -1369,7 +1703,7 @@ function campPage() {
 // nobody is bringing this. Your own tab is the one place the other question
 // belongs: how much of your load is still sitting in the house.
 function tabFlag(tab) {
-  if (tab.id === 'mine') return myLoad().filter((it) => !packedForMe(it)).length
+  if (tab.id === 'mine') return myLoad().filter((it) => !tickedForMe(it)).length
   return tab.lists.length ? statsFor(itemsOn(tab)).open : 0
 }
 
@@ -1477,6 +1811,22 @@ function sheetItem(s) {
       </button>`
   }).join('')
 
+  // Putting your name to Saturday dinner is the moment what somebody cannot eat
+  // stops being a fact about them and becomes a fact about the shopping. So it
+  // is said here, where the decision is, as well as at the top of the list.
+  const feeding = (item.list === 'food' || item.list === 'drinks') ? diets() : []
+  const table = !feeding.length ? '' : `
+    <div class="diets diets--sheet">
+      <span class="eyebrow">Before you take this on</span>
+      <ul class="diets__list">
+        ${feeding.map((m) => `
+          <li class="diets__row">
+            <span class="diets__who" style="--who:${colorOf(m)}">${esc(m.name)}</span>
+            <span class="diets__what">${esc(m.diet)}</span>
+          </li>`).join('')}
+      </ul>
+    </div>`
+
   // The item, and then the names. There is no separate "I'll bring it" button:
   // your own name is in the list like everybody else's, and tapping it is the
   // same tap — a shortcut that duplicates the row underneath it only makes you
@@ -1488,6 +1838,7 @@ function sheetItem(s) {
       : 'As many of you as it takes. Each person ticks off their own share.',
     body: `
       ${kindSwitch}
+      ${table}
       ${rows}
       <div style="margin-top:18px">
         <form data-act="add-member">
@@ -1567,6 +1918,31 @@ function sheetPlace(s) {
       ${link ? `
         <a class="btn btn--wide" style="margin-top:10px" href="${esc(link)}"
            target="_blank" rel="noopener noreferrer">${ICONS.pin} Open in maps</a>` : ''}`,
+  })
+}
+
+// One line per person, and it is everybody's to fill in: the person who knows
+// about the nut allergy is as often whoever booked the pitch as whoever has it.
+// So the sheet is the same either way and only the wording moves.
+function sheetDiet(s) {
+  const m = memberById(s.id)
+  if (!m) return ''
+  const self = m.id === S.me
+  const set = String(m.diet ?? '').trim()
+
+  return sheetShell({
+    title: self ? 'What you avoid' : `What ${m.name} avoids`,
+    blurb: 'Everyone on the trip can see this, which is the point — whoever ends up cooking should not have to ask around.',
+    body: `
+      <form data-act="save-diet" data-id="${m.id}">
+        <label class="field"><span>Allergies, and anything ${self ? 'you' : 'they'} do not eat</span>
+          <input name="diet" maxlength="200" autofocus value="${esc(set)}"
+                 placeholder="Vegetarian. No nuts — carries an EpiPen."></label>
+        <button class="btn btn--primary btn--wide" type="submit">Save</button>
+      </form>
+      ${set ? `
+        <button class="btn btn--quiet btn--wide" style="margin-top:10px"
+                data-act="clear-diet" data-id="${m.id}">Remove it</button>` : ''}`,
   })
 }
 
@@ -1677,7 +2053,7 @@ let sheetSig = null
 
 function renderSheet() {
   if (!S.sheet) { sheetRoot.innerHTML = ''; sheetSig = null; return }
-  const map = { item: sheetItem, edit: sheetEdit, add: sheetAdd, suggest: sheetSuggest, place: sheetPlace }
+  const map = { item: sheetItem, edit: sheetEdit, add: sheetAdd, suggest: sheetSuggest, place: sheetPlace, diet: sheetDiet }
   const html = map[S.sheet.kind]?.(S.sheet) ?? ''
   const sig = `${S.sheet.kind}:${S.sheet.id ?? ''}`
   const open = sheetRoot.querySelector('.sheet')
@@ -1743,6 +2119,12 @@ function render() {
     const found = root.querySelector('#cs-find')
     if (found) { found.focus(); found.setSelectionRange(caret.start, caret.end) }
   }
+
+  // Asked for after the page is on screen, and only where it is shown: the
+  // forecast is the one thing here that comes from somewhere else, so nothing
+  // waits on it. It answers once per question — see wantWeather — so this being
+  // in render() costs a string comparison and nothing else.
+  if (S.view === 'trip' && S.camp) wantWeather()
 }
 
 // ---- actions ----------------------------------------------------------------
@@ -2148,10 +2530,58 @@ document.addEventListener('click', async (ev) => {
       break
     }
 
+    // The same tap on the way home, recording the other journey. No claiming
+    // step: by Sunday whoever brought a thing is whoever has to find it.
+    case 'stow':
+      if (!S.me) { toast('Join the trip first.'); break }
+      mutate(() => api(`/items/${el.dataset.id}/stow`, { method: 'POST', body: { memberId: S.me } }))
+      break
+
     case 'own':
       if (!S.me) { toast('Join the trip first.'); break }
       mutate(() => api(`/items/${el.dataset.id}/own`, { method: 'POST', body: { memberId: S.me } }))
       break
+
+    // Which way the trip is facing, flipped by whoever notices it is over — and
+    // flippable back, because a pack-down that carries on into Monday is normal
+    // and finding the mallet in the boot is not a reason to be stuck.
+    case 'home-on':
+    case 'home-off': {
+      const home = act === 'home-on'
+      await mutate(() => api(`/trips/${S.trip.id}`, { method: 'PATCH', body: { going_home: home } }))
+      toast(home
+        ? 'Pack-down started. Your list is asking what is back in the car.'
+        : 'Back to packing.')
+      break
+    }
+
+    case 'diet':
+      S.sheet = { kind: 'diet', id: el.dataset.id }
+      renderSheet()
+      break
+
+    case 'clear-diet': {
+      const id = el.dataset.id
+      S.sheet = null
+      renderSheet()
+      await mutate(() => api(`/trips/${S.trip.id}/members/${id}`, { method: 'PATCH', body: { diet: '' } }))
+      break
+    }
+
+    // The forecast said it was worth having and the list did not have it. The
+    // catalogue entry came down with the advice, so this adds the real thing —
+    // its heading and the note explaining why — rather than a bare title.
+    case 'wx-add': {
+      const tip = (S.wx?.advice ?? []).find((a) => a.id === el.dataset.tip)
+      const gear = tip?.gear?.find((g) => g.title === el.dataset.title)
+      if (!gear) break
+      if (gear.kind === 'own' && !S.me) { toast('Join the trip first.'); break }
+      await mutate(() => api(`/trips/${S.trip.id}/items`, { method: 'POST', body: gear }))
+      toast(gear.kind === 'own'
+        ? `${gear.title} is on your own list.`
+        : `${gear.title} is on the packing list.`)
+      break
+    }
 
     case 'set-kind':
       // The sheet stays open, so you see the model you just chose.
@@ -2397,6 +2827,17 @@ document.addEventListener('submit', async (ev) => {
       await mutate(() => api(`/trips/${S.trip.id}`, { method: 'PATCH', body: { notes: f.notes } }))
       toast('Everyone can see that now.')
       break
+
+    case 'save-diet': {
+      const id = form.dataset.id
+      S.sheet = null
+      renderSheet()
+      await mutate(() => api(`/trips/${S.trip.id}/members/${id}`, { method: 'PATCH', body: { diet: f.diet } }))
+      toast(String(f.diet ?? '').trim()
+        ? 'Saved. It shows on the food list now.'
+        : 'Removed.')
+      break
+    }
   }
 })
 
