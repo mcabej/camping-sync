@@ -1,6 +1,8 @@
 import express from 'express'
 import { fileURLToPath } from 'node:url'
-import { dirname, join } from 'node:path'
+import { createHash } from 'node:crypto'
+import { readFileSync } from 'node:fs'
+import { basename, dirname, join } from 'node:path'
 import {
   db, uid, now, newTripCode, bumpRev, logEvent, getTripState, nextPosition,
 } from './lib/db.js'
@@ -604,8 +606,46 @@ app.post('/api/items/:id/vote', (req, res) => {
 
 // ---- static -----------------------------------------------------------------
 
-app.use(express.static(join(__dirname, 'public'), { maxAge: '1h', index: 'index.html' }))
-app.get('/{*path}', (_req, res) => res.sendFile(join(__dirname, 'public', 'index.html')))
+const PUBLIC = join(__dirname, 'public')
+
+// Every asset is referenced by a hash of its own bytes, so `/app.js?v=<hash>`
+// names one exact build and can be kept for a year. A deploy changes the bytes,
+// which changes the hash, which changes the URL — so phones fetch the new file
+// instead of sitting on an hour-old copy of the old one. Nothing is ever
+// invalidated; the old URL is simply no longer pointed at.
+const ASSETS = ['app.js', 'styles.css']
+const assetVersions = new Map(ASSETS.map((name) => [
+  name,
+  createHash('sha256').update(readFileSync(join(PUBLIC, name))).digest('hex').slice(0, 8),
+]))
+
+// Hashes are stamped into the markup once, at boot. Only root-relative hrefs and
+// srcs are candidates, which leaves the data: icon and the Google Fonts links
+// alone, and an unrecognised name is passed through untouched.
+const indexHtml = readFileSync(join(PUBLIC, 'index.html'), 'utf8')
+  .replace(/\b(href|src)="\/([^"?]+)"/g, (whole, attr, name) => (
+    assetVersions.has(name) ? `${attr}="/${name}?v=${assetVersions.get(name)}"` : whole
+  ))
+
+// index.html is the pointer carrying the current hashes, so it is the one file
+// that must never be held: a stale copy here means a stale copy of everything.
+const sendIndex = (_req, res) => res.set('Cache-Control', 'no-cache').type('html').send(indexHtml)
+
+app.get('/', sendIndex)
+
+app.use(express.static(PUBLIC, {
+  index: false,
+  setHeaders(res, path) {
+    // Only a URL carrying the hash that matches the file earns the long life,
+    // because that is the only URL whose bytes cannot change under it. A bare
+    // /app.js stays reachable and keeps revalidating.
+    if (res.req.query.v && res.req.query.v === assetVersions.get(basename(path))) {
+      res.set('Cache-Control', 'public, max-age=31536000, immutable')
+    }
+  },
+}))
+
+app.get('/{*path}', sendIndex)
 
 const port = process.env.PORT || 3000
 app.listen(port, () => console.log(`camping-sync listening on :${port}`))
