@@ -7,7 +7,8 @@ until somebody fixes that.
 ## What it does
 
 - **Pack / Eat / Plan** — four shared lists (drinks sit under Eat), grouped by
-  category.
+  category — except Plan, which groups by the days of the trip once anything has
+  one.
 - **For the group vs personal kit** — one tent covers four people; one sleeping
   bag covers one. Group items are claimed by a single person. Personal items
   (`kind = 'own'`) can't be claimed at all — every person ticks off their own,
@@ -37,6 +38,11 @@ until somebody fixes that.
   location that matters: nobody needs directions to the tent they are sleeping
   in, and "the sunset spot" means nothing to whoever has not been there. The
   chip on the row opens the same search box, with the map link behind it.
+- **Days** — a strip of the trip's days over the Eat and Plan lists.
+  Press Sunday and the page is Sunday, so "have we actually got Sunday lunch
+  covered?" is one tap rather than a question the app cannot answer. Plans also
+  group by day, which turns that tab into an itinerary. Optional everywhere, and
+  invisible until the trip has dates.
 - **Weather** — the trip already knows where and when it is, so the forecast
   needs nothing from anybody. Days on the Camp tab, and what they mean for the
   list offered as one-tap adds: a wet Saturday is the reason a tarp exists.
@@ -97,7 +103,9 @@ added and known one-each titles are flipped over, using the catalogue.
 
 Items carry the same trio as a trip — `place`, `lat`, `lon` — filled in by the
 same search. Only plans offer it in the UI, since a place on a bag of sausages
-answers a question nobody asked, but the columns are on every item.
+answers a question nobody asked, but the columns are on every item. `day` and
+`time` follow the same rule: on every row, offered only where when is a real
+question. See *Days*.
 
 Where a trip is used to be two columns — `location` for what you called it,
 `address` for where it actually was — which let a trip say "the lake" and stop
@@ -176,6 +184,252 @@ discovered by somebody wondering where the tarp button went.
 The client asks once per question — the pin and the dates — and only while the
 Camp tab is on screen; move the trip and the old answer is dropped rather than
 left sitting under a new pin. Anything already on the list is not offered again.
+
+### Days
+
+`day` on `items` is an ISO date and `time` is `HH:MM`, both empty by default and
+both optional for good. A trip in March has no dates yet, and most of what goes
+on a list is not any particular day's — so a page with nothing dated on it is the
+page it has always been, grouped by category, rather than a broken version of the
+dated one. Existing rows migrate to no day at all, because nothing already on a
+trip can be dated by guesswork: a dinner is not Saturday's because the trip has a
+Saturday.
+
+The server checks the shape and nothing else. A day outside the trip's dates is
+not the same kind of wrong as half a coordinate — the dates themselves move, and
+a plan that was Sunday's until somebody shortened the trip is still what somebody
+meant — so it is kept and drawn where it falls. Anything that is not a day at all
+becomes no day.
+
+**Three values, not two.** `day` was doing two jobs at once and they are different
+answers: "nobody has said yet" and "this one is for the whole trip". The teabags
+are for every day; a dinner nobody has slotted is for none of them *yet*. Spelling
+both as an empty string meant pressing Sunday could say *Nothing on Sun 6 Sep*
+with the bread to cover it sitting on the list, and it meant the `No day` chip
+filled up with things that were never going to have one. So the column — already
+`TEXT`, so nothing underneath had to move — takes an ISO date, the empty string,
+or `any`.
+
+`Any day` is one name for two meanings, and they are the same meaning to whoever
+taps it: *not on a particular day*. What differs is what that is worth on each
+tab. Food for any day is on the list for Sunday, so pressing Sunday shows it and
+the pill writes `any`. A plan for any day is **not** happening on Sunday — it is
+waiting for somebody to say when — so there the pill writes no day at all and the
+plan sits under `All` until it has one. Which leaves food with a third state that
+has no pill, because it is what nothing pressed looks like: nobody has answered.
+That is the pile `No day` is for, and it is the one worth being able to see.
+
+A day of the trip therefore holds what was put on that day *plus* what was put on
+all of them, and the rows that are there every day keep saying so even when
+standing on a day would otherwise say it for them — otherwise the page cannot
+tell what it has for Saturday from what it has all week, which is the whole
+reason both are on it.
+
+**One day per row, and instant noodles three nights running is three rows.** Both
+day pickers are a multiple choice — the add sheet's and the one on an item that
+already exists — but what neither does is let a row span days, and that is the
+deliberate part. Everything this app counts hangs off a row: who has put their
+name to it, whether their share is in the car, whether the day is covered. One
+row standing for three dinners would have Sunday covered the moment somebody
+agreed to bring Friday's, and blaze means exactly one thing here — nobody has
+picked this up. Three nights of noodles is three things to pick up, so it is
+three rows, and the sheet says so before you tick the second day.
+
+That makes the When sheet a question about **the thing rather than the row it was
+opened from**. Its pills are pressed for every day this thing is on, where "this
+thing" is every row with the same name, on the same list, in the same group, in
+the same half of it — so bacon on Thursday and bacon on Friday are one question
+with two answers, while noodles at lunch and noodles at dinner stay two separate
+questions rather than one Saturday that cannot say which of them it means. One
+tap is then one of four things:
+
+- **an empty day, on a thing that has days already** — a second row on that day,
+  carrying everything that describes it and none of what happened to it: no
+  claims, no packed ticks, because agreeing to bring Friday's is not agreeing to
+  bring Sunday's;
+- **an empty day, on a thing with no day at all** — a move rather than a copy.
+  Giving something its first day is the commonest thing this sheet is opened for,
+  and starting a fresh unclaimed row would quietly drop the name of whoever had
+  already said they would bring it;
+- **a day it is on, with others left** — that day's row goes. If somebody has put
+  their name to it, it says whose before it does;
+- **the only day it is on** — set loose rather than removed. "We are having
+  noodles, just not saying when" is an answer; a thing with no rows left is a
+  thing deleted, and that is what Remove is for.
+
+If the row going is the one the sheet was opened on, the sheet is pointed at a
+surviving sibling first, so it stays open on the same question.
+
+The fan-out is one request, because the items endpoint already took a batch for
+the suggestions flow. Standing on a day when you add to three, two of them land
+where you cannot see them, so that is the one case the add sheet says anything
+afterwards. And the trip feed distinguishes the two: the same title on as many
+distinct days as there are rows is logged as "added Instant noodles on 3 days"
+rather than as three unrelated things.
+
+*Twice in one day* needs nothing new. On Eat the category **is** the meal, so
+noodles at lunch and noodles at dinner are already two rows, which is right —
+they are two meals somebody has to bring enough for. On Plan, `time` separates
+them.
+
+Reading by day is a **strip at the top of the page**, on Eat and Plan: `All` at
+the left-hand end where the thumb starts, then one tab per day of the trip,
+weekday over date the way every calendar draws it. It is a filter — press Sunday
+and the page *is* Sunday.
+
+It spent a while in the sticky header, on the argument that "what about Sunday"
+is asked halfway down a list rather than at the top of one. That was wrong twice
+over. The header is the one part of the screen that only ever says which trip you
+are on, and a control in it reads as part of the app rather than part of the
+list. And the page already had a row of chips doing exactly this job, so the list
+was narrowing itself from two places at once, one of them out of reach of the
+other. Down here the day is simply the first and widest of three narrowings —
+which day, then find one thing, then who is bringing it — and it scrolls away
+with them, which is the same argument the chips themselves won when they came out
+of the header. A list with nothing on it gets none of the three: there is no day
+of the trip on which nothing is still nothing.
+
+There is one box in the row and it is the answer. Every tab carried the same
+outline at first, which made five rectangles competing for a row that is really
+one line of text with one thing chosen in it, and an outline that never varies
+says nothing worth the ink. The days are text, the pressed one is filled — in the
+same forest a pressed chip is filled, because on the page the two rows are one
+control in two halves and should not answer differently — and the tap target is
+unchanged because it was the padding carrying it and not the border.
+
+What the strip did need on the page and had not needed on the dark is a
+**surface**. Everything else here is paper on the canvas — the search box, `Fold
+all`, the chips, the rows themselves — so days drawn straight onto the canvas
+read as stray text rather than as buttons, and the row had no floor under it. It
+gets one track, in the same paper and behind the same hairline as the search box
+directly beneath it, and the two stack as siblings. The track is the object; the
+days in it stay text until one is pressed.
+
+A row that scrolls sideways does not say so standing still, so it **fades out at
+the end it can still be pushed towards**. Two rows on the page do this — the days
+and the chips under them — and the whole trick is that both ends are measured
+rather than assumed. A fade that is always on fades the first day when there is
+nothing to the left of it, and fades both ends of a weekend that fits on the
+screen whole; it has to appear only where there is somewhere to go, or it reads
+as a smudge rather than as an invitation. So `edges()` asks each row how much of
+it is off-screen and which side, after every render, on every scroll, and when
+the window changes shape — a row that fitted in portrait scrolls in landscape
+without anybody touching it. Scroll events do not bubble, so that listener
+captures, which is how the one already watching for the place-search box hears
+about them too.
+
+It is a mask rather than a gradient laid over the top, because one of these rows
+sits on paper and the other on the canvas and a mask does not need to know which.
+That is also why the strip is two elements: the track holds the paper, the
+hairline and the corners, and the row inside it scrolls and fades, because a mask
+over the track would have taken the hairline and the corners with it.
+
+Today gets a dot under the date on a trip that is happening now — the dot
+is drawn on every day and coloured in on one, so today does not sit two pixels
+higher than the days either side of it.
+
+The dot is the only thing on the page that changes without anybody touching it,
+so the day is **held rather than read**: one `todayIso`, so a render straddling
+midnight cannot mark two days as today or none, and something has to notice when
+it turns. Two things do. A timer aimed at the next local midnight — asked for as
+hour 24 of today, which is still midnight on the nights the clocks move, and
+rescheduled from the clock each time so a late wake-up costs nothing. And a check
+whenever the tab comes back, because a sleeping phone runs no timers, which is
+where the day actually turns most of the time. Somebody typing is left alone the
+way the poll leaves them alone; the day is written down before the page is asked
+to redraw, so the next thing they do shows the new one. This also fixes something
+older than days: "2 days to go" on a trip card had always been wrong by one from
+midnight until whenever you next touched it.
+
+That is where the question lands now. Press Sunday and either the food is there,
+or the page says **Nothing on Sun 6 Sep** and offers to add something to that day.
+`All` is the way back out, so nothing here toggles itself off.
+
+Under it is the other question days create: **`No day`**, which is what nobody
+has answered for — not what is for the whole trip, which has been answered and
+turns up under every day. It is a **filter chip**, not a stop on the strip. It
+was a stop on the strip first, and the strip was worse for it: the strip is the
+trip's calendar, every other thing on it is a date, and "no day" is precisely
+what a calendar cannot hold. It is a cut — the same shape as hiding what is
+sorted — so it lives with the cuts, first in the row because it is the tail of
+the question directly above it, and carrying a quiet count of how many are still
+waiting.
+
+Being a chip does not make it a fourth thing you can stack on a day, though. A
+day and no day cannot both be true, so the two are exclusive: pressing `No day`
+lets every day go, and pressing a day lets `No day` go. It is still not a new
+meaning for `All`, either, because `All` has a second job — it is the escape
+hatch, so a pressed day always has one tap out of it, and a filter that stayed on
+across a pressed day would take that away. The wording matters too: `All` beside
+`Any day` reads as two words for the same thing, so the chip is called what it
+is, while the sheets keep `Any day` because there it is an answer to "which
+day?" rather than a cut.
+
+`No day` waits until the tab holds both kinds — a control that would show the
+whole list and one that would show none of it are both a control that does
+nothing, the same rule the search box and the hide-settled chip keep — which also
+means it lets go of itself once the last thing has been slotted, and anybody
+standing on it lands back on `All` rather than on an empty page. Standing there
+is saying the opposite of standing on a day, so the rows under it are still asked
+for one, and the add sheet arrives with nothing picked instead of with a word in
+the field that is not a date.
+
+The rest of the page answers to it. The search box appears over eight things or
+more, and that count is now what the day leaves rather than what the tab holds —
+a box over the one thing Thursday has on it asks you to narrow what a tap has
+already narrowed. The exception is the box itself: whatever is typed in it keeps
+it on screen, or searching down to two results would delete the field mid-word.
+
+**No list is filed by day.** The headings stay what they always were — the meal
+on Eat, the kind of thing on Plan — and the strip does the day axis on its own.
+Four attempts are worth recording, because each looked reasonable written down
+and each one put the day in two places at once:
+
+1. **The day in the Eat headings** — "Sat 5 · Dinner". Eat is filed by meal and
+   always has been, and most of what is on it is not any particular day's, so
+   five headings became fifteen with "Dinner" among them five times, while empty
+   day-slots claimed a gap with five undated dinners sitting underneath them.
+2. **A days × meals coverage grid** over the list. Honest, but too much apparatus
+   for the answer: a nine-cell table to say what pressing a day says on its own.
+3. **A heading per day of the trip on Plan**, on the argument that an itinerary
+   *is* a list of days. On a ten-day trip with one plan on it that is ten
+   headings saying *nothing yet* and one saying anything at all.
+4. **A heading per day that has something.** Better, but the page then
+   reorganises itself under you as things get dated, and — the real objection —
+   the strip is a few pixels above it. A heading reading "Sat 15 Aug" under a
+   pressed tab reading Sat 15 is the page repeating itself, and *All* is not much
+   better: those headings are the strip again, printed down the page.
+
+The accordion answers a different question — what kind of thing is this — and
+that question has one answer all week. So what the days actually do to the Plan
+tab is the **order**: inside a heading, the list reads in the order it happens.
+Day, then hour, then whatever order the list already had. No hour follows the
+hours of its own day, because "sometime on Saturday" belongs to Saturday and not
+to nine in the morning, and no day at all goes last, where it is still a plan.
+
+Setting a day is a sheet of its own, the way a plan's place is, because when is a
+different question from who is bringing it. Day pills apply on the tap and the
+sheet stays open; food is also asked which meal (which writes `category`, since
+that is already the meal), and a plan gets an hour to type. Those two together
+cost a bug worth remembering: a pill saves, the save re-renders, and the re-render
+rebuilt the time field from an item with no time on it — so typing an hour,
+pressing a day and then *Save the time* saved nothing and said "Time removed".
+`renderSheet` now carries anything typed but unsaved across the swap, along with
+the cursor. A field whose value still matches the `value` attribute the template
+wrote is the item's and takes the fresh one; a field that differs is yours.
+
+The pills wrap rather than dividing the width between them — a trip is as often
+one night as a fortnight, and a control that shares the row out looks wrong at
+one of those ends. The Pack tab never asks — you pack the tent once, not on
+Saturday — and none of it is drawn at all until the trip has a `start_date`,
+since a strip with no days in it is worse than no strip.
+
+Since no heading says the day, the row does: a dated row carries a chip reading
+"Fri 14 · 08:15", and the Mine tab flattens the lists so its rows carry it too —
+Saturday's dinner is a different armful of the car from Friday's. Press a day and
+the chip drops back to the hour, because the pressed tab has already said the
+rest. Eat's headings sort Breakfast, Lunch, Dinner rather than by whatever was
+added first; everything that is not a meal keeps the order it had, after them.
 
 ### Dietary needs
 

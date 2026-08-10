@@ -386,6 +386,112 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 /* The Camp tab has no bar under the title, so the header needs its own floor. */
 .topbar--bare { padding-bottom: 12px; }
 
+/* ---- the days of the trip ------------------------------------------------ */
+
+/* A strip you swipe, at the top of the page above the chips that narrow it
+   further. One row of the screen whatever the trip is: two tabs for a night
+   away, thirty-two that scroll for a month, and the same swipe either way —
+   which is what a grid of cells could never manage.
+
+   It used to sit in the sticky header, on the dark. Two things were wrong with
+   that: the header is the one part of the screen that only says where you are,
+   so a control in it reads as part of the app rather than part of the list; and
+   it stood a second filter row over the one that was already down here.
+
+   On the page it needs a surface, which it did not need on the dark. Everything
+   else here — the search box, Fold all, the chips, the rows — is paper on the
+   canvas, so days drawn straight onto the canvas read as stray text rather than
+   as buttons, and the row had no floor. So: one track, the same paper and the
+   same hairline as the search box directly under it, and the two stack as
+   siblings. It is the track that is the object, not the days; only the pressed
+   one is filled, which is the whole point of the row.
+
+   The track holds and the row inside it scrolls, because the days fade out at
+   whichever end there is more of them, a fade is a mask, and a mask over the
+   track would take the track's own hairline and corners with it. */
+.daybar {
+  margin: 0 0 10px; padding: 4px;
+  background: var(--paper); border-radius: var(--r-md);
+  box-shadow: inset 0 0 0 1.5px var(--line-strong);
+  overflow: hidden;
+}
+.daybar__row {
+  display: flex; gap: 4px;
+  overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none;
+}
+.daybar__row::-webkit-scrollbar { display: none; }
+
+/* ---- rows that scroll sideways ------------------------------------------ */
+
+/* Two of them on a list page — the days and the chips — and neither one says so
+   standing still. The row fades out at the end it can still be pushed towards,
+   which is the only honest way it has of admitting there is more of it.
+
+   Both ends are measured in app.js rather than assumed, and that is the whole
+   trick: a fade that is always on fades the first day when there is nothing to
+   the left of it, and fades both ends of a weekend that fits on the screen
+   whole. It has to appear only where there is somewhere to go, or it reads as a
+   bug instead of an invitation.
+
+   A mask rather than a gradient laid over the top: the rows sit on paper in one
+   case and on canvas in the other, and a mask does not need to know which. */
+.daybar__row, .filters { --fade: 26px; }
+.daybar__row[data-more="end"], .filters[data-more="end"] {
+  -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - var(--fade)), transparent);
+  mask-image: linear-gradient(90deg, #000 calc(100% - var(--fade)), transparent);
+}
+.daybar__row[data-more="start"], .filters[data-more="start"] {
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 var(--fade));
+  mask-image: linear-gradient(90deg, transparent, #000 var(--fade));
+}
+.daybar__row[data-more="both"], .filters[data-more="both"] {
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 var(--fade), #000 calc(100% - var(--fade)), transparent);
+  mask-image: linear-gradient(90deg, transparent, #000 var(--fade), #000 calc(100% - var(--fade)), transparent);
+}
+
+/* Weekday over date, the shape every calendar uses, so it needs no explaining.
+   All keeps the left-hand end where the thumb starts, and is the way back out —
+   pressing the day you are already on would be the one control here that undoes
+   itself.
+
+   One box in the row, and it is the answer. Every tab used to carry the same
+   outline, which made five rectangles competing for a row that is really one
+   line of text with one thing chosen in it — and an outline that never varies
+   says nothing worth the ink. The days are text; the pressed one is filled. The
+   tap target does not move: it is the padding, not the border, that carries it.
+
+   The small radius is the track's own, less the 4px it is inset by, so the
+   filled day sits concentrically in the corner rather than fighting it. */
+.daybar__tab {
+  flex: none; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 1px;
+  min-width: 48px; min-height: 44px; padding: 4px 10px;
+  border-radius: var(--r-sm); color: var(--ink-soft);
+  transition: background .12s ease, color .12s ease;
+}
+.daybar__tab:hover { color: var(--ink); background: var(--paper-sunk); }
+/* Filled forest, the same way a pressed chip is filled — on the page these two
+   rows are one control in two halves, and they should not answer differently. */
+.daybar__tab[aria-pressed="true"] {
+  background: var(--forest-deep); color: #F4F8F0;
+}
+.daybar__dow {
+  font-family: var(--mono); font-size: 9.5px; font-weight: 600;
+  letter-spacing: .1em; text-transform: uppercase; opacity: .72;
+}
+.daybar__tab[aria-pressed="true"] .daybar__dow { opacity: .68; }
+.daybar__num { font-size: 15px; font-weight: 700; line-height: 1.05; }
+.daybar__all { font-size: 13.5px; font-weight: 700; letter-spacing: .01em; }
+
+/* Which of these is today, on a trip that is happening now. A dot rather than a
+   word: it is the only mark in the row that is not something you pressed, and it
+   has to survive the tab being filled in underneath it. */
+.daybar__now {
+  width: 3px; height: 3px; margin-top: 2px;
+  border-radius: 50%; background: transparent;
+}
+.daybar__now--on { background: currentColor; opacity: .85; }
+
 /* ---- the signature: coverage bar ---------------------------------------- */
 
 /* One bar for the section on screen, on a single line: the track takes the room,
@@ -753,6 +859,16 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 .chip--place svg { flex: none; width: 13px; height: 13px; margin-left: -2px; }
 .chip__where { overflow: hidden; text-overflow: ellipsis; }
 
+/* When a plan happens, beside where it happens, and reading the same: the two
+   are one pair of facts about a plan and neither is a job anybody has taken on. */
+.chip--when {
+  background: var(--paper-sunk); color: var(--ink-soft);
+  box-shadow: inset 0 0 0 1.5px var(--line);
+  max-width: min(100%, 20ch);
+}
+.chip--when:hover { color: var(--ink); box-shadow: inset 0 0 0 1.5px var(--line-strong); }
+.chip--when svg { flex: none; width: 13px; height: 13px; margin-left: -2px; }
+
 /* ---- two-way switch ----------------------------------------------------- */
 
 .segmented {
@@ -768,6 +884,71 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 .segmented__btn:hover { color: var(--ink); }
 .segmented__btn[aria-pressed="true"] {
   background: var(--forest-deep); color: #F4F8F0; box-shadow: var(--shadow);
+}
+
+/* ---- meal coverage ------------------------------------------------------ */
+
+/* Nine cells on a weekend, answering the one question a list of food cannot:
+   which meals of the trip has anybody thought about. It is a real table because
+   it is real tabular data — days down, meals across — which also means a screen
+   reader announces "Sunday, Lunch" without being told to. */
+.card--meals { margin-bottom: 18px; }
+.meals { width: 100%; border-collapse: collapse; }
+.meals th {
+  font-family: var(--mono); font-size: 10.5px; font-weight: 600;
+  letter-spacing: .1em; text-transform: uppercase; color: var(--ink-faint);
+  padding: 0 0 7px; text-align: center;
+}
+/* The day is the row's label, so it reads as one — left, and in ink you can
+   actually read rather than the faint of the column headings. */
+.meals__day {
+  width: 4.5em; text-align: left !important; padding: 0 8px 0 0 !important;
+  color: var(--ink-soft) !important; letter-spacing: .05em !important;
+}
+.meals td { padding: 3px 2px; }
+
+/* Three states, and only two of them are loud. Covered is forest with a count
+   in it. Empty is blaze — but only once somebody has started, because nine
+   accusations on a trip where nobody is planning meals is the app nagging. */
+.meals__cell {
+  display: grid; place-items: center;
+  width: 100%; min-height: 34px; border-radius: var(--r-sm);
+  background: var(--paper-sunk); box-shadow: inset 0 0 0 1.5px var(--line);
+  color: var(--ink-faint); font-size: 13px; font-weight: 700;
+  transition: background .12s ease, box-shadow .12s ease, color .12s ease;
+}
+.meals__cell svg { width: 13px; height: 13px; }
+.meals__cell:hover { box-shadow: inset 0 0 0 1.5px var(--line-strong); color: var(--ink-soft); }
+.meals__cell--on {
+  background: var(--forest-deep); color: #F4F8F0; box-shadow: none;
+}
+.meals__cell--on:hover { color: #F4F8F0; box-shadow: none; filter: brightness(1.12); }
+.meals__cell--gap {
+  background: var(--blaze-soft); color: var(--blaze);
+  box-shadow: inset 0 0 0 1.5px var(--blaze);
+}
+.meals__cell--gap:hover { color: var(--blaze); box-shadow: inset 0 0 0 2px var(--blaze); }
+
+.meals__say { margin: 14px 0 0; font-size: 13.5px; color: var(--ink-soft); }
+
+/* ---- one of several ----------------------------------------------------- */
+
+/* The switch above is for a question with two answers. This is for one with as
+   many as the trip has days, which is two on a Saturday night away and thirty on
+   a long one — so nothing here divides the width up between the options. Each
+   pill is as wide as the word on it, they pack from the left, and they wrap when
+   the row runs out. One night and a fortnight are the same control, and neither
+   has anything hidden behind a swipe. */
+.days { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }
+.days__chip {
+  min-height: 34px; padding: 0 13px; border-radius: 999px;
+  font-size: 13px; font-weight: 600; color: var(--ink-soft);
+  background: var(--paper-sunk); box-shadow: inset 0 0 0 1.5px var(--line);
+  transition: background .12s ease, color .12s ease, box-shadow .12s ease;
+}
+.days__chip:hover { color: var(--ink); box-shadow: inset 0 0 0 1.5px var(--line-strong); }
+.days__chip[aria-pressed="true"] {
+  background: var(--forest-deep); color: #F4F8F0; box-shadow: none;
 }
 
 /* ---- empty state -------------------------------------------------------- */
@@ -1130,9 +1311,10 @@ button.wx__day:hover .wx__wet, .wx__row--open .wx__wet { color: var(--ink); }
 }
 /* Edit and remove, on one line. Remove takes the larger share because it has
    more to say and must not wrap; both stay thumb-sized either way. */
-.sheet__acts { display: flex; gap: 10px; }
+/* Three of them on a food item, and all three are one word now, so they share
+   the row equally rather than the long one taking twice the space. */
+.sheet__acts { display: flex; flex-wrap: wrap; gap: 10px; }
 .sheet__acts .btn { flex: 1 1 auto; min-width: 0; }
-.sheet__acts .btn--quiet { flex: 2 1 auto; }
 
 /* A keyboard leaves about a third of a phone screen. The sheet spends it on the
    question and the box you answer it in, and drops the blurb you have read by
@@ -1142,6 +1324,10 @@ button.wx__day:hover .wx__wet, .wx__row--open .wx__wet { color: var(--ink); }
 .is-kb .sheet__head p { display: none; }
 .is-kb .sheet__body { padding-top: 13px; padding-bottom: 16px; }
 .is-kb .sheet__foot { padding-bottom: 14px; }
+
+/* A label over a row of chips, where a sheet asks something that has no field
+   under it to carry a label of its own. */
+.sheet__body > .eyebrow { display: block; margin-bottom: 9px; }
 
 /* ---- picker rows -------------------------------------------------------- */
 
@@ -1157,6 +1343,11 @@ button.wx__day:hover .wx__wet, .wx__row--open .wx__wet { color: var(--ink); }
 .pick__main { flex: 1; min-width: 0; }
 .pick__title { font-weight: 500; font-size: 15px; }
 .pick__note { margin: 2px 0 0; font-size: 12.5px; color: var(--ink-soft); line-height: 1.4; }
+
+/* Under a field, for the one thing a field cannot say on its own — what happens
+   when you answer it a particular way. Quiet: it is read once and then never
+   again, so it must not compete with the answer above it. */
+.field__hint { margin: 7px 0 0; font-size: 12.5px; color: var(--ink-soft); line-height: 1.4; }
 .pick__tick { flex: none; width: 20px; height: 20px; color: var(--forest); opacity: 0; }
 .pick[aria-pressed="true"] .pick__tick { opacity: 1; }
 
