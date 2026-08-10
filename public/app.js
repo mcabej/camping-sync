@@ -16,9 +16,8 @@ const MEMBER_COLORS = ['#2F6B57', '#37698F', '#7A5AA6', '#8C6A2F', '#B23C6B', '#
 // the only question you have on the morning you leave.
 const TABS = [
   { id: 'pack', lists: ['gear'], label: 'Pack', title: 'Packing list' },
-  { id: 'eat', lists: ['food', 'drinks'], label: 'Eat', title: 'Food and drink',
-    note: 'Plan it by meal — whoever claims one buys for it. Reckon on about 1 gallon / 4L of water per person per day.' },
-  { id: 'do', lists: ['activities'], label: 'Do', title: 'Plans', note: 'Vote for what you actually want to do. Nobody has to "bring" a hike.' },
+  { id: 'eat', lists: ['food', 'drinks'], label: 'Eat', title: 'Food and drink' },
+  { id: 'do', lists: ['activities'], label: 'Do', title: 'Plans' },
   { id: 'mine', lists: [], label: 'Mine', title: 'Yours to pack' },
 ]
 
@@ -38,9 +37,13 @@ const LIST_WORD = { food: 'Food', drinks: 'Drink' }
 // The two ways a thing gets brought. This distinction runs through the whole app.
 // The wording earns its keep here: people read "Personal kit" as "my own list"
 // and it now is one — private to you, invisible to everyone else on the trip.
+// It used to be a switch in the header, charging every list 40px of the screen
+// for a question most people answer once; it is a filter chip now, and the chip
+// is the whole explanation — what each half means is said where it is acted on,
+// in the add and assign sheets, rather than in a paragraph over the list.
 const SECTIONS = {
-  shared: { label: 'For the group', note: 'One person brings each of these, and everyone uses it.' },
-  own: { label: 'Personal kit', note: 'Your list, private to you. Nobody else on this trip can see it.' },
+  shared: { label: 'For the group' },
+  own: { label: 'Personal kit' },
 }
 
 const ICONS = {
@@ -66,7 +69,9 @@ const S = {
   // The trip page, over the top of whichever tab you were on. Not a tab of its
   // own, so the bar always has exactly one answer to "where am I".
   camp: false,
-  section: 'shared', // which half of the current list is on screen
+  // How the list on screen is narrowed: who brings it, and what kind of thing
+  // it is. Empty means everything, which is where every tab starts.
+  filter: { kind: '', cat: '' },
   trip: null, members: [], items: [], events: [],
   catalog: null, tips: [],
   me: null,          // member id
@@ -156,18 +161,41 @@ const isPlan = (it) => it.list === 'activities'
 // list, so this is the only ordering that means anything across two of them.
 const itemsOn = (tab) => tab.lists.flatMap(itemsIn)
 
-// Personal kit exists as a section for any tab the catalogue has one-each
+// Personal kit is worth offering on any tab the catalogue has one-each
 // suggestions for, even before the trip has added one — otherwise there is
 // nowhere to go looking for it.
 const hasOwnSection = (tab) =>
   itemsOn(tab).some(isOwn) || tab.lists.some((l) => (S.catalog?.[l] ?? []).some((c) => c.own))
 
-// The section actually on screen, which is 'shared' for any tab that has no
-// personal half at all.
-function activeSection() {
+const catOf = (it) => it.category || 'Other'
+
+const inKind = (it, kind) => !kind || (kind === 'own') === isOwn(it)
+const matchesFilter = (it, f) => inKind(it, f.kind) && (!f.cat || catOf(it) === f.cat)
+
+// What the page on screen can be narrowed: everything it would show unfiltered,
+// and whether both halves are a question on it at all.
+//
+// A list offers the personal-kit chip on the catalogue's say-so, before the trip
+// has a single own item, because otherwise there is nowhere to go looking for
+// one. Your own tab has nothing to discover — it only ever shows what exists —
+// so there the chips wait until there is something behind both of them.
+function pageParts() {
   const tab = currentTab()
-  return tab.lists.length && hasOwnSection(tab) ? S.section : 'shared'
+  if (tab.id !== 'mine') return { items: itemsOn(tab), kinds: hasOwnSection(tab) }
+  const load = myLoad()
+  return { items: load, kinds: load.some(isOwn) && load.some((it) => !isOwn(it)) }
 }
+
+// Nothing pressed means everything. A page with no personal half has no chip to
+// press, so a leftover 'own' from the tab you came from cannot hide a list.
+function activeFilter() {
+  return { kind: pageParts().kinds ? S.filter.kind : '', cat: S.filter.cat }
+}
+
+// What "add" and "what am I missing?" mean while a filter is on. Narrowing the
+// list to your own kit is as clear a way of saying "this one is mine" as the
+// switch in the sheet, so the sheets open where you are looking.
+const activeSection = () => (activeFilter().kind === 'own' ? 'own' : 'shared')
 
 // Each section answers a different question, so each gets its own tally.
 // Plans are not "brought" by anyone, so they are counted by interest instead.
@@ -207,9 +235,8 @@ const packedForMe = (it) => (isOwn(it) ? isMine(it) : it.packed)
 function groupByCategory(items) {
   const groups = new Map()
   for (const it of items) {
-    const key = it.category || 'Other'
-    if (!groups.has(key)) groups.set(key, [])
-    groups.get(key).push(it)
+    if (!groups.has(catOf(it))) groups.set(catOf(it), [])
+    groups.get(catOf(it)).push(it)
   }
   return [...groups.entries()]
 }
@@ -309,8 +336,9 @@ function barParts(tab, section) {
 // The same bar for the one list that is not a list: your own load, wherever on
 // the trip it came from. Your colour for what is in the car, blaze for what is
 // not — which is the same promise the bar makes everywhere else.
+// The chips narrow the bar with the page, the same as they do on a list.
 function mineParts() {
-  const load = myLoad()
+  const load = myLoad().filter((it) => inKind(it, activeFilter().kind))
   if (!load.length) return { empty: 'nothing yours yet', say: 'Nothing has your name on it.', aria: 'nothing on your list' }
   const done = load.filter(packedForMe).length
   const left = load.length - done
@@ -333,16 +361,51 @@ function coverageBar(p) {
     </div>`
 }
 
-// The section switcher lives in the sticky header, so the other half of the
-// list is always one tap away rather than a scroll away.
-function sectionSwitch(tab) {
-  if (!hasOwnSection(tab)) return ''
-  const c = statsFor(itemsOn(tab))
-  const chip = (key, outstanding) => `
-    <button class="switch__btn" data-act="section" data-section="${key}" aria-pressed="${S.section === key}">
-      ${SECTIONS[key].label}${outstanding ? `<span class="switch__n">${outstanding}</span>` : ''}</button>`
-  return `<div class="switch" role="group" aria-label="Which kit">${chip('shared', c.open)}${chip('own', c.own - c.mine)}</div>`
+// The list narrows from the top of the page rather than from the header: chips
+// you scroll past, instead of a switch that charged every tab the same height
+// whether or not anybody used it. They also do the thing the switch could not —
+// a packing list you can cut down to Shelter is one you can read on a phone.
+//
+// Nothing pressed is everything, and pressing a chip again puts it back. Each
+// kind chip carries what is left to do behind it — `count` returns that number
+// and whether it is yours, because blaze means "nobody has this" everywhere in
+// the app and your own kit is somebody's.
+function filterBar(all, kinds, count) {
+  const f = activeFilter()
+  if (!all.length) return ''
+
+  const kindChip = (key) => {
+    const [n, yours] = count(key)
+    return `
+      <button class="filters__chip" data-act="filter-kind" data-value="${key}" aria-pressed="${f.kind === key}">
+        ${SECTIONS[key].label}${n ? `<span class="filters__n"${yours
+          ? ` style="background:${colorOf(meMember())};color:#F4F8F0"` : ''}>${n}</span>` : ''}</button>`
+  }
+
+  const catChip = (cat) => `
+    <button class="filters__chip" data-act="filter-cat" data-value="${esc(cat)}"
+            aria-pressed="${f.cat === cat}">${esc(cat)}</button>`
+
+  // The categories on offer are the ones left after the first chip, so the row
+  // never offers a cut that comes back empty.
+  const cats = [...new Set(all.filter((i) => inKind(i, f.kind)).map(catOf))]
+
+  return `
+    <div class="filters" role="group" aria-label="Filter this list">
+      ${kinds ? `${kindChip('shared')}${kindChip('own')}
+        <span class="filters__div" aria-hidden="true"></span>` : ''}
+      ${cats.map(catChip).join('')}
+    </div>`
 }
+
+// Only reachable by chipping away at a page that does have things on it, so the
+// way out is the filter rather than the list.
+const noMatch = (f) => `
+  <div class="empty">
+    <h3>Nothing in ${esc(f.cat)}</h3>
+    <p>Not with that filter on, anyway.</p>
+    <button class="btn" data-act="filter-cat" data-value="${esc(f.cat)}">Show the whole list</button>
+  </div>`
 
 function assignChip(item) {
   const m = memberById(item.assignee_id)
@@ -390,7 +453,10 @@ function organiserChip(item) {
             <span class="chip__dot"></span>${esc(m.name)} is organising</button>`
 }
 
-function itemRow(item) {
+// `mixed` is whether group things and personal kit are sharing the page. When
+// they are, an own row says so: it is the difference between a tick everyone is
+// counting on and one only you will ever see.
+function itemRow(item, mixed) {
   const own = isOwn(item)
   const done = own ? isMine(item) : item.packed
 
@@ -413,6 +479,7 @@ function itemRow(item) {
     <li class="item${done ? ' item--packed' : ''}">
       <div class="item__main">
         <div class="item__title">${esc(item.title)}${item.qty ? `<span class="item__qty">${esc(item.qty)}</span>` : ''}</div>
+        ${mixed && own ? '<span class="mine__from">personal kit · only you see this</span>' : ''}
         ${item.note ? `<p class="item__note">${esc(item.note)}</p>` : ''}
         <div class="item__row">${controls}</div>
       </div>
@@ -647,12 +714,11 @@ function viewJoin() {
 function topbar() {
   const tab = currentTab()
   const when = shortDates(S.trip)
-  // Your own tab has no list behind it and no second half to switch to, but it
-  // is still a thing with a gap in it — so it keeps the bar and drops the rest.
-  // The trip page brings its own summary, so it gets neither.
+  // Two rows now, on every list: the trip and one bar. Narrowing the list is a
+  // page control rather than a fixture, so the room it used to take is the
+  // room the items get. The trip page brings its own summary, so it gets none.
   const under = S.camp ? ''
-    : S.tab === 'mine' ? coverageBar(mineParts())
-    : `${sectionSwitch(tab)}${coverageBar(barParts(tab, activeSection()))}`
+    : coverageBar(S.tab === 'mine' ? mineParts() : barParts(tab, activeSection()))
 
   // The trip name is app furniture rather than a page heading — what the page
   // is actually about is the section you are in, which had no heading at all
@@ -670,49 +736,64 @@ function topbar() {
     </header>`
 }
 
-function categoryGroups(items, section) {
+// A group is done when each thing in it is sorted, which is a different question
+// for the two halves: a group thing has somebody's name on it, your own kit is
+// packed. Mixed groups count both and leave the word off.
+function categoryGroups(items, mixed) {
   return groupByCategory(items).map(([cat, list]) => {
-    const tally = section === 'own'
-      ? `${list.filter(isMine).length}/${list.length} packed`
-      : `${list.filter((i) => i.assignee_id && memberById(i.assignee_id)).length}/${list.length}`
+    const done = list.filter((i) => (isOwn(i) ? isMine(i) : i.assignee_id && memberById(i.assignee_id))).length
+    const tally = list.every(isOwn) ? `${done}/${list.length} packed` : `${done}/${list.length}`
     return `
       <section class="group">
         <div class="group__head"><h3>${esc(cat)}</h3>
           <span class="group__tally">${list[0] && isPlan(list[0]) ? `${list.length}` : tally}</span></div>
-        <ul class="items">${list.map(itemRow).join('')}</ul>
+        <ul class="items">${list.map((i) => itemRow(i, mixed)).join('')}</ul>
       </section>`
   }).join('')
 }
 
-function listPage(tab) {
-  // Only one section is ever on screen, so the switcher in the header is the
-  // whole navigation for it — no scrolling to find the other half.
-  const section = activeSection()
-  const items = itemsOn(tab).filter((i) => (section === 'own') === isOwn(i))
-  const note = hasOwnSection(tab) ? SECTIONS[section].note : tab.note
+function listPage() {
+  const f = activeFilter()
+  const { items: all, kinds } = pageParts()
+  // What the first chip leaves, and then what the second one does to it. The
+  // two are kept apart because they run out for different reasons, and only one
+  // of them is worth an empty page about.
+  const pool = all.filter((i) => inKind(i, f.kind))
+  const items = pool.filter((i) => matchesFilter(i, f))
+  const c = statsFor(all)
+  const count = (key) => (key === 'own' ? [c.own - c.mine, true] : [c.open, false])
 
+  let body
   // An empty list has nothing to sit at the foot of, so the two ways to fill it
   // move into the card and the loud one leads.
-  const body = items.length === 0
-    ? `<div class="empty">
-         <h3>${section === 'own' ? 'Your list is empty' : 'Nothing here yet'}</h3>
-         <p>${section === 'own'
-            ? 'The things nobody can bring for you — a sleeping bag, a headtorch, your own boots. Only you will see what you put here.'
-            : 'Pull in the usual suspects, or write your own.'}</p>
-         <button class="btn btn--blaze" data-act="suggest">What am I missing?</button>
-         <button class="empty__or" data-act="add">or write your own</button>
-       </div>`
-    : `${categoryGroups(items, section)}
-       <div class="listfoot">
-         <button class="listfoot__add" data-act="add">
-           <span class="listfoot__plus">${ICONS.plus}</span>Add your own
-         </button>
-         <button class="listfoot__ask" data-act="suggest">${ICONS.spark}What am I missing?</button>
-       </div>`
+  if (!pool.length) {
+    body = `
+      <div class="empty">
+        <h3>${f.kind === 'own' ? 'Your list is empty' : 'Nothing here yet'}</h3>
+        <p>${f.kind === 'own'
+           ? 'The things nobody can bring for you — a sleeping bag, a headtorch, your own boots. Only you will see what you put here.'
+           : 'Pull in the usual suspects, or write your own.'}</p>
+        <button class="btn btn--blaze" data-act="suggest">What am I missing?</button>
+        <button class="empty__or" data-act="add">or write your own</button>
+      </div>`
+  } else if (!items.length) {
+    body = noMatch(f)
+  } else {
+    body = `${categoryGroups(items, !f.kind)}
+      <div class="listfoot">
+        <button class="listfoot__add" data-act="add">
+          <span class="listfoot__plus">${ICONS.plus}</span>Add your own
+        </button>
+        <button class="listfoot__ask" data-act="suggest">${ICONS.spark}What am I missing?</button>
+      </div>`
+  }
 
+  // No standing paragraph over the list: it cost the same few lines on every
+  // tab, every visit, to say something you read once. The chips say what the
+  // list is now, and the sheets say what each half means as you use them.
   return `
     <main class="page">
-      ${note ? `<p class="page__note">${esc(note)}</p>` : ''}
+      ${filterBar(all, kinds, count)}
       ${body}
     </main>`
 }
@@ -740,7 +821,7 @@ function mineRow(item) {
 // leave. This is that question, answered on one page: everything you are
 // carrying, group and personal together, in the order you would pack it.
 function minePage() {
-  const load = myLoad()
+  const { items: load, kinds } = pageParts()
 
   if (!load.length) {
     return `
@@ -753,11 +834,20 @@ function minePage() {
       </main>`
   }
 
+  // The same chips as the lists, doing the job this page most needs: on the
+  // morning you leave, "just the cooking stuff" is one armful of the car.
+  // Everything here is already yours, so both counts are what is still in the
+  // house rather than what nobody has picked up — and both wear your colour.
+  const f = activeFilter()
+  const shown = load.filter((it) => matchesFilter(it, f))
+  const count = (key) =>
+    [load.filter((it) => (key === 'own') === isOwn(it) && !packedForMe(it)).length, true]
+
   // Grouped by the tab each thing came from, in tab order, so the page maps
   // onto the app you already know. Inside a group, what the others are counting
   // on you for comes before what only you would miss.
   const groups = TABS.filter((t) => t.lists.length && !isPlanTab(t))
-    .map((tab) => [tab, tab.lists.flatMap((l) => load.filter((it) => it.list === l))])
+    .map((tab) => [tab, tab.lists.flatMap((l) => shown.filter((it) => it.list === l))])
     .filter(([, items]) => items.length)
     .map(([tab, items]) => {
       const rows = [...items.filter((i) => !isOwn(i)), ...items.filter(isOwn)]
@@ -769,13 +859,15 @@ function minePage() {
         </section>`
     }).join('')
 
-  const left = load.filter((it) => !packedForMe(it)).length
+  // "That is the lot" is a claim about your whole load, so a filter that hides
+  // half of it has no business making the claim.
+  const done = !f.kind && !f.cat && load.every(packedForMe)
 
   return `
     <main class="page">
-      <p class="page__note">Everything that is yours to carry — what you have claimed for the group, and your own kit. Ticking here is the same tick as on the lists.</p>
-      ${groups}
-      ${left === 0 ? '<p class="mine__done">That is the lot. Nothing left on your list.</p>' : ''}
+      ${filterBar(load, kinds, count)}
+      ${shown.length ? groups : noMatch(f)}
+      ${done ? '<p class="mine__done">That is the lot. Nothing left on your list.</p>' : ''}
     </main>`
 }
 
@@ -1042,7 +1134,7 @@ function tabbar() {
 
 function viewTrip() {
   const tab = currentTab()
-  const page = S.camp ? campPage() : tab.id === 'mine' ? minePage() : listPage(tab)
+  const page = S.camp ? campPage() : tab.id === 'mine' ? minePage() : listPage()
   return `<div class="app">${topbar()}${page}</div>${tabbar()}`
 }
 
@@ -1444,7 +1536,10 @@ document.addEventListener('click', async (ev) => {
     case 'tab':
       S.tab = el.dataset.tab
       S.camp = false
-      S.section = 'shared'
+      // A filter belongs to the list you set it on. Carrying "Shelter" onto the
+      // food would be a list with most of the food missing and no reason on
+      // screen for it.
+      S.filter = { kind: '', cat: '' }
       render()
       window.scrollTo(0, 0)
       break
@@ -1457,8 +1552,21 @@ document.addEventListener('click', async (ev) => {
       window.scrollTo(0, 0)
       break
 
-    case 'section':
-      S.section = el.dataset.section
+    // Every chip is a toggle, so the way out of a filter is the chip that put
+    // you in it.
+    case 'filter-kind': {
+      const kind = S.filter.kind === el.dataset.value ? '' : el.dataset.value
+      // The categories are a property of what is left after this chip, so one
+      // that no longer applies lets go rather than emptying the page.
+      const cats = new Set(pageParts().items.filter((i) => inKind(i, kind)).map(catOf))
+      S.filter = { kind, cat: cats.has(S.filter.cat) ? S.filter.cat : '' }
+      render()
+      window.scrollTo(0, 0)
+      break
+    }
+
+    case 'filter-cat':
+      S.filter = { ...S.filter, cat: S.filter.cat === el.dataset.value ? '' : el.dataset.value }
       render()
       window.scrollTo(0, 0)
       break

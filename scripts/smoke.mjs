@@ -60,20 +60,51 @@ const find = (html, needle) => html.includes(needle)
 let bad = 0
 const check = (label, ok) => { if (!ok) { bad++; console.log(`  FAIL  ${label}`) } else console.log(`  ok    ${label}`) }
 
+const FILTERS = [{ kind: '', cat: '' }, { kind: 'shared', cat: '' }, { kind: 'own', cat: '' },
+  { kind: '', cat: 'Shelter' }, { kind: 'shared', cat: 'Nothing filed here' }]
+
 for (const camp of [false, true]) {
   for (const t of TABS) {
     S.tab = t.id
     S.camp = camp
-    for (const section of ['shared', 'own']) {
-      S.section = section
+    for (const f of FILTERS) {
+      S.filter = f
       const html = viewTrip()
-      check(`${camp ? 'camp over ' : ''}${t.id}/${section} renders`, html.length > 500)
+      check(`${camp ? 'camp over ' : ''}${t.id} ${f.kind || 'all'}/${f.cat || 'any'} renders`, html.length > 500)
     }
   }
 }
+S.filter = { kind: '', cat: '' }
+
+// The lists are one list now: both halves on the page, filtered from the top.
+S.camp = false; S.tab = 'pack'
+const both = viewTrip()
+check('unfiltered Pack shows group kit', find(both, 'Tent') && find(both, 'Firewood'))
+check('unfiltered Pack shows personal kit', find(both, 'Sleeping bag'))
+check('personal rows say so when mixed in', find(both, 'personal kit · only you see this'))
+check('the header switch is gone', !find(both, 'class="switch"'))
+check('the filters carry both kinds', find(both, 'data-act="filter-kind" data-value="own"'))
+check('the filters carry categories', find(both, 'data-act="filter-cat" data-value="Camp kitchen"'))
+check('open count rides the group chip', find(both, '<span class="filters__n">1</span>'))
+
+S.filter = { kind: 'own', cat: '' }
+const own = viewTrip()
+check('personal kit filter keeps your own', find(own, 'Sleeping bag') && find(own, 'Headlamp'))
+check('personal kit filter drops the group', !find(own, '>Tent<') && !find(own, 'Firewood'))
+check('personal rows need no label on their own page', !find(own, 'personal kit · only you see this'))
+check('the pressed chip shows as pressed', find(own, 'data-value="own" aria-pressed="true"'))
+
+S.filter = { kind: '', cat: 'Camp kitchen' }
+const kitchen = viewTrip()
+check('category filter keeps its category', find(kitchen, 'Camp stove') && find(kitchen, 'Cooler'))
+check('category filter drops the rest', !find(kitchen, '>Tent<') && !find(kitchen, 'Firewood'))
+
+S.filter = { kind: 'own', cat: 'Camp kitchen' }
+check('a filter with nothing behind it offers the way out',
+  find(viewTrip(), 'data-act="filter-cat" data-value="Camp kitchen">Show the whole list'))
 
 // The merge: one Eat tab must carry food and drink together.
-S.camp = false; S.tab = 'eat'; S.section = 'shared'
+S.filter = { kind: '', cat: '' }; S.tab = 'eat'
 const eat = viewTrip()
 check('Eat shows food', find(eat, 'Burgers') && find(eat, 'Crisps'))
 check('Eat shows drink', find(eat, 'Beer') && find(eat, 'Drinking water'))
@@ -83,6 +114,7 @@ check('nothing on Eat is uningestible', !find(eat, 'cooler') && !find(eat, 'Cool
 check('Eat bar counts both lists', find(eat, '2</b> need someone'))
 
 // Mine: claimed group kit plus personal kit, across lists, no plans.
+S.filter = { kind: '', cat: '' }
 S.tab = 'mine'
 const mine = viewTrip()
 check('Mine has claimed gear', find(mine, 'Tent') && find(mine, 'Camp stove'))
@@ -91,6 +123,24 @@ check('Mine has personal kit', find(mine, 'Sleeping bag') && find(mine, 'Headlam
 check("Mine excludes others' claims", !find(mine, 'Cooler'))
 check('Mine excludes plans', !find(mine, 'Hike'))
 check('no badge on the tab you are on', !find(mine, 'style="background:#2F6B57">4'))
+check('Mine has no standing paragraph', !find(mine, 'class="page__note"'))
+check('Mine filters by kind', find(mine, 'data-act="filter-kind" data-value="own"'))
+check('Mine filters by category', find(mine, 'data-act="filter-cat" data-value="Camp kitchen"'))
+check('Mine counts are all yours, none blaze',
+  !find(mine, 'class="filters__n">') && find(mine, 'class="filters__n" style="background:#2F6B57'))
+
+S.filter = { kind: '', cat: 'Camp kitchen' }
+const mineKitchen = viewTrip()
+check('Mine category filter keeps its category', find(mineKitchen, 'Camp stove'))
+check('Mine category filter drops the rest', !find(mineKitchen, '>Tent<') && !find(mineKitchen, 'Sleeping bag'))
+check('Mine drops the empty group with it', !find(mineKitchen, '<h3>Eat</h3>'))
+
+S.filter = { kind: 'own', cat: '' }
+const mineOwn = viewTrip()
+check('Mine personal filter keeps your own', find(mineOwn, 'Sleeping bag') && find(mineOwn, 'Headlamp'))
+check('Mine personal filter drops what you claimed', !find(mineOwn, '>Tent<') && !find(mineOwn, 'Burgers'))
+check('the bar follows the chip', find(mineOwn, '<b>1</b> still to pack'))
+S.filter = { kind: '', cat: '' }
 
 // Badges elsewhere: Pack has 1 unclaimed (Firewood), Eat has 2.
 S.tab = 'pack'
