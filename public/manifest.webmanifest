@@ -1,0 +1,21 @@
+{
+  "id": "/",
+  "name": "Camping Sync",
+  "short_name": "Camping",
+  "description": "Work out who's bringing what, what you're eating, and what you're doing — without the group chat.",
+  "lang": "en",
+  "dir": "ltr",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "theme_color": "#1B382E",
+  "background_color": "#FBFCF9",
+  "categories": ["lifestyle", "productivity", "travel"],
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/maskable-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "/icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

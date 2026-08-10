@@ -115,7 +115,15 @@ function toast(msg) {
 async function api(path, opts = {}) {
   const headers = { 'content-type': 'application/json' }
   if (S.me) headers['x-member-id'] = S.me
-  const res = await fetch(`/api${path}`, { ...opts, headers, body: opts.body ? JSON.stringify(opts.body) : undefined })
+  let res
+  try {
+    res = await fetch(`/api${path}`, { ...opts, headers, body: opts.body ? JSON.stringify(opts.body) : undefined })
+  } catch {
+    // A dead network is not a refusal, and "Failed to fetch" is not something to
+    // put in front of somebody standing in a field. Reads have a cached answer
+    // behind them; a write has nothing, so it has to say it did not happen.
+    throw new Error('No signal. That change is not saved.')
+  }
   const data = await res.json().catch(() => ({}))
   if (!res.ok) {
     // Some refusals are a question rather than a failure — a name clash on join
@@ -1470,6 +1478,18 @@ function forgetTrip(id) {
   if (S.trips) S.trips = S.trips.filter((t) => t.id !== id)
 }
 
+// The summary is a POST, which the worker cannot cache — and an installed app
+// that answers "you have no trips" because it has no signal is worse than one
+// that shows last night's numbers. So the answer is kept here instead.
+const SUMMARY_KEY = 'cs.trips.last'
+
+function lastSummary(ids) {
+  try {
+    const trips = JSON.parse(localStorage.getItem(SUMMARY_KEY) ?? '[]')
+    return Array.isArray(trips) ? trips.filter((t) => ids.includes(t?.id)) : []
+  } catch { return [] }
+}
+
 async function loadTrips() {
   const ids = localTrips()
   if (!ids.length) { S.trips = []; return }
@@ -1481,8 +1501,9 @@ async function loadTrips() {
     // A trip that has gone stops haunting the home page.
     for (const id of missing ?? []) forgetTrip(id)
     S.trips = trips
+    localStorage.setItem(SUMMARY_KEY, JSON.stringify(trips))
   } catch {
-    S.trips = S.trips ?? []
+    S.trips = S.trips ?? lastSummary(ids)
   }
 }
 
@@ -2283,6 +2304,36 @@ async function poll() {
 
 setInterval(poll, 5000)
 document.addEventListener('visibilitychange', () => { if (!document.hidden) poll() })
+
+// A phone that walks back into signal should not wait out the rest of the tick.
+window.addEventListener('online', poll)
+window.addEventListener('offline', () => toast('No signal. The list still reads; changes will not save.'))
+
+// ---- installed app ----------------------------------------------------------
+
+// The worker is what makes this installable and what keeps the last state the
+// server sent, so opening the app at a campsite with no bars shows your list
+// rather than nothing. Registration waits for load so it never competes with
+// the first paint or the first fetch of a trip.
+if ('serviceWorker' in navigator) {
+  // Read before registering, not after: on a first visit the worker claims this
+  // page as part of installing, and a check made afterwards would mistake that
+  // for an update and greet a new user with news of one.
+  const hadWorker = !!navigator.serviceWorker.controller
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(() => {
+      /* plain http, private mode, or no support: still an app, just not offline */
+    })
+  })
+  // Being handed a worker when there already was one means a deploy landed
+  // while this tab was open. The code running here is still the old code, so
+  // say so rather than swapping it out from under a half-typed item.
+  if (hadWorker) {
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      toast('Update ready. Reopen the app to get it.')
+    })
+  }
+}
 
 // ---- boot -------------------------------------------------------------------
 

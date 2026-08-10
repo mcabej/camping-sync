@@ -39,6 +39,9 @@ until somebody fixes that.
 - **Camp smarts** — 15 things first-timers find out the hard way.
 - **Live sync** — clients poll a revision counter every 5s and refetch on change.
 - **Activity feed** — who added, claimed, packed or dropped what.
+- **Installs, and works without a signal** — add it to a home screen and it
+  opens full-screen showing the last state the server sent, which is the state
+  that matters once you are at the campsite and the bars have gone.
 
 ## Running it locally
 
@@ -59,6 +62,8 @@ server.js          REST API + static hosting
 lib/db.js          schema, queries, trip codes
 lib/catalog.js     the camping knowledge (gear, food, drinks, plans, tips)
 public/            index.html, styles.css, app.js
+public/            sw.js, manifest.webmanifest, icons/  — the installable part
+scripts/           make-icons.mjs (regenerates public/icons)
 ```
 
 ### Data model
@@ -125,6 +130,35 @@ postcard: place, village, postcode, country.
 
 If the volume ever outgrows Nominatim's policy, this is one function to point at
 a paid geocoder — nothing else in the app knows where suggestions come from.
+
+### Installing it
+
+`manifest.webmanifest` and `public/sw.js` are what make it an app you can add
+to a home screen: full-screen, its own icon, its own splash, and no browser
+chrome eating the top of a phone. The two dark headers pay for that with
+`env(safe-area-inset-top)`, since a standalone window owns the clock's row too.
+
+The worker is stamped at boot by the same hashing that stamps `index.html`, so
+what it keeps offline is byte-for-byte the build the page asked for, and a
+deploy changes its bytes — which is what tells a browser a new worker exists at
+an unchanged path. Three caches, three lifetimes:
+
+| Cache   | Holds                              | Strategy                          |
+| ------- | ---------------------------------- | --------------------------------- |
+| `shell` | `/`, hashed `app.js` / `styles.css`| Cache first; dropped every deploy. |
+| `data`  | `GET /api/catalog`, trip state     | Network first, cache as fallback.  |
+| `fonts` | Google Fonts                       | Cache first; outlives deploys.     |
+
+What is deliberately *not* cached: the `rev` counter, because a cached answer
+to "has anything changed?" is a lie; and every write, because a claim replayed
+an hour later is a worse lie — somebody else has bought the firewood by then.
+Offline, a write fails and says so. Trip state responses carry
+`Vary: x-member-id`, which the Cache API honours, so a shared phone can never
+be handed the copy cut for the other member. The home page's summary is a POST,
+which no cache can key, so the last one is kept in `localStorage` instead.
+
+Regenerate the icons with `npm run icons` after changing the mark or the
+colours — it draws the same tent as the favicon straight into PNG.
 
 ### Auth
 

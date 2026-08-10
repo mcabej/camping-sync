@@ -613,7 +613,7 @@ const PUBLIC = join(__dirname, 'public')
 // which changes the hash, which changes the URL — so phones fetch the new file
 // instead of sitting on an hour-old copy of the old one. Nothing is ever
 // invalidated; the old URL is simply no longer pointed at.
-const ASSETS = ['app.js', 'styles.css']
+const ASSETS = ['app.js', 'styles.css', 'manifest.webmanifest']
 const assetVersions = new Map(ASSETS.map((name) => [
   name,
   createHash('sha256').update(readFileSync(join(PUBLIC, name))).digest('hex').slice(0, 8),
@@ -632,6 +632,26 @@ const indexHtml = readFileSync(join(PUBLIC, 'index.html'), 'utf8')
 const sendIndex = (_req, res) => res.set('Cache-Control', 'no-cache').type('html').send(indexHtml)
 
 app.get('/', sendIndex)
+
+// The worker is handed the same hashed URLs the markup got, so what it keeps
+// for offline is exactly what the page asks for — and the combined hash rides
+// along in its bytes, which is how a browser is told a new worker exists at an
+// unchanged path. Like index.html it must never be held, or a phone would go on
+// installing last week's worker.
+const swVersion = createHash('sha256')
+  .update([...assetVersions.values()].join('|'))
+  .digest('hex')
+  .slice(0, 8)
+
+const hashed = (name) => `/${name}?v=${assetVersions.get(name)}`
+
+const swJs = readFileSync(join(PUBLIC, 'sw.js'), 'utf8')
+  .replace('__VERSION__', swVersion)
+  .replace('__PRECACHE__', JSON.stringify(['/', ...ASSETS.map(hashed)]))
+
+app.get('/sw.js', (_req, res) => (
+  res.set('Cache-Control', 'no-cache').type('js').send(swJs)
+))
 
 app.use(express.static(PUBLIC, {
   index: false,

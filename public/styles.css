@@ -149,11 +149,13 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 
 .landing { min-height: 100dvh; display: flex; flex-direction: column; }
 
+/* Installed to a home screen, the page owns the whole screen — clock and all.
+   The inset is zero in a browser, so this is the same 56px there. */
 .landing__hero {
   background: var(--forest-deep);
   background-image: var(--ripstop);
   color: #EAF0E6;
-  padding: 56px 22px 44px;
+  padding: calc(56px + env(safe-area-inset-top)) 22px 44px;
 }
 .landing__inner { max-width: 560px; margin: 0 auto; }
 .landing__hero .eyebrow { color: rgba(234, 240, 230, .55); }
@@ -189,7 +191,7 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 
 /* Once you have trips of your own, the pitch has done its job — the hero gets
    out of the way and your list takes the top of the page. */
-.landing__hero--tight { padding: 34px 22px 28px; }
+.landing__hero--tight { padding: calc(34px + env(safe-area-inset-top)) 22px 28px; }
 .landing__hero--tight h1 { font-size: clamp(30px, 8vw, 42px); }
 
 .landing__body { flex: 1; padding: 26px 22px 60px; }
@@ -326,12 +328,14 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 
 .app { min-height: 100dvh; padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom)); }
 
+/* Sticky at the top of an installed app means sticky under the clock, so the
+   bar carries the status bar's height as padding and keeps its own 12px. */
 .topbar {
   position: sticky; top: 0; z-index: 30;
   background: var(--forest-deep);
   background-image: var(--ripstop);
   color: #EAF0E6;
-  padding: 12px 18px 0;
+  padding: calc(12px + env(safe-area-inset-top)) 18px 0;
 }
 /* The trip itself — where it is, who is coming, the invite link — is not a
    fifth list, so it is not a fifth tab. It lives behind the one thing already
