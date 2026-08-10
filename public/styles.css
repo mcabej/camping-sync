@@ -419,6 +419,45 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 
 .page { max-width: 720px; margin: 0 auto; padding: 16px 18px 30px; }
 
+/* ---- list tools --------------------------------------------------------- */
+
+/* Above the chips, and about the shape of the list rather than what is on it:
+   find one thing, or put the whole thing away a heading at a time. One row, so
+   a long list costs about as much of the screen to steer as a short one. */
+.tools { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+
+.find {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px;
+  padding: 0 10px; border-radius: var(--r-md);
+  background: var(--paper); box-shadow: inset 0 0 0 1.5px var(--line-strong);
+  transition: box-shadow .12s ease;
+}
+.find:focus-within { box-shadow: inset 0 0 0 1.5px var(--forest); }
+.find__icon { flex: none; display: grid; place-items: center; color: var(--ink-faint); }
+.find__box {
+  flex: 1; min-width: 0; min-height: 38px;
+  border: 0; background: none; padding: 0; font-size: 15px;
+}
+.find__box:focus { outline: none; }
+.find__box::placeholder { color: var(--ink-faint); }
+.find__x {
+  flex: none; display: grid; place-items: center;
+  width: 26px; height: 26px; border-radius: 50%;
+  color: var(--ink-soft); background: var(--paper-sunk);
+}
+.find__x:hover { color: var(--ink); }
+
+.tools__fold {
+  flex: none; display: inline-flex; align-items: center; gap: 6px;
+  min-height: 38px; padding: 0 12px; border-radius: var(--r-md);
+  font-size: 13px; font-weight: 600; white-space: nowrap;
+  color: var(--ink-soft); box-shadow: inset 0 0 0 1.5px var(--line);
+  transition: color .12s ease, box-shadow .12s ease;
+}
+.tools__fold:hover { color: var(--ink); box-shadow: inset 0 0 0 1.5px var(--line-strong); }
+.tools__caret { display: grid; place-items: center; transition: transform .18s ease; }
+.tools__caret--shut { transform: rotate(-90deg); }
+
 /* ---- filters ------------------------------------------------------------ */
 
 /* This was a two-way switch in the sticky header, and it charged every list the
@@ -459,6 +498,14 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 }
 .filters__chip[aria-pressed="true"] .filters__n { background: var(--blaze); color: #fff; }
 
+/* How much a chip would put away, rather than how much is still open. Grey,
+   because blaze means one thing in this app and this is the opposite of it. */
+.filters__n--quiet { background: var(--line); color: var(--ink-soft); }
+.filters__chip[aria-pressed="true"] .filters__n--quiet {
+  background: rgba(255, 255, 255, .22); color: #F4F8F0;
+}
+.filters__chip svg { flex: none; width: 13px; height: 13px; }
+
 /* Who brings it is a different question from what sort of thing it is. */
 .filters__div { flex: none; width: 1.5px; height: 18px; background: var(--line-strong); border-radius: 2px; }
 
@@ -467,12 +514,28 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 .group { margin-bottom: 26px; }
 /* The foot of the list belongs to the list, so it keeps the row spacing. */
 .group:last-of-type { margin-bottom: 0; }
-.group__head {
-  display: flex; align-items: baseline; gap: 10px;
-  padding-bottom: 7px; margin-bottom: 3px;
+/* The heading is also the handle. It stays a heading — same size, same rule
+   under it — because a list that grew a row of buttons across the top of every
+   section would be a louder page for the sake of a control most people use
+   twice. The caret is the only thing added, and it is the size of a full stop. */
+.group__head { font-size: 13px; margin-bottom: 3px; }
+.group__fold {
+  display: flex; align-items: center; gap: 8px;
+  width: 100%; min-height: 40px; padding: 6px 2px 7px;
+  text-align: left; color: inherit;
   border-bottom: 1.5px solid var(--line-strong);
 }
-.group__head h3 { font-size: 13px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; }
+.group__name { font-weight: 800; letter-spacing: .05em; text-transform: uppercase; }
+.group__caret {
+  flex: none; display: grid; place-items: center; color: var(--ink-faint);
+  transition: transform .18s ease, color .12s ease;
+}
+/* Pointing at what it is showing; at the heading when there is nothing under it. */
+.group--shut .group__caret { transform: rotate(-90deg); }
+.group--shut .group__fold { border-bottom-color: var(--line); }
+.group__fold:hover .group__caret { color: var(--ink); }
+/* Folded sections stack, so they sit closer than open ones do. */
+.group--shut { margin-bottom: 12px; }
 .group__tally {
   margin-left: auto; font-family: var(--mono); font-size: 11.5px;
   color: var(--ink-faint); letter-spacing: .05em; white-space: nowrap;

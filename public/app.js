@@ -68,6 +68,10 @@ const ICONS = {
   tickGreen: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5 9.5 18 20 6.5"/></svg>',
   x: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>',
   plus: '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
+  // Points down at what it is showing, and turns to point at the heading when
+  // the section is folded away behind it.
+  caret: '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 9 7 7 7-7"/></svg>',
+  find: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>',
   pin: '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s7-6.1 7-11a7 7 0 1 0-14 0c0 4.9 7 11 7 11Z"/><circle cx="12" cy="10" r="2.5"/></svg>',
   spark: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5 13.8 9l5.7 1.8-5.7 1.8L12 18l-1.8-5.4L4.5 10.8 10.2 9 12 3.5Z"/><path d="M19 3v3M20.5 4.5h-3"/></svg>',
   // iOS draws its Share button as a box with an arrow leaving it, and the only
@@ -85,9 +89,11 @@ const S = {
   // The trip page, over the top of whichever tab you were on. Not a tab of its
   // own, so the bar always has exactly one answer to "where am I".
   camp: false,
-  // How the list on screen is narrowed: who brings it, and what kind of thing
-  // it is. Empty means everything, which is where every tab starts.
-  filter: { kind: '', cat: '' },
+  // How the list on screen is narrowed: who brings it, what kind of thing it
+  // is, whether to bother with what is already handled, and whatever you typed
+  // into the search box. All empty means everything, which is where every tab
+  // starts — and where it goes back to when you leave it.
+  filter: { kind: '', cat: '', hide: false, q: '' },
   trip: null, members: [], items: [], events: [],
   catalog: null, tips: [],
   me: null,          // member id
@@ -97,6 +103,12 @@ const S = {
   editNotes: false,  // the shared notes read as text until you ask to change them
   editWhere: false,  // same for where the trip is, which is read far more than written
   expand: { tips: false, feed: false },
+  // Which headings are folded shut, as "tab:heading" — a long list is read a
+  // section at a time, and Shelter & sleep should stay shut on the packing list
+  // without shutting Dinner on the food. `touched` is the ones you have folded
+  // or unfolded yourself, which is how the app knows not to overrule you.
+  // Both are kept per trip on this device; see loadFolds.
+  folds: { shut: new Set(), touched: new Set() },
   // Home page: the trips this device has joined. null while we're still asking.
   trips: null,
   joinCode: '',
@@ -207,7 +219,28 @@ const hasOwnSection = (tab) =>
 const catOf = (it) => it.category || 'Other'
 
 const inKind = (it, kind) => !kind || (kind === 'own') === isOwn(it)
-const matchesFilter = (it, f) => inKind(it, f.kind) && (!f.cat || catOf(it) === f.cat)
+
+// "Sorted" is whatever the tally at the head of the section already counts as
+// done, so the chip hides exactly what the numbers say is handled: on a list,
+// somebody has put their name to it — or, for your own kit, you have packed it.
+// On your own page everything already has your name on it, so there the only
+// question left is whether it is in the car.
+const isSettled = (it) => (S.tab === 'mine' ? packedForMe(it) : isOwn(it) ? isMine(it) : isClaimed(it))
+
+// Search is the one filter that does not care how the list is organised: you
+// type "sock" because you want the socks, wherever they are filed and whoever
+// is bringing them. Notes count — half of what a thing is is in its note.
+function matchesQuery(it, q) {
+  if (!q) return true
+  const s = q.trim().toLowerCase()
+  return !s || [it.title, it.note, it.category, it.qty, it.place]
+    .some((v) => String(v ?? '').toLowerCase().includes(s))
+}
+
+// Everything except the category, because the category chips are built out of
+// what is left after the others have had their say.
+const preCat = (it, f) => inKind(it, f.kind) && (!f.hide || !isSettled(it)) && matchesQuery(it, f.q)
+const matchesFilter = (it, f) => preCat(it, f) && (!f.cat || catOf(it) === f.cat)
 
 // What the page on screen can be narrowed: everything it would show unfiltered,
 // and whether both halves are a question on it at all.
@@ -226,7 +259,14 @@ function pageParts() {
 // Nothing pressed means everything. A page with no personal half has no chip to
 // press, so a leftover 'own' from the tab you came from cannot hide a list.
 function activeFilter() {
-  return { kind: pageParts().kinds ? S.filter.kind : '', cat: S.filter.cat }
+  return {
+    kind: pageParts().kinds ? S.filter.kind : '',
+    cat: S.filter.cat,
+    // Plans are not brought by anybody, so there is nothing on that tab for
+    // "already handled" to mean and no chip offering it.
+    hide: !!S.filter.hide && !isPlanTab(currentTab()),
+    q: String(S.filter.q ?? ''),
+  }
 }
 
 // What "add" and "what am I missing?" mean while a filter is on. Narrowing the
@@ -425,9 +465,49 @@ function coverageBar(p) {
 // kind chip carries what is left to do behind it — `count` returns that number
 // and whether it is yours, because blaze means "nobody has this" everywhere in
 // the app and your own kit is somebody's.
+// A list you can read is a list you scroll; a list you have to search is a
+// longer one than that. Under this many things the box is one more control
+// between you and the tent.
+const FIND_MIN = 8
+
+// Above the chips: the two controls that are about the shape of the list rather
+// than about what is on it. Both earn their place or neither is drawn — a page
+// with six things on it and one heading has nothing to search and nothing to
+// fold.
+function listTools(all) {
+  const f = activeFilter()
+  const groups = pageGroups()
+  const findable = all.length >= FIND_MIN || !!f.q
+  const foldable = groups.length > 1 && !f.cat && !f.q.trim()
+  if (!findable && !foldable) return ''
+
+  const allShut = foldable && groups.every(([name]) => isShut(name))
+  return `
+    <div class="tools">
+      ${findable ? `
+        <div class="find">
+          <span class="find__icon" aria-hidden="true">${ICONS.find}</span>
+          <label class="sr-only" for="cs-find">Search this list</label>
+          <input class="find__box" id="cs-find" data-find value="${esc(f.q)}"
+                 placeholder="Search this list" enterkeyhint="search" inputmode="search"
+                 autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" maxlength="60">
+          ${f.q ? `<button class="find__x" data-act="find-clear" aria-label="Clear the search">${ICONS.x}</button>` : ''}
+        </div>` : ''}
+      ${foldable ? `
+        <button class="tools__fold" data-act="fold-all" data-shut="${!allShut}"
+                aria-label="${allShut ? 'Unfold every section' : 'Fold every section'}">
+          <span class="tools__caret${allShut ? ' tools__caret--shut' : ''}" aria-hidden="true">${ICONS.caret}</span>
+          ${allShut ? 'Unfold all' : 'Fold all'}</button>` : ''}
+    </div>`
+}
+
 function filterBar(all, kinds, count) {
   const f = activeFilter()
-  if (!all.length) return ''
+  // Nothing to narrow and no halves to choose between is nothing to say. An
+  // empty list that does have two halves keeps its chips, because a trip now
+  // starts with nothing on it and this is the way to the personal side of it —
+  // "What am I missing?" offers whichever half you are standing in.
+  if (!all.length && !kinds) return ''
 
   const kindChip = (key) => {
     const [n, yours] = count(key)
@@ -441,26 +521,57 @@ function filterBar(all, kinds, count) {
     <button class="filters__chip" data-act="filter-cat" data-value="${esc(cat)}"
             aria-pressed="${f.cat === cat}">${esc(cat)}</button>`
 
-  // The categories on offer are the ones left after the first chip, so the row
-  // never offers a cut that comes back empty.
-  const cats = [...new Set(all.filter((i) => inKind(i, f.kind)).map(catOf))]
+  // The categories on offer are the ones left after everything else has had its
+  // say, so the row never offers a cut that comes back empty.
+  const cats = [...new Set(all.filter((i) => preCat(i, f)).map(catOf))]
+
+  // Most of a packing list is settled by the time you leave, and the part that
+  // is not is the whole reason you opened it. This is the biggest cut on the
+  // page and it wears no blaze: what it hides is the handled half, not the gap.
+  const settled = all.filter((i) => inKind(i, f.kind) && isSettled(i)).length
+  const hideChip = !settled && !f.hide ? '' : `
+    <button class="filters__chip" data-act="filter-hide" aria-pressed="${f.hide}">
+      ${ICONS.tickGreen}${S.tab === 'mine' ? 'Hide packed' : 'Hide sorted'}
+      ${settled ? `<span class="filters__n filters__n--quiet">${settled}</span>` : ''}</button>
+    <span class="filters__div" aria-hidden="true"></span>`
 
   return `
     <div class="filters" role="group" aria-label="Filter this list">
+      ${isPlanTab(currentTab()) ? '' : hideChip}
       ${kinds ? `${kindChip('shared')}${kindChip('own')}
         <span class="filters__div" aria-hidden="true"></span>` : ''}
       ${cats.map(catChip).join('')}
     </div>`
 }
 
-// Only reachable by chipping away at a page that does have things on it, so the
-// way out is the filter rather than the list.
-const noMatch = (f) => `
-  <div class="empty">
-    <h3>Nothing in ${esc(f.cat)}</h3>
-    <p>Not with that filter on, anyway.</p>
-    <button class="btn" data-act="filter-cat" data-value="${esc(f.cat)}">Show the whole list</button>
-  </div>`
+// Only reachable by narrowing a page that does have things on it, so the way
+// out is whichever narrowing you are standing behind — the last one applied is
+// the one you are most likely to have meant to undo.
+function noMatch(f) {
+  const q = f.q.trim()
+  if (q) {
+    return `
+      <div class="empty">
+        <h3>Nothing matches “${esc(q)}”</h3>
+        <p>${f.hide || f.cat || f.kind ? 'There are other filters on as well, so it may be in here somewhere.' : 'Nothing on this list has those letters in it.'}</p>
+        <button class="btn" data-act="find-clear">Clear the search</button>
+      </div>`
+  }
+  if (f.hide) {
+    return `
+      <div class="empty">
+        <h3>${S.tab === 'mine' ? 'All packed' : 'All sorted'}</h3>
+        <p>Everything ${f.cat ? `in ${esc(f.cat)} ` : ''}has been dealt with. That is the whole of it hidden.</p>
+        <button class="btn" data-act="filter-hide">Show it anyway</button>
+      </div>`
+  }
+  return `
+    <div class="empty">
+      <h3>Nothing in ${esc(f.cat)}</h3>
+      <p>Not with that filter on, anyway.</p>
+      <button class="btn" data-act="filter-cat" data-value="${esc(f.cat)}">Show the whole list</button>
+    </div>`
+}
 
 // A person, in the space a face takes. Two letters at most: on a row this is
 // scenery until you look for yourself in it, and then it has to answer at once.
@@ -837,19 +948,59 @@ function topbar() {
     </header>`
 }
 
+// A heading is a heading and a handle. Fourteen things under Camp kitchen is a
+// screen and a half you scroll past to reach Clothing, so every section folds —
+// and folded, its tally is still on screen, which is the part you were reading
+// the section for anyway. Shut sections are left out of the page rather than
+// hidden in it: nothing to scroll through, nothing to tab into.
+// The headings on the page as it stands, in the order it draws them, each with
+// what is under it. One answer for both kinds of page, so "fold all" and the
+// auto-folding are looking at exactly what you are looking at.
+function pageGroups() {
+  const f = activeFilter()
+  const shown = pageParts().items.filter((it) => matchesFilter(it, f))
+  if (S.tab !== 'mine') return groupByCategory(shown)
+  // Grouped by the tab each thing came from, in tab order, so the page maps
+  // onto the app you already know.
+  return TABS.filter((t) => t.lists.length && !isPlanTab(t))
+    .map((tab) => [tab.label, tab.lists.flatMap((l) => shown.filter((it) => it.list === l))])
+    .filter(([, list]) => list.length)
+}
+
+// A pressed category chip, or something typed in the search box, has already
+// cut the page down to what you asked for — so the folds stand aside while
+// either is on, rather than answering you with a row of closed headings. They
+// are waiting when you let go.
+const foldKey = (name) => `${S.tab}:${name}`
+const isShut = (name) => {
+  const f = activeFilter()
+  return !f.cat && !f.q.trim() && S.folds.shut.has(foldKey(name))
+}
+
+function groupSection(name, tally, body) {
+  const shut = isShut(name)
+  return `
+    <section class="group${shut ? ' group--shut' : ''}">
+      <h3 class="group__head">
+        <button class="group__fold" data-act="fold" data-group="${esc(name)}" aria-expanded="${!shut}">
+          <span class="group__caret" aria-hidden="true">${ICONS.caret}</span>
+          <span class="group__name">${esc(name)}</span>
+          <span class="group__tally">${tally}</span>
+        </button>
+      </h3>
+      ${shut ? '' : body}
+    </section>`
+}
+
 // A group is done when each thing in it is sorted, which is a different question
 // for the two halves: a group thing has somebody's name on it, your own kit is
 // packed. Mixed groups count both and leave the word off.
-function categoryGroups(items, mixed) {
-  return groupByCategory(items).map(([cat, list]) => {
+function categoryGroups(groups, mixed) {
+  return groups.map(([cat, list]) => {
     const done = list.filter((i) => (isOwn(i) ? isMine(i) : isClaimed(i))).length
     const tally = list.every(isOwn) ? `${done}/${list.length} packed` : `${done}/${list.length}`
-    return `
-      <section class="group">
-        <div class="group__head"><h3>${esc(cat)}</h3>
-          <span class="group__tally">${list[0] && isPlan(list[0]) ? `${list.length}` : tally}</span></div>
-        <ul class="items">${list.map((i) => itemRow(i, mixed)).join('')}</ul>
-      </section>`
+    return groupSection(cat, list[0] && isPlan(list[0]) ? `${list.length}` : tally,
+      `<ul class="items">${list.map((i) => itemRow(i, mixed)).join('')}</ul>`)
   }).join('')
 }
 
@@ -880,7 +1031,7 @@ function listPage() {
   } else if (!items.length) {
     body = noMatch(f)
   } else {
-    body = `${categoryGroups(items, !f.kind)}
+    body = `${categoryGroups(pageGroups(), !f.kind)}
       <div class="listfoot">
         <button class="listfoot__add" data-act="add">
           <span class="listfoot__plus">${ICONS.plus}</span>Add your own
@@ -894,6 +1045,7 @@ function listPage() {
   // list is now, and the sheets say what each half means as you use them.
   return `
     <main class="page">
+      ${pool.length ? listTools(pool) : ''}
       ${filterBar(all, kinds, count)}
       ${body}
     </main>`
@@ -954,28 +1106,21 @@ function minePage() {
   const count = (key) =>
     [load.filter((it) => (key === 'own') === isOwn(it) && !packedForMe(it)).length, true]
 
-  // Grouped by the tab each thing came from, in tab order, so the page maps
-  // onto the app you already know. Inside a group, what the others are counting
-  // on you for comes before what only you would miss.
-  const groups = TABS.filter((t) => t.lists.length && !isPlanTab(t))
-    .map((tab) => [tab, tab.lists.flatMap((l) => shown.filter((it) => it.list === l))])
-    .filter(([, items]) => items.length)
-    .map(([tab, items]) => {
-      const rows = [...items.filter((i) => !isOwn(i)), ...items.filter(isOwn)]
-      return `
-        <section class="group">
-          <div class="group__head"><h3>${esc(tab.label)}</h3>
-            <span class="group__tally">${rows.filter(packedForMe).length}/${rows.length} packed</span></div>
-          <ul class="items">${rows.map(mineRow).join('')}</ul>
-        </section>`
-    }).join('')
+  // Inside a group, what the others are counting on you for comes before what
+  // only you would miss.
+  const groups = pageGroups().map(([name, items]) => {
+    const rows = [...items.filter((i) => !isOwn(i)), ...items.filter(isOwn)]
+    return groupSection(name, `${rows.filter(packedForMe).length}/${rows.length} packed`,
+      `<ul class="items">${rows.map(mineRow).join('')}</ul>`)
+  }).join('')
 
   // "That is the lot" is a claim about your whole load, so a filter that hides
   // half of it has no business making the claim.
-  const done = !f.kind && !f.cat && load.every(packedForMe)
+  const done = !f.kind && !f.cat && !f.hide && !f.q && load.every(packedForMe)
 
   return `
     <main class="page">
+      ${listTools(load)}
       ${filterBar(load, kinds, count)}
       ${shown.length ? groups : noMatch(f)}
       ${done ? '<p class="mine__done">That is the lot. Nothing left on your list.</p>' : ''}
@@ -1320,15 +1465,17 @@ function sheetItem(s) {
       </button>`
   }).join('')
 
-  const mine = !!myClaim(item)
+  // The item, and then the names. There is no separate "I'll bring it" button:
+  // your own name is in the list like everybody else's, and tapping it is the
+  // same tap — a shortcut that duplicates the row underneath it only makes you
+  // read both to work out whether they do the same thing.
   return sheetShell({
-    title: plan ? `Who's organising ${item.title}?` : `Who's bringing ${item.title}?`,
+    title: item.title,
     blurb: plan
       ? 'Optional, and it can be more than one of you — only for the plans that need booking or kit.'
       : 'As many of you as it takes. Each person ticks off their own share.',
     body: `
       ${kindSwitch}
-      ${me && !mine ? `<button class="btn btn--primary btn--wide" style="margin-bottom:14px" data-act="claim" data-id="${item.id}" data-member="${me.id}">${plan ? "I'll organise it" : "I'll bring it"}</button>` : ''}
       ${rows}
       <div style="margin-top:18px">
         <form data-act="add-member">
@@ -1445,10 +1592,15 @@ function sheetSuggest(s) {
     groups.get(c.cat).push(c)
   }
 
+  // Nothing is on the list until somebody puts it there, so this sheet is now
+  // where a trip actually gets built. The things you cannot camp without go to
+  // the top of their heading — the rest of the order is the catalogue's.
+  const first = (list) => [...list].sort((a, b) => (b.starter ? 1 : 0) - (a.starter ? 1 : 0))
+
   const body = [...groups.entries()].map(([cat, list]) => `
     <div class="sheet__group">
       <span class="eyebrow">${esc(cat)}</span>
-      ${list.map((c) => `
+      ${first(list).map((c) => `
         <button class="pick" data-act="toggle-pick" data-pick="${esc(c.key)}" aria-pressed="${picked.has(c.key)}">
           <span class="pick__main">
             <span class="pick__title">${esc(c.title)}</span>
@@ -1467,16 +1619,56 @@ function sheetSuggest(s) {
   })
 }
 
+// Which sheet is on screen, as opposed to what it currently says. Ticking a
+// name onto the bacon changes the second and not the first.
+let sheetSig = null
+
 function renderSheet() {
-  if (!S.sheet) { sheetRoot.innerHTML = ''; return }
+  if (!S.sheet) { sheetRoot.innerHTML = ''; sheetSig = null; return }
   const map = { item: sheetItem, add: sheetAdd, suggest: sheetSuggest, place: sheetPlace }
-  sheetRoot.innerHTML = map[S.sheet.kind]?.(S.sheet) ?? ''
+  const html = map[S.sheet.kind]?.(S.sheet) ?? ''
+  const sig = `${S.sheet.kind}:${S.sheet.id ?? ''}`
+  const open = sheetRoot.querySelector('.sheet')
+
+  // The same sheet, saying something new, keeps its own element: throwing it
+  // away and building another replays the slide-in and the scrim fading up, so
+  // putting your name to something made the whole sheet flinch. Only the
+  // contents change, and where you had scrolled to survives with them.
+  if (open && sig === sheetSig) {
+    const next = document.createElement('div')
+    next.innerHTML = html
+    const fresh = next.querySelector('.sheet')
+    if (fresh) {
+      const body = open.querySelector('.sheet__body')
+      const y = body?.scrollTop ?? 0
+      open.innerHTML = fresh.innerHTML
+      const after = open.querySelector('.sheet__body')
+      if (after) after.scrollTop = y
+      return
+    }
+  }
+
+  sheetRoot.innerHTML = html
+  sheetSig = sig
 }
 
 // ---- render -----------------------------------------------------------------
 
+// Two things the page is holding that its HTML does not say: how far along the
+// chip row you had scrolled, and where the cursor was in the search box. Both
+// are thrown away by rebuilding the page and both are missed at once — a chip
+// row that springs back to the start every time you press a chip means swiping
+// back to the same chip to press it again.
+let chipsAt = { where: '', x: 0 }
+
 function render() {
   const y = window.scrollY
+  const was = root.querySelector('.filters')
+  if (was) chipsAt.x = was.scrollLeft
+
+  const box = document.activeElement
+  const caret = box?.id === 'cs-find' ? { start: box.selectionStart, end: box.selectionEnd } : null
+
   const views = { landing: viewLanding, join: viewJoin, trip: viewTrip }
   root.innerHTML = views[S.view]?.() ?? '<div class="page"><p>Loading…</p></div>'
   // The install card floats over the bottom of the screen, which on the trip
@@ -1484,12 +1676,78 @@ function render() {
   document.body.classList.toggle('has-tabbar', S.view === 'trip')
   renderSheet()
   if (S.view === 'trip') window.scrollTo(0, y)
+
+  // The row goes back where it was, unless this is a different page's row —
+  // a new tab starts at the left, the same as it would if you had just arrived.
+  const here = `${S.view}:${S.camp ? 'camp' : S.tab}`
+  const row = root.querySelector('.filters')
+  if (row) row.scrollLeft = here === chipsAt.where ? chipsAt.x : 0
+  chipsAt = { where: here, x: row ? row.scrollLeft : 0 }
+
+  // The search box sits inside the list it filters, so every keystroke rebuilds
+  // the box being typed in. The cursor is put back exactly where it was, which
+  // is what makes editing the middle of a word possible.
+  if (caret) {
+    const found = root.querySelector('#cs-find')
+    if (found) { found.focus(); found.setSelectionRange(caret.start, caret.end) }
+  }
 }
 
 // ---- actions ----------------------------------------------------------------
 
 const meKey = (tripId) => `cs.me.${tripId}`
 const TRIPS_KEY = 'cs.trips'
+const foldsKey = (tripId) => `cs.folds.${tripId}`
+
+// Packing happens over a week and a dozen visits, not in one sitting, so a
+// heading you shut on Tuesday is still shut on Thursday. It is a view of the
+// list rather than part of it, so it lives on the device: two people can have
+// the same trip open with different things folded away, and neither is wrong.
+function loadFolds() {
+  S.folds = { shut: new Set(), touched: new Set() }
+  try {
+    const kept = JSON.parse(localStorage.getItem(foldsKey(S.trip.id)) ?? '{}')
+    for (const k of kept.shut ?? []) S.folds.shut.add(k)
+    for (const k of kept.touched ?? []) S.folds.touched.add(k)
+  } catch { /* nothing remembered, or nowhere to remember it */ }
+}
+
+function saveFolds() {
+  try {
+    localStorage.setItem(foldsKey(S.trip.id),
+      JSON.stringify({ shut: [...S.folds.shut], touched: [...S.folds.touched] }))
+  } catch { /* private mode: the folds last as long as the visit does */ }
+}
+
+// A heading with nothing left to answer folds itself, so the list closes up as
+// the trip comes together and what is left is what is left.
+//
+// Only ever on the way in to a tab. A section that collapsed the moment you
+// ticked the last thing in it would take the row you just ticked off the screen
+// under your finger, which is the app arguing with you. And never a heading you
+// have folded or unfolded yourself: that is an answer already given.
+function autoFold() {
+  // Nothing on the Plan tab is ever settled — an idea with somebody's name on
+  // it is still an idea, and a board that folded itself away would be hiding
+  // the plans that are actually happening.
+  if (!S.trip || isPlanTab(currentTab())) return
+  for (const [name, list] of pageGroups()) {
+    const key = foldKey(name)
+    if (S.folds.touched.has(key)) continue
+    if (list.length && list.every(isSettled)) S.folds.shut.add(key)
+    else S.folds.shut.delete(key)
+  }
+  saveFolds()
+}
+
+// Landing on a trip: take the state, pick up whatever this device had folded
+// away, and fold up anything that has been settled since you last looked.
+function arrive(state) {
+  absorb(state)
+  loadFolds()
+  autoFold()
+  render()
+}
 
 // There are no accounts, so "your trips" is whatever this device remembers.
 // Most-recent first, with the per-trip member keys as a fallback so trips joined
@@ -1515,6 +1773,7 @@ const rememberTrip = (id) => saveTrips([id, ...localTrips().filter((t) => t !== 
 function forgetTrip(id) {
   saveTrips(localTrips().filter((t) => t !== id))
   localStorage.removeItem(meKey(id))
+  localStorage.removeItem(foldsKey(id))
   if (S.trips) S.trips = S.trips.filter((t) => t.id !== id)
 }
 
@@ -1595,7 +1854,7 @@ async function joinAs(rawName, claim = '') {
     S.me = member.id
     S.joinClash = null
     S.view = 'trip'
-    absorb(await api(`/trips/${S.trip.id}`))
+    arrive(await api(`/trips/${S.trip.id}`))
   } catch (err) {
     if (err.payload?.conflict === 'name') {
       S.joinClash = { name: err.payload.name, asking: 'who' }
@@ -1620,7 +1879,8 @@ async function openTrip(code) {
     S.joinError = ''
     S.joinClash = null
     S.view = S.me ? 'trip' : 'join'
-    absorb(state)
+    if (S.view === 'trip') arrive(state)
+    else absorb(state)
   } catch (err) {
     S.me = null
     history.replaceState({}, '', '/')
@@ -1678,8 +1938,10 @@ document.addEventListener('click', async (ev) => {
       S.camp = false
       // A filter belongs to the list you set it on. Carrying "Shelter" onto the
       // food would be a list with most of the food missing and no reason on
-      // screen for it.
-      S.filter = { kind: '', cat: '' }
+      // screen for it. The same goes for whatever is in the search box.
+      S.filter = { kind: '', cat: '', hide: false, q: '' }
+      // Arriving is when the folds are allowed to move on their own.
+      autoFold()
       render()
       window.scrollTo(0, 0)
       break
@@ -1713,10 +1975,55 @@ document.addEventListener('click', async (ev) => {
       window.scrollTo(0, 0)
       break
 
+    // The one chip that answers "what is actually left", which on the morning
+    // you leave is the only question on the page.
+    case 'filter-hide':
+      S.filter = { ...S.filter, hide: !S.filter.hide }
+      render()
+      window.scrollTo(0, 0)
+      break
+
+    case 'find-clear':
+      S.filter = { ...S.filter, q: '' }
+      render()
+      break
+
+    // Fold all, and then unfold all — one button, because the second is only
+    // ever wanted straight after the first. Doing it by hand counts as having
+    // an opinion, so nothing folded this way is folded back by the app.
+    case 'fold-all': {
+      const shut = el.dataset.shut === 'true'
+      for (const [name] of pageGroups()) {
+        const key = foldKey(name)
+        S.folds.touched.add(key)
+        if (shut) S.folds.shut.add(key)
+        else S.folds.shut.delete(key)
+      }
+      saveFolds()
+      render()
+      window.scrollTo(0, 0)
+      break
+    }
+
     case 'expand':
       S.expand[el.dataset.what] = !S.expand[el.dataset.what]
       render()
       break
+
+    // Folding a section moves everything under it up the page, so the heading
+    // you pressed is put back where your thumb left it rather than wherever the
+    // shorter page happens to put it.
+    case 'fold': {
+      const key = foldKey(el.dataset.group)
+      const y = el.getBoundingClientRect().top
+      S.folds.touched.add(key)
+      S.folds.shut.has(key) ? S.folds.shut.delete(key) : S.folds.shut.add(key)
+      saveFolds()
+      render()
+      const now = root.querySelector(`[data-act="fold"][data-group="${CSS.escape(el.dataset.group)}"]`)
+      if (now) window.scrollBy(0, now.getBoundingClientRect().top - y)
+      break
+    }
 
     case 'place':
       S.sheet = { kind: 'place', id: el.dataset.id }
@@ -1932,7 +2239,7 @@ document.addEventListener('submit', async (ev) => {
         S.view = 'trip'
         S.tab = 'pack'
         history.pushState({}, '', `/t/${trip.id}`)
-        absorb(await api(`/trips/${trip.id}`))
+        arrive(await api(`/trips/${trip.id}`))
         toast('Trip created. Send the link to your friends.')
       } catch (err) { toast(err.message) }
       break
@@ -2019,6 +2326,43 @@ document.addEventListener('submit', async (ev) => {
 
 document.addEventListener('keydown', (ev) => {
   if (ev.key === 'Escape' && S.sheet) { S.sheet = null; renderSheet() }
+})
+
+// ---- searching a list -------------------------------------------------------
+
+// Every keystroke redraws the list under the box, which is the point: nothing
+// to submit, nothing to wait for, and the answer shrinking towards what you
+// meant as you type. render() puts the cursor back afterwards.
+//
+// Except mid-composition. A phone keyboard building a word out of several
+// keystrokes has a claim on the box it is building it in, and replacing that
+// box under it drops characters — so those are let through and the list catches
+// up when the word is finished.
+function typedFind(box) {
+  if (S.filter.q === box.value) return
+  S.filter = { ...S.filter, q: box.value }
+  render()
+}
+
+document.addEventListener('input', (ev) => {
+  const box = ev.target.closest?.('[data-find]')
+  if (box && !ev.isComposing) typedFind(box)
+})
+
+document.addEventListener('compositionend', (ev) => {
+  const box = ev.target.closest?.('[data-find]')
+  if (box) typedFind(box)
+})
+
+// Nothing to submit, so Enter means "I am done typing" — which on a phone is
+// worth taking as "put the keyboard away and let me see the list".
+document.addEventListener('keydown', (ev) => {
+  if (ev.key !== 'Enter' && ev.key !== 'Escape') return
+  const box = ev.target.closest?.('[data-find]')
+  if (!box) return
+  ev.preventDefault()
+  if (ev.key === 'Escape' && box.value) { S.filter = { ...S.filter, q: '' }; render() }
+  else box.blur()
 })
 
 // ---- place search -----------------------------------------------------------

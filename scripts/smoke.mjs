@@ -9,25 +9,39 @@ const el = () => ({
   setAttribute() {}, removeAttribute() {}, focus() {}, setSelectionRange() {},
   matches: () => false, closest: () => null, getBoundingClientRect: () => ({ top: 0, bottom: 0 }),
 })
-const roots = { root: el(), 'sheet-root': el(), toast: el() }
+const roots = { root: el(), 'sheet-root': el(), toast: el(), install: el() }
 
 globalThis.document = {
   getElementById: (id) => roots[id], addEventListener() {}, createElement: el,
   documentElement: { style: { setProperty() {} }, classList: { toggle() {} } },
+  body: { classList: { add() {}, remove() {}, toggle() {} }, style: { setProperty() {}, removeProperty() {} } },
   hidden: false, activeElement: null, querySelector: () => null,
 }
-globalThis.window = { scrollY: 0, scrollTo() {}, addEventListener() {}, innerHeight: 800, visualViewport: null }
 globalThis.matchMedia = () => ({ matches: false })
+globalThis.window = {
+  scrollY: 0, scrollTo() {}, scrollBy() {}, addEventListener() {},
+  innerHeight: 800, visualViewport: null, matchMedia: globalThis.matchMedia,
+}
 globalThis.location = { pathname: '/', origin: 'http://x' }
 globalThis.history = { pushState() {}, replaceState() {} }
-globalThis.localStorage = { getItem: () => null, setItem() {}, removeItem() {}, length: 0, key: () => null }
+// A real store, so what the app remembers between visits can be tested.
+const store = new Map()
+globalThis.localStorage = {
+  getItem: (k) => (store.has(k) ? store.get(k) : null),
+  setItem: (k, v) => store.set(k, String(v)),
+  removeItem: (k) => store.delete(k),
+  get length() { return store.size },
+  key: (i) => [...store.keys()][i] ?? null,
+}
 globalThis.fetch = async () => ({ ok: true, json: async () => ({ catalog: {}, tips: [] }) })
 
 const src = readFileSync('public/app.js', 'utf8')
-const hooks = ['S', 'render', 'viewTrip', 'renderSheet', 'CAMP', 'TABS']
+const hooks = ['S', 'render', 'viewTrip', 'renderSheet', 'CAMP', 'TABS',
+  'loadFolds', 'saveFolds', 'autoFold', 'pageGroups']
 new Function(`${src}\n;Object.assign(globalThis, {${hooks.map((h) => `__${h}: ${h}`).join(',')}})`)()
 
-const { __S: S, __render: render, __viewTrip: viewTrip, __renderSheet: renderSheet, __TABS: TABS } = globalThis
+const { __S: S, __render: render, __viewTrip: viewTrip, __renderSheet: renderSheet, __TABS: TABS,
+  __loadFolds: loadFolds, __saveFolds: saveFolds, __autoFold: autoFold } = globalThis
 const { CATALOG } = await import('../lib/catalog.js')
 
 // A trip with a bit of everything: claimed by one, claimed by three, unclaimed,
@@ -67,7 +81,9 @@ let bad = 0
 const check = (label, ok) => { if (!ok) { bad++; console.log(`  FAIL  ${label}`) } else console.log(`  ok    ${label}`) }
 
 const FILTERS = [{ kind: '', cat: '' }, { kind: 'shared', cat: '' }, { kind: 'own', cat: '' },
-  { kind: '', cat: 'Shelter' }, { kind: 'shared', cat: 'Nothing filed here' }]
+  { kind: '', cat: 'Shelter' }, { kind: 'shared', cat: 'Nothing filed here' },
+  { kind: '', cat: '', hide: true }, { kind: '', cat: '', q: 'te' },
+  { kind: '', cat: '', q: 'nothing on any list' }, { kind: 'own', cat: '', hide: true, q: 'bag' }]
 
 for (const camp of [false, true]) {
   for (const t of TABS) {
@@ -80,7 +96,7 @@ for (const camp of [false, true]) {
     }
   }
 }
-S.filter = { kind: '', cat: '' }
+S.filter = { kind: '', cat: '', hide: false, q: '' }
 
 // The lists are one list now: both halves on the page, filtered from the top.
 S.camp = false; S.tab = 'pack'
@@ -116,24 +132,24 @@ check('nothing at all beside a thing nobody has', (eatRows.match(/class="who"/g)
 check('no + beside the faces', !find(eatRows, 'who__add') && !find(eatRows, 'who__none'))
 S.tab = 'pack'
 
-S.filter = { kind: 'own', cat: '' }
+S.filter = { kind: 'own', cat: '', hide: false, q: '' }
 const own = viewTrip()
 check('personal kit filter keeps your own', find(own, 'Sleeping bag') && find(own, 'Headlamp'))
 check('personal kit filter drops the group', !find(own, '>Tent<') && !find(own, 'Firewood'))
 check('personal rows need no label on their own page', !find(own, 'personal kit · only you see this'))
 check('the pressed chip shows as pressed', find(own, 'data-value="own" aria-pressed="true"'))
 
-S.filter = { kind: '', cat: 'Camp kitchen' }
+S.filter = { kind: '', cat: 'Camp kitchen', hide: false, q: '' }
 const kitchen = viewTrip()
 check('category filter keeps its category', find(kitchen, 'Camp stove') && find(kitchen, 'Cooler'))
 check('category filter drops the rest', !find(kitchen, '>Tent<') && !find(kitchen, 'Firewood'))
 
-S.filter = { kind: 'own', cat: 'Camp kitchen' }
+S.filter = { kind: 'own', cat: 'Camp kitchen', hide: false, q: '' }
 check('a filter with nothing behind it offers the way out',
   find(viewTrip(), 'data-act="filter-cat" data-value="Camp kitchen">Show the whole list'))
 
 // The merge: one Eat tab must carry food and drink together.
-S.filter = { kind: '', cat: '' }; S.tab = 'eat'
+S.filter = { kind: '', cat: '', hide: false, q: '' }; S.tab = 'eat'
 const eat = viewTrip()
 check('Eat shows food', find(eat, 'Burgers') && find(eat, 'Crisps'))
 check('Eat shows drink', find(eat, 'Beer') && find(eat, 'Drinking water'))
@@ -143,7 +159,7 @@ check('nothing on Eat is uningestible', !find(eat, 'cooler') && !find(eat, 'Cool
 check('Eat bar counts both lists', find(eat, '2</b> need someone'))
 
 // Mine: claimed group kit plus personal kit, across lists, no plans.
-S.filter = { kind: '', cat: '' }
+S.filter = { kind: '', cat: '', hide: false, q: '' }
 S.tab = 'mine'
 const mine = viewTrip()
 check('Mine has claimed gear', find(mine, 'Tent') && find(mine, 'Camp stove'))
@@ -158,18 +174,120 @@ check('Mine filters by category', find(mine, 'data-act="filter-cat" data-value="
 check('Mine counts are all yours, none blaze',
   !find(mine, 'class="filters__n">') && find(mine, 'class="filters__n" style="background:#2F6B57'))
 
-S.filter = { kind: '', cat: 'Camp kitchen' }
+S.filter = { kind: '', cat: 'Camp kitchen', hide: false, q: '' }
 const mineKitchen = viewTrip()
 check('Mine category filter keeps its category', find(mineKitchen, 'Camp stove'))
 check('Mine category filter drops the rest', !find(mineKitchen, '>Tent<') && !find(mineKitchen, 'Sleeping bag'))
-check('Mine drops the empty group with it', !find(mineKitchen, '<h3>Eat</h3>'))
+check('Mine drops the empty group with it', !find(mineKitchen, 'data-group="Eat"'))
 
-S.filter = { kind: 'own', cat: '' }
+S.filter = { kind: 'own', cat: '', hide: false, q: '' }
 const mineOwn = viewTrip()
 check('Mine personal filter keeps your own', find(mineOwn, 'Sleeping bag') && find(mineOwn, 'Headlamp'))
 check('Mine personal filter drops what you claimed', !find(mineOwn, '>Tent<') && !find(mineOwn, 'Burgers'))
 check('the bar follows the chip', find(mineOwn, '<b>1</b> still to pack'))
-S.filter = { kind: '', cat: '' }
+S.filter = { kind: '', cat: '', hide: false, q: '' }
+
+// Folding: a long list is read a heading at a time, and a folded heading still
+// says how much is behind it.
+S.tab = 'pack'
+const open = viewTrip()
+check('every heading is a handle', find(open, 'data-act="fold" data-group="Shelter" aria-expanded="true"'))
+S.folds.shut = new Set(['pack:Shelter'])
+const folded = viewTrip()
+check('a folded heading takes its rows off the page', !find(folded, 'data-id="Tent"'))
+check('a folded heading keeps its tally', find(folded, 'data-group="Shelter"') && find(folded, '2/2'))
+check('folding one heading leaves the others alone', find(folded, 'data-id="Camp stove"'))
+check('the fold state belongs to the tab that set it', find(folded, 'data-group="Camp kitchen" aria-expanded="true"'))
+S.tab = 'eat'
+check('a heading folded on Pack is not folded on Eat',
+  !find(viewTrip(), 'group--shut') && find(viewTrip(), 'Burgers'))
+S.tab = 'mine'
+S.folds.shut = new Set(['mine:Pack'])
+const mineFolded = viewTrip()
+check('Mine folds by the tab a thing came from', !find(mineFolded, 'data-id="Tent"') && find(mineFolded, 'data-id="Burgers"'))
+S.tab = 'pack'
+S.folds.shut = new Set(['pack:Shelter'])
+S.filter = { kind: '', cat: 'Shelter', hide: false, q: '' }
+check('a pressed category chip stands the folds down', find(viewTrip(), 'data-id="Tent"'))
+S.filter = { kind: '', cat: '', hide: false, q: 'tent' }
+check('a search stands the folds down too', find(viewTrip(), 'data-id="Tent"'))
+S.filter = { kind: '', cat: '', hide: false, q: '' }
+S.folds.shut = new Set()
+
+// Fold all: one button that turns into its own undo.
+const foldAll = viewTrip()
+check('the page offers to fold every section', find(foldAll, 'data-act="fold-all" data-shut="true"'))
+check('the fold-all button says what it will do', find(foldAll, 'Fold all</button>'))
+S.folds.shut = new Set(['pack:Shelter', 'pack:Camp kitchen', 'pack:Light & power'])
+const allFolded = viewTrip()
+check('with everything folded the button offers the way back',
+  find(allFolded, 'data-act="fold-all" data-shut="false"') && find(allFolded, 'Unfold all</button>'))
+check('everything folded means no rows at all', !find(allFolded, '<li class="item'))
+S.folds.shut = new Set()
+
+// Auto-folding: a heading with nothing left to answer folds itself, but only on
+// the way in, and never one you have folded or unfolded yourself.
+S.tab = 'eat'
+autoFold()
+check('a settled heading folds itself', S.folds.shut.has('eat:Dinner'))
+check('a heading with a gap in it stays open', !S.folds.shut.has('eat:Snacks'))
+S.folds.shut.delete('eat:Dinner')
+S.folds.touched.add('eat:Dinner')
+autoFold()
+check('a heading you opened yourself is left alone', !S.folds.shut.has('eat:Dinner'))
+S.folds = { shut: new Set(), touched: new Set() }
+
+// And all of it is remembered between visits.
+S.tab = 'pack'
+S.folds.shut.add('pack:Shelter')
+S.folds.touched.add('pack:Shelter')
+saveFolds()
+S.folds = { shut: new Set(), touched: new Set() }
+loadFolds()
+check('folds survive the app being closed',
+  S.folds.shut.has('pack:Shelter') && S.folds.touched.has('pack:Shelter'))
+check('folds are remembered per trip', store.has('cs.folds.t1'))
+S.folds = { shut: new Set(), touched: new Set() }
+store.delete('cs.folds.t1')
+
+// Search: one box, across everything a thing is, however it is filed.
+S.filter = { kind: '', cat: '', hide: false, q: '' }
+check('a short list is just a list, with nothing to steer it', !find(viewTrip(), 'id="cs-find"'))
+const short = S.items
+S.items = [...short, item({ t: 'Tarp' }), item({ t: 'Mallet' }), item({ t: 'Paracord' })]
+check('a list long enough to lose things in offers a search box', find(viewTrip(), 'id="cs-find"'))
+S.items = short
+S.filter = { kind: '', cat: '', hide: false, q: 'fire' }
+const searched = viewTrip()
+check('search keeps what matches', find(searched, 'data-id="Firewood"'))
+check('search drops what does not', !find(searched, 'data-id="Tent"'))
+check('search keeps its own box on screen', find(searched, 'id="cs-find"') && find(searched, 'value="fire"'))
+check('search offers to clear itself', find(searched, 'data-act="find-clear"'))
+const plain = S.items
+S.items = plain.map((i) => (i.id === 'Firewood' ? { ...i, note: 'Buy it near the site' } : i))
+S.filter = { kind: '', cat: '', hide: false, q: 'near the site' }
+check('search reads the notes too', find(viewTrip(), 'data-id="Firewood"'))
+S.items = plain
+S.filter = { kind: '', cat: '', hide: false, q: 'zzzz' }
+const noHits = viewTrip()
+check('a search with nothing behind it says so', find(noHits, 'Nothing matches'))
+check('and leaves you a way out', find(noHits, 'data-act="find-clear"') && find(noHits, 'id="cs-find"'))
+
+// Hide sorted: the biggest cut on the page, and the one that wears no blaze.
+S.filter = { kind: '', cat: '', hide: false, q: '' }
+check('the list offers to hide what is sorted', find(viewTrip(), 'data-act="filter-hide"'))
+S.filter = { kind: '', cat: '', hide: true, q: '' }
+const left = viewTrip()
+check('hiding sorted keeps what nobody has', find(left, 'data-id="Firewood"'))
+check('hiding sorted drops what is claimed', !find(left, 'data-id="Tent"') && !find(left, 'data-id="Cooler"'))
+check('hiding sorted drops your own kit once packed', !find(left, 'data-id="Sleeping bag"'))
+check('hiding sorted keeps your own kit until then', find(left, 'data-id="Headlamp"'))
+S.tab = 'mine'
+check('on your own page the chip is about packing', find(viewTrip(), '>Hide packed'))
+S.tab = 'do'
+check('plans are never "sorted", so the chip stays away', !find(viewTrip(), 'data-act="filter-hide"'))
+S.tab = 'pack'
+S.filter = { kind: '', cat: '', hide: false, q: '' }
 
 // Badges elsewhere: Pack has 1 unclaimed (Firewood), Eat has 2.
 S.tab = 'pack'
@@ -182,11 +300,12 @@ check('Mine badge shows on other tabs, in your colour', find(pack, 'tabbar__flag
 check('list badges stay blaze (no inline colour)', find(pack, '<span class="tabbar__flag">2<'))
 
 // Camp is reachable from the header and lights up when you are on it.
-check('header opens the trip', find(pack, 'data-act="camp" aria-pressed="false"'))
+check('the bar carries Camp alongside the tabs', find(pack, 'data-act="camp" >') || find(pack, 'data-act="camp">'))
 S.camp = true
-check('header lit on the trip page', find(viewTrip(), 'data-act="camp" aria-pressed="true"'))
-check('trip page still renders its cards', find(viewTrip(), "Who's coming") && find(viewTrip(), 'Getting there'))
-check('no tab is current on the trip page', !find(viewTrip(), 'aria-current="page"'))
+const campPageHtml = viewTrip()
+check('Camp is lit when you are on it', find(campPageHtml, 'data-act="camp" aria-current="page"'))
+check('trip page still renders its cards', find(campPageHtml, "Who's coming") && find(campPageHtml, 'Getting there'))
+check('one place is current at a time', (campPageHtml.match(/aria-current="page"/g) ?? []).length === 1)
 
 // Sheets, including the new food/drink picker.
 S.camp = false; S.tab = 'eat'
@@ -210,16 +329,20 @@ check('suggest picks are list-keyed', find(sug, 'data-pick="drinks::Wine" aria-p
 
 S.sheet = { kind: 'item', id: 'Beer' }; renderSheet()
 const itemSheet = roots['sheet-root'].innerHTML
-check('item sheet renders', find(itemSheet, 'Who&#39;s bringing Beer?'))
+check('item sheet is titled the thing itself', find(itemSheet, '<h3>Beer</h3>'))
+check('item sheet does not ask its question twice', !find(itemSheet, "Who&#39;s bringing"))
 const pressedFor = (html, id) => new RegExp(`data-member="${id}"\\s+aria-pressed="true"`).test(html)
 check('item sheet ticks everyone who is on it', pressedFor(itemSheet, 'm1') && pressedFor(itemSheet, 'm3'))
 check('item sheet leaves the rest unticked', !pressedFor(itemSheet, 'm4'))
 check('item sheet says who has packed theirs', find(itemSheet, 'Packed theirs.') && find(itemSheet, 'Not packed yet.'))
-check('item sheet drops "I\'ll bring it" once you are on it', !find(itemSheet, "I'll bring it"))
 check('item sheet carries the way to remove it', find(itemSheet, 'data-act="kill" data-id="Beer"'))
 S.sheet = { kind: 'item', id: 'Crisps' }; renderSheet()
-check('item sheet offers to take it on when you are not on it',
-  find(roots['sheet-root'].innerHTML, "I'll bring it"))
+const unclaimed = roots['sheet-root'].innerHTML
+// Your name is a row like everybody else's, and that row is the only way in.
+check('no "I\'ll bring it" shortcut beside your own name',
+  !find(unclaimed, "I'll bring it") && !find(unclaimed, "I'll organise it"))
+check('your own name is still there to tap',
+  new RegExp('data-act="claim" data-id="Crisps" data-member="m1"').test(unclaimed))
 S.sheet = { kind: 'place', id: 'Hike' }; renderSheet()
 check('place sheet renders', find(roots['sheet-root'].innerHTML, 'Where is Hike?'))
 

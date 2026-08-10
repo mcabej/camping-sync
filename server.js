@@ -6,7 +6,7 @@ import { basename, dirname, join } from 'node:path'
 import {
   db, uid, now, newTripCode, bumpRev, logEvent, getTripState, nextPosition,
 } from './lib/db.js'
-import { CATALOG, TIPS, starterItems } from './lib/catalog.js'
+import { CATALOG, TIPS } from './lib/catalog.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const app = express()
@@ -236,11 +236,9 @@ app.post('/api/trips', (req, res) => {
       .run(memberId, id, organiser, ts)
   }
 
-  // Every trip starts with the things you genuinely cannot camp without.
-  const insert = db.prepare(`INSERT INTO items (id, trip_id, list, category, title, note, qty, kind, position, created_at, updated_at)
-                             VALUES (?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?)`)
-  starterItems().forEach((it, i) => insert.run(uid(), id, it.list, it.category, it.title, it.note, it.kind, i, ts, ts))
-
+  // A new trip starts empty. The catalogue's essentials are all still there
+  // behind "What am I missing?", where they are an offer you accept rather than
+  // twenty rows you have to read and delete before the list is yours.
   logEvent(id, organiser, 'started the trip')
   res.json({ trip: db.prepare('SELECT * FROM trips WHERE id = ?').get(id), memberId })
 })
