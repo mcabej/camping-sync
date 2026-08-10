@@ -519,9 +519,14 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
    section would be a louder page for the sake of a control most people use
    twice. The caret is the only thing added, and it is the size of a full stop. */
 .group__head { font-size: 13px; margin-bottom: 3px; }
+/* Close to the height the heading was before it became a button — one line of
+   text and the 7px under it that the rule has always sat on — with a little
+   above so the words are not sitting on the rule of the section before. A 40px
+   tap target made every section header taller than the thing it labels; this is
+   still a target you can hit. */
 .group__fold {
   display: flex; align-items: center; gap: 8px;
-  width: 100%; min-height: 40px; padding: 6px 2px 7px;
+  width: 100%; padding: 9px 2px 7px;
   text-align: left; color: inherit;
   border-bottom: 1.5px solid var(--line-strong);
 }
@@ -534,8 +539,10 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 .group--shut .group__caret { transform: rotate(-90deg); }
 .group--shut .group__fold { border-bottom-color: var(--line); }
 .group__fold:hover .group__caret { color: var(--ink); }
-/* Folded sections stack, so they sit closer than open ones do. */
-.group--shut { margin-bottom: 12px; }
+/* Folded sections stack, so they sit closer than open ones do — close enough to
+   read as one list of headings rather than four separate things, far enough that
+   the rule under one still belongs to it and not to the next. */
+.group--shut { margin-bottom: 9px; }
 .group__tally {
   margin-left: auto; font-family: var(--mono); font-size: 11.5px;
   color: var(--ink-faint); letter-spacing: .05em; white-space: nowrap;
@@ -549,6 +556,8 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
   display: flex; align-items: flex-start; gap: 12px;
   padding: 13px 2px; border-bottom: 1px solid var(--line);
 }
+/* A group ends where its last row does — the next heading brings its own space,
+   and a rule under the last item would read as belonging to that heading. */
 .item:last-child { border-bottom: 0; }
 .item--packed .item__title { color: var(--ink-faint); text-decoration: line-through; }
 
@@ -649,7 +658,9 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 /* The two ways to grow a list are the last row of it, not a toolbar above it.
    A block of buttons under the header cost the same height on every tab and
    pushed the list itself off the bottom of a small phone; here the row reads
-   as a slot nobody has filled in yet, in the same type as the rows above it. */
+   as a slot nobody has filled in yet, in the same type as the rows above it.
+   The dashed rule over it is the seam: the list proper stops there, and what is
+   under it is the empty slot rather than another thing somebody is bringing. */
 .listfoot {
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
   border-top: 1.5px dashed var(--line-strong);
@@ -953,6 +964,12 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
   padding: 14px 18px calc(14px + env(safe-area-inset-bottom));
   border-top: 1.5px solid var(--line-strong); background: var(--paper);
 }
+/* Edit and remove, on one line. Remove takes the larger share because it has
+   more to say and must not wrap; both stay thumb-sized either way. */
+.sheet__acts { display: flex; gap: 10px; }
+.sheet__acts .btn { flex: 1 1 auto; min-width: 0; }
+.sheet__acts .btn--quiet { flex: 2 1 auto; }
+
 /* A keyboard leaves about a third of a phone screen. The sheet spends it on the
    question and the box you answer it in, and drops the blurb you have read by
    the time you are typing — and the safe-area padding, which the keyboard is

@@ -37,6 +37,11 @@ const tabById = (id) => TABS.find((t) => t.id === id) ?? TABS[0]
 const currentTab = () => tabById(S.tab)
 const isPlanTab = (tab) => tab.lists.includes('activities')
 
+// An item belongs to a list, and the tab is whichever one shows that list. Not
+// the tab you are standing on: your own kit is edited from Mine, and Mine holds
+// no list of its own to take the groups from.
+const tabForList = (list) => TABS.find((t) => t.lists.includes(list)) ?? TABS[0]
+
 // What to call each half of the Eat tab when the two have to be told apart.
 const LIST_WORD = { food: 'Food', drinks: 'Drink' }
 
@@ -1435,7 +1440,14 @@ function sheetItem(s) {
         ${SECTIONS.own.label}</button>
     </div>`
 
-  const remove = `<button class="btn btn--wide btn--quiet" data-act="kill" data-id="${item.id}">Remove from the list</button>`
+  // The two things you do to an item as a whole, rather than to your share of
+  // it. Changing the words comes first and is the ordinary one, so it is the
+  // plain button; removing keeps the quiet one it has always had.
+  const acts = `
+    <div class="sheet__acts">
+      <button class="btn" data-act="edit-item" data-id="${item.id}">Edit</button>
+      <button class="btn btn--quiet" data-act="kill" data-id="${item.id}">Remove from the list</button>
+    </div>`
 
   if (own) {
     return sheetShell({
@@ -1448,7 +1460,7 @@ function sheetItem(s) {
             <span class="pick__note">${isMine(item) ? 'Ticked off.' : 'Not yet.'}</span></span>
           <span class="pick__tick">${ICONS.tickGreen}</span>
         </button>`,
-      foot: remove,
+      foot: acts,
     })
   }
 
@@ -1484,7 +1496,50 @@ function sheetItem(s) {
           <button class="btn btn--wide btn--sm" type="submit">Add them</button>
         </form>
       </div>`,
-    foot: remove,
+    foot: acts,
+  })
+}
+
+// Every group already in use on this tab, the catalogue's included, so filing a
+// thing under the group it belongs with is a pick rather than a spelling test.
+const catsOn = (tab) => [...new Set([
+  ...itemsOn(tab).map((i) => i.category),
+  ...tab.lists.flatMap((l) => (S.catalog?.[l] ?? []).map((c) => c.cat)),
+])].filter(Boolean)
+
+// What the item says, as opposed to who is bringing it. The same four fields the
+// add sheet asks for, filled in — because the reason you are here is usually
+// that one of them came out wrong, and retyping the other three to fix it is how
+// a list ends up with two sausages on it. Which list it sits on and where a plan
+// happens are left out: those are the segmented switch and the place sheet, and
+// asking twice is how the two answers end up disagreeing.
+function sheetEdit(s) {
+  const item = S.items.find((i) => i.id === s.id)
+  if (!item) return ''
+  const cats = catsOn(tabForList(item.list))
+
+  return sheetShell({
+    title: 'Edit',
+    blurb: isOwn(item)
+      ? 'Yours alone, so this changes nothing for anybody else.'
+      : 'Everyone on the trip sees this list, so they all get the new wording.',
+    body: `
+      <form data-act="save-item" data-id="${item.id}">
+        <label class="field"><span>What is it?</span>
+          <input name="title" required maxlength="120" autofocus value="${esc(item.title)}"></label>
+        <div class="field--split" style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+          <label class="field"><span>Group</span>
+            <input name="category" list="cs-cats" maxlength="60" value="${esc(item.category ?? '')}"
+                   placeholder="${esc(cats[0] ?? 'Other')}"></label>
+          <label class="field"><span>How much <span style="font-weight:400">(optional)</span></span>
+            <input name="qty" maxlength="40" value="${esc(item.qty ?? '')}" placeholder="x2"></label>
+        </div>
+        <datalist id="cs-cats">${cats.map((c) => `<option value="${esc(c)}">`).join('')}</datalist>
+        <label class="field"><span>Note <span style="font-weight:400">(optional)</span></span>
+          <input name="note" maxlength="500" value="${esc(item.note ?? '')}"
+                 placeholder="Anything the others need to know"></label>
+        <button class="btn btn--primary btn--wide" type="submit">Save</button>
+      </form>`,
   })
 }
 
@@ -1517,10 +1572,7 @@ function sheetPlace(s) {
 
 function sheetAdd(s) {
   const tab = tabById(s.tab)
-  const cats = [...new Set([
-    ...itemsOn(tab).map((i) => i.category),
-    ...tab.lists.flatMap((l) => (S.catalog?.[l] ?? []).map((c) => c.cat)),
-  ])].filter(Boolean)
+  const cats = catsOn(tab)
 
   // A tab that holds one list never asks which one. Eat holds two, and a bottle
   // of wine filed under dinner would be lost to whoever goes looking for it.
@@ -1625,7 +1677,7 @@ let sheetSig = null
 
 function renderSheet() {
   if (!S.sheet) { sheetRoot.innerHTML = ''; sheetSig = null; return }
-  const map = { item: sheetItem, add: sheetAdd, suggest: sheetSuggest, place: sheetPlace }
+  const map = { item: sheetItem, edit: sheetEdit, add: sheetAdd, suggest: sheetSuggest, place: sheetPlace }
   const html = map[S.sheet.kind]?.(S.sheet) ?? ''
   const sig = `${S.sheet.kind}:${S.sheet.id ?? ''}`
   const open = sheetRoot.querySelector('.sheet')
@@ -2147,6 +2199,14 @@ document.addEventListener('click', async (ev) => {
       renderSheet()
       break
 
+    // A second sheet rather than fields grown into the first one: the item sheet
+    // is a set of names you tap through, and a form in among them turns tapping
+    // three people onto the bacon into something you have to be careful about.
+    case 'edit-item':
+      S.sheet = { kind: 'edit', id: el.dataset.id }
+      renderSheet()
+      break
+
     // Names go on and come off one tap at a time, and the sheet stays put: you
     // are usually adding a second person, not replacing the first.
     case 'claim':
@@ -2301,6 +2361,22 @@ document.addEventListener('submit', async (ev) => {
       toast(sent && !String(S.trip.map_url ?? '').trim()
         ? "Saved — that map link didn't look like a link, so it wasn't kept."
         : 'Saved. Everyone can find it now.')
+      break
+    }
+
+    // The sheet shuts on save, because what you were fixing is the row behind
+    // it: seeing it say the right thing is the confirmation, and a sheet still
+    // sitting on top of it is in the way of that.
+    case 'save-item': {
+      if (!String(f.title ?? '').trim()) break
+      const id = form.dataset.id
+      S.sheet = null
+      renderSheet()
+      await mutate(() => api(`/items/${id}`, {
+        method: 'PATCH',
+        body: { title: f.title, category: f.category || 'Other', qty: f.qty, note: f.note },
+      }))
+      toast('Saved.')
       break
     }
 
