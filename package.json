@@ -5,14 +5,18 @@
   "type": "module",
   "description": "Shared trip planner for camping with friends",
   "engines": {
-    "node": ">=22.5.0"
+    "node": ">=22.9.0"
   },
   "scripts": {
-    "start": "node server.js",
-    "dev": "node --watch server.js",
+    "start": "node --env-file-if-exists=.env.local server.js",
+    "dev": "node --env-file-if-exists=.env.local --watch server.js",
+    "test": "node scripts/smoke.mjs && node scripts/auth-smoke.mjs && node scripts/chat-smoke.mjs",
     "icons": "node scripts/make-icons.mjs"
   },
   "dependencies": {
-    "express": "^5.1.0"
+    "express": "^5.1.0",
+    "google-auth-library": "^10.9.1",
+    "openai": "^7.4.0",
+    "ws": "^8.21.3"
   }
 }

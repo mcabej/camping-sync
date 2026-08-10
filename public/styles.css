@@ -224,6 +224,33 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 }
 .landing__block-n { font-size: 11.5px; color: var(--ink-faint); }
 
+.landing__account {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 2px 3px; color: var(--ink-soft); font-size: 13.5px;
+}
+.landing__account b { color: var(--ink); }
+
+.auth { display: grid; gap: 9px; }
+.auth__google { min-height: 40px; }
+.auth__note, .auth__unavailable {
+  margin: 0; color: var(--ink-soft); font-size: 12.5px; line-height: 1.45;
+}
+.auth__unavailable { color: var(--blaze); }
+
+.auth-nudge {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  max-width: 720px; margin: 12px auto 0; padding: 12px 18px;
+  background: var(--paper); border: 1px solid var(--line); border-radius: var(--r-lg);
+  box-shadow: var(--shadow); color: var(--ink-soft);
+}
+.auth-nudge > div:first-child { display: grid; gap: 2px; font-size: 13px; }
+.auth-nudge b { color: var(--ink); font-size: 14px; }
+.auth-nudge .auth { flex: none; }
+
+@media (max-width: 520px) {
+  .auth-nudge { align-items: stretch; flex-direction: column; margin: 10px 12px 0; }
+}
+
 /* ---- your trips --------------------------------------------------------- */
 
 .trips { display: grid; gap: 11px; }
@@ -385,6 +412,28 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 
 /* The Camp tab has no bar under the title, so the header needs its own floor. */
 .topbar--bare { padding-bottom: 12px; }
+.topbar--trip .topbar__trip { max-width: 1040px; }
+
+/* The planning room is a focused conversation screen, so its header navigates
+   back and names the room instead of repeating the trip summary. Equal side
+   columns keep the title centred even though only the left side has a button. */
+.topbar--room { flex: none; padding-left: 12px; padding-right: 12px; }
+.roombar {
+  width: 100%; max-width: 760px; margin: 0 auto;
+  display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px;
+  align-items: center;
+}
+.roombar__back {
+  width: 44px; height: 44px; display: grid; place-items: center;
+  border-radius: 50%; color: #F4F8F0; text-decoration: none;
+}
+.roombar__back:hover { background: rgba(244, 248, 240, .1); }
+.roombar__back svg { width: 21px; height: 21px; display: block; }
+.roombar__title {
+  min-width: 0; text-align: center; color: #F4F8F0;
+  font-size: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.roombar__balance { width: 44px; height: 44px; }
 
 /* ---- the days of the trip ------------------------------------------------ */
 
@@ -974,6 +1023,48 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
    Camp / info page
    ========================================================================== */
 
+.trip-page { max-width: 1040px; padding-bottom: 48px; }
+.trip-page__head { margin-bottom: 24px; }
+.trip-page__head h2 { font-size: 28px; }
+.trip-page__head p {
+  max-width: 65ch; margin: 6px 0 0;
+  color: var(--ink-soft); font-size: 14.5px;
+}
+
+.trip-lead { display: grid; gap: 16px; margin-bottom: 48px; }
+.trip-lead .card, .trip-urgent .card, .trip-stack .card, .trip-extras .card { margin-bottom: 0; }
+.trip-urgent { margin-bottom: 48px; }
+
+.trip-section + .trip-section { margin-top: 48px; }
+.trip-section__head { margin-bottom: 16px; }
+.trip-section__head h2 { font-size: 22px; }
+.trip-section__head p { margin: 4px 0 0; color: var(--ink-soft); font-size: 14px; }
+.trip-columns, .trip-extras, .trip-stack { display: grid; gap: 16px; }
+
+/* The planning room is a destination, not another summary card. Its dark
+   surface makes the route obvious while keeping orange reserved for work that
+   nobody has picked up. */
+.room-door {
+  display: grid; grid-template-columns: 44px minmax(0, 1fr) auto;
+  align-items: center; gap: 12px; min-height: 116px; padding: 20px;
+  border-radius: var(--r-lg); background: var(--forest-deep); color: #F4F8F0;
+  text-decoration: none; transition: background .16s ease, transform .12s ease;
+}
+.room-door:hover { background: var(--forest); }
+.room-door:active { transform: translateY(1px); }
+.room-door__icon {
+  width: 44px; height: 44px; display: grid; place-items: center;
+  border-radius: var(--r-md); background: rgba(244, 248, 240, .1);
+}
+.room-door__icon svg { width: 24px; height: 24px; }
+.room-door__copy { min-width: 0; }
+.room-door__copy strong { display: block; font-family: var(--display); font-size: 18px; }
+.room-door__copy > span {
+  display: block; margin-top: 4px; color: rgba(244, 248, 240, .72);
+  font-size: 13.5px; line-height: 1.4;
+}
+.room-door__go { font-size: 13px; font-weight: 600; white-space: nowrap; }
+
 .card {
   background: var(--paper); border-radius: var(--r-lg);
   padding: 20px 18px; margin-bottom: 16px; box-shadow: var(--shadow);
@@ -981,7 +1072,7 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 .card > h3 { font-size: 18px; margin-bottom: 3px; }
 .card > p { margin: 0 0 16px; color: var(--ink-soft); font-size: 14px; }
 .card__head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 10px; }
-.card__head h3 { flex: 1; font-size: 18px; }
+.card__head :is(h2, h3) { flex: 1; font-size: 18px; }
 /* A number or a timestamp on the heading's own line: the same slot the Edit
    button takes, for a card whose heading has a fact to carry instead. */
 .card__stamp { flex: none; font-size: 12px; color: var(--ink-faint); }
@@ -1070,6 +1161,166 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 
 .more { margin-top: 15px; }
 
+/* ---- planning room ------------------------------------------------------ */
+
+/* Unlike the trip screens, the room owns the viewport: messages scroll between
+   one compact header and the composer standing in for the normal tab bar. */
+.app--room {
+  height: 100dvh; min-height: 0; padding-bottom: 0;
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.room-page {
+  flex: 1; min-height: 0; width: 100%; max-width: 760px;
+  margin: 0 auto; display: flex;
+}
+
+.chat-card--page {
+  --chat-pad-x: 18px;
+  width: 100%; min-height: 0; margin: 0; padding: 16px var(--chat-pad-x) 0;
+  display: flex; flex-direction: column; overflow-y: auto;
+  background: var(--paper); overscroll-behavior-y: contain;
+}
+.chat-card--page .thread { flex: 1; }
+
+.chat__connection { display: inline-flex; align-items: center; gap: 6px; }
+.chat__connection::before {
+  content: ''; width: 7px; height: 7px; border-radius: 50%;
+  background: var(--ink-faint); box-shadow: 0 0 0 1px var(--paper);
+}
+.chat__connection[data-state="live"] { color: var(--forest); }
+.chat__connection[data-state="live"]::before { background: var(--forest); }
+.chat__connection[data-state="offline"] { color: var(--ink-soft); }
+.chat__connection[data-state="offline"]::before {
+  background: transparent; box-shadow: inset 0 0 0 1.5px var(--ink-faint);
+}
+
+.chat__older {
+  display: block; min-height: 36px; margin: -2px auto 7px; padding: 5px 10px;
+  font-size: 13px; font-weight: 600; color: var(--forest);
+  text-decoration: underline; text-decoration-color: var(--line-strong);
+  text-underline-offset: 3px;
+}
+.chat__older:hover { text-decoration-color: currentColor; }
+.chat__older[disabled] { opacity: .5; cursor: default; }
+
+.thread { list-style: none; margin: 0; padding: 0; }
+.thread__message {
+  display: grid; grid-template-columns: 9px minmax(0, 1fr); gap: 11px;
+  padding: 12px 0;
+}
+.thread__message:first-child { padding-top: 3px; }
+.thread__message:last-child { border-bottom: 0; }
+.thread__mark {
+  width: 9px; height: 18px; margin-top: 3px; border-radius: 2px;
+  box-shadow: inset 0 0 0 1px rgba(22, 36, 31, .12);
+}
+.thread__content { min-width: 0; }
+.thread__meta { display: flex; align-items: baseline; gap: 10px; }
+.thread__meta strong { flex: 1; min-width: 0; font-size: 14px; overflow-wrap: anywhere; }
+.thread__meta time { flex: none; font-size: 10.5px; color: var(--ink-faint); }
+.thread__content > p {
+  margin: 3px 0 0; white-space: pre-wrap; overflow-wrap: anywhere;
+  color: var(--ink); font-size: 14.5px; line-height: 1.5;
+}
+.thread__message:not(.thread__message--mine):not(.thread__message--assistant) .thread__content {
+  justify-self: start; width: fit-content; max-width: min(88%, 38rem);
+  padding: 9px 12px; border-radius: var(--r-md); background: var(--paper-sunk);
+}
+.thread__message--mine { grid-template-columns: minmax(0, 1fr) 9px; }
+.thread__message--mine .thread__mark { grid-column: 2; grid-row: 1; }
+.thread__message--mine .thread__content {
+  grid-column: 1; grid-row: 1; justify-self: end;
+  width: fit-content; max-width: min(88%, 38rem);
+  padding: 9px 12px; border-radius: var(--r-md); background: var(--paper-sunk);
+}
+.thread__message--mine .thread__meta { justify-content: flex-end; }
+.thread__message--mine .thread__meta strong { flex: 0 1 auto; text-align: right; }
+.thread__message--mine .thread__meta strong::after {
+  content: 'you'; margin-left: 7px; color: var(--ink-faint);
+  font-family: var(--mono); font-size: 9.5px; font-weight: 500;
+  letter-spacing: .04em; text-transform: uppercase;
+}
+.thread__message--assistant {
+  grid-template-columns: 32px minmax(0, 1fr); gap: 12px; padding: 16px 0;
+}
+.thread__message--assistant .thread__mark {
+  width: 32px; height: 32px; margin-top: 0; border-radius: 8px;
+  display: grid; place-items: center; color: #F4F8F0;
+  background: var(--forest-deep); box-shadow: none;
+}
+.thread__message--assistant .thread__mark svg { width: 19px; height: 19px; }
+.thread__message--assistant .thread__content {
+  max-width: 65ch; padding: 12px 14px;
+  border-radius: var(--r-md); background: #E4EEE5;
+}
+.thread__camp {
+  margin-left: 6px; color: var(--forest); font-size: 9.5px; font-weight: 600;
+  letter-spacing: .04em; text-transform: uppercase;
+}
+.assistant-copy { margin-top: 7px; color: var(--ink); font-size: 14.5px; line-height: 1.5; }
+.assistant-copy p { margin: 0; }
+.assistant-copy p + p, .assistant-copy :is(ul, ol) + p { margin-top: 10px; }
+.assistant-copy :is(ul, ol) {
+  margin: 8px 0 0; padding-left: 22px;
+}
+.assistant-copy li { padding-left: 2px; }
+.assistant-copy li + li { margin-top: 6px; }
+.assistant-copy strong { font-weight: 600; color: var(--forest-deep); }
+.assistant-copy code {
+  padding: 1px 4px; border-radius: 4px; background: rgba(27, 56, 46, .09);
+  font-family: var(--mono); font-size: .9em;
+}
+.assistant-copy__heading {
+  font-family: var(--display); font-size: 16px; font-weight: 800;
+}
+.thread__status { flex: none; font-size: 10.5px; color: var(--ink-faint); }
+.thread__message--streaming .thread__mark { opacity: .62; }
+.thread__message--streaming[data-state="failed"] .thread__mark { background: var(--blaze); opacity: .75; }
+.thread__message--streaming[data-state="failed"] .assistant-copy { color: var(--ink-soft); }
+
+.chat__empty {
+  display: grid; gap: 3px; padding: 18px 16px; text-align: center;
+  border: 1.5px dashed var(--line-strong); border-radius: var(--r-md);
+  background: var(--paper-sunk);
+}
+.chat__empty strong { font-family: var(--display); font-size: 16px; }
+.chat__empty span { color: var(--ink-soft); font-size: 13.5px; }
+
+.chat__composer { margin-top: 16px; padding-top: 15px; border-top: 1px solid var(--line); }
+.chat-card--page .chat__composer {
+  position: sticky; z-index: 2;
+  bottom: 0;
+  margin: auto calc(var(--chat-pad-x) * -1) 0;
+  padding: 12px var(--chat-pad-x) calc(12px + env(safe-area-inset-bottom));
+  background: var(--canvas); box-shadow: 0 -1px 0 var(--line);
+  border-top: 0;
+}
+.is-kb .chat-card--page .chat__composer {
+  bottom: var(--kb); padding-bottom: 12px;
+}
+.chat__write {
+  position: relative; border: 1.5px solid var(--line-strong); border-radius: var(--r-lg);
+  background: var(--paper); transition: border-color .12s ease;
+}
+.chat__write:focus-within { border-color: var(--forest); }
+.chat__write textarea {
+  display: block; width: 100%; min-height: 62px; max-height: 180px; resize: none;
+  padding: 19px 64px 19px 14px; border: 0; overflow-y: hidden;
+  border-radius: var(--r-lg); background: transparent; line-height: 1.4;
+}
+.chat__write textarea:focus { outline: none; }
+.chat__write .chat__send {
+  position: absolute; right: 9px; bottom: 9px;
+  width: 44px; min-height: 44px; padding: 0; border-radius: 50%;
+}
+.chat__send svg { width: 22px; height: 22px; }
+.chat__sending { font-size: 22px; line-height: 1; transform: translateY(-3px); }
+.chat__error {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 13px 14px; border-radius: var(--r-md); background: var(--blaze-soft);
+}
+.chat__error p { margin: 0; color: var(--ink); font-size: 13.5px; }
+
 .code-box {
   display: flex; align-items: center; gap: 12px;
   padding: 13px 15px; border-radius: var(--r-md);
@@ -1082,9 +1333,9 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 .tip:last-child { border-bottom: 0; }
 .tip__mark {
   flex: none; width: 22px; height: 22px; margin-top: 2px; border-radius: 4px;
-  background: var(--blaze); display: grid; place-items: center;
-  font-family: var(--mono); font-size: 11px; font-weight: 600; color: #fff;
+  background: var(--blaze); display: grid; place-items: center; color: #fff;
 }
+.tip__mark svg { width: 13px; height: 13px; }
 .tip h4 { margin: 0 0 4px; font-size: 15px; font-weight: 600; line-height: 1.3; }
 .tip p { margin: 0; font-size: 14px; color: var(--ink-soft); line-height: 1.5; }
 
@@ -1432,9 +1683,23 @@ button.wx__day:hover .wx__wet, .wx__row--open .wx__wet { color: var(--ink); }
   :root { --tabbar-h: 58px; }
   .page { padding: 28px 24px 40px; }
   .page__head h2 { font-size: 32px; }
+  .trip-page { padding-bottom: 64px; }
+  .trip-lead { grid-template-columns: minmax(0, 1.7fr) minmax(260px, .8fr); }
+  .trip-columns { grid-template-columns: minmax(0, 1.15fr) minmax(300px, .85fr); align-items: start; }
+  .trip-extras { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+  .trip-section__head {
+    display: flex; align-items: baseline; justify-content: space-between; gap: 24px;
+  }
+  .trip-section__head p { margin-top: 0; text-align: right; }
+  .chat-card--page { --chat-pad-x: 24px; padding: 20px 24px 0; }
   .sheet-scrim { align-items: center; }
   .sheet { border-radius: var(--r-lg); max-height: min(82dvh, 100%); }
   .sheet__foot { padding-bottom: 14px; }
+}
+
+@media (max-width: 380px) {
+  .room-door__go { font-size: 0; }
+  .room-door__go span { font-size: 17px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

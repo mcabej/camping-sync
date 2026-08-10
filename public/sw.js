@@ -26,7 +26,7 @@ const FONT_HOSTS = new Set(['fonts.googleapis.com', 'fonts.gstatic.com'])
 // the time it was fetched and the card says how old it is. Last night's outlook
 // is worth having in a field with no bars; last night's outlook presented as
 // this morning's would not be.
-const CACHEABLE_API = /^\/api\/(catalog|weather|trips\/[^/]+)$/
+const CACHEABLE_API = /^\/api\/(catalog|weather|trips\/[^/]+(?:\/messages)?)$/
 
 // Nothing here is huge, but a phone that has opened forty trips should not keep
 // all forty forever. Oldest out first — the Cache API hands keys back in
@@ -103,8 +103,9 @@ async function fromCacheFirst(request, cacheName) {
 
 // For trip state. The server is always right when it can be reached; the cache
 // is the last thing it said, kept only so there is something to show when it
-// can't. Responses carry `Vary: x-member-id`, which the Cache API honours, so
-// one phone can never be served the copy cut for another member.
+// can't. Responses vary by the member and signed-in user headers, which the
+// Cache API honours, so a signed-out request cannot receive private state kept
+// for the previous session on a shared phone.
 async function fromNetworkFirst(request) {
   const cache = await caches.open(DATA)
   try {

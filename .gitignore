@@ -4,4 +4,6 @@ data/
 *.db-wal
 *.db-shm
 .env
+.env.local
+.env.*.local
 .DS_Store

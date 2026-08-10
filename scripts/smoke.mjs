@@ -22,8 +22,9 @@ globalThis.window = {
   scrollY: 0, scrollTo() {}, scrollBy() {}, addEventListener() {},
   innerHeight: 800, visualViewport: null, matchMedia: globalThis.matchMedia,
 }
-globalThis.location = { pathname: '/', origin: 'http://x' }
+globalThis.location = { pathname: '/', origin: 'http://x', protocol: 'http:', host: 'x' }
 globalThis.history = { pushState() {}, replaceState() {} }
+globalThis.WebSocket = undefined
 // A real store, so what the app remembers between visits can be tested.
 const store = new Map()
 globalThis.localStorage = {
@@ -34,18 +35,21 @@ globalThis.localStorage = {
   key: (i) => [...store.keys()][i] ?? null,
 }
 globalThis.fetch = async () => ({ ok: true, json: async () => ({ catalog: {}, tips: [] }) })
+globalThis.__CAMPING_SYNC_TEST__ = true
 
 const src = readFileSync('public/app.js', 'utf8')
 const hooks = ['S', 'render', 'viewTrip', 'renderSheet', 'CAMP', 'TABS',
   'loadFolds', 'saveFolds', 'autoFold', 'pageGroups', 'tripDays',
-  'dayTurned', 'turnDay', 'tillMidnight', 'edges', 'perDay', 'daysPicked']
+  'dayTurned', 'turnDay', 'tillMidnight', 'edges', 'perDay', 'daysPicked',
+  'ensureChatSocket', 'stopChatSocket', 'fitChatBox']
 new Function(`${src}\n;Object.assign(globalThis, {${hooks.map((h) => `__${h}: ${h}`).join(',')}})`)()
 
 const { __S: S, __render: render, __viewTrip: viewTrip, __renderSheet: renderSheet, __TABS: TABS,
   __loadFolds: loadFolds, __saveFolds: saveFolds, __autoFold: autoFold,
   __tripDays: tripDays, __dayTurned: dayTurned, __turnDay: turnDay,
   __tillMidnight: tillMidnight, __edges: edges, __perDay: perDay,
-  __daysPicked: daysPicked } = globalThis
+  __daysPicked: daysPicked, __ensureChatSocket: ensureChatSocket,
+  __stopChatSocket: stopChatSocket, __fitChatBox: fitChatBox } = globalThis
 const { CATALOG } = await import('../lib/catalog.js')
 
 // A trip with a bit of everything: claimed by one, claimed by three, unclaimed,
@@ -64,6 +68,16 @@ S.trip = { id: 't1', name: 'Wasdale Weekend', location: 'Wasdale Head, CA20 1EX'
 S.members = [{ id: 'm1', name: 'Josh', hue: 0 }, { id: 'm2', name: 'Sam', hue: 1 },
   { id: 'm3', name: 'Ali Khan', hue: 2 }, { id: 'm4', name: 'Robin', hue: 3 }]
 S.events = [{ actor: 'Sam', text: 'added Tent', created_at: new Date().toISOString() }]
+S.chat = {
+  ...S.chat, tripId: 't1', loading: false, hasMore: true,
+  messages: [
+    { id: 0, client_id: 'camp-zero', member_id: null, role: 'assistant', author_name: 'Camp',
+      body: 'Gaps I see:\n\n- **Shelter:** Confirm the tent fits both people.\n- **Water:** Confirm the quantity.\n- **Note:** <img src=x onerror=alert(1)>',
+      created_at: new Date().toISOString() },
+    { id: 1, client_id: 'one', member_id: 'm2', author_name: 'Sam', body: 'Can we leave by eight?', created_at: new Date().toISOString() },
+    { id: 2, client_id: 'two', member_id: 'm1', author_name: 'Josh', body: 'Yes — meet at mine.', created_at: new Date().toISOString() },
+  ],
+}
 S.items = [
   item({ t: 'Tent', claims: [claim('m1')] }),
   item({ t: 'Camp stove', claims: [claim('m1', true)], category: 'Camp kitchen' }),
@@ -85,12 +99,19 @@ const find = (html, needle) => html.includes(needle)
 let bad = 0
 const check = (label, ok) => { if (!ok) { bad++; console.log(`  FAIL  ${label}`) } else console.log(`  ok    ${label}`) }
 
+const growingBox = { scrollHeight: 92, style: {} }
+fitChatBox(growingBox)
+check('the chat composer grows with its content', growingBox.style.height === '92px' && growingBox.style.overflowY === 'hidden')
+growingBox.scrollHeight = 240
+fitChatBox(growingBox)
+check('the chat composer stops growing before it takes over the room', growingBox.style.height === '180px' && growingBox.style.overflowY === 'auto')
+
 const FILTERS = [{ kind: '', cat: '' }, { kind: 'shared', cat: '' }, { kind: 'own', cat: '' },
   { kind: '', cat: 'Shelter' }, { kind: 'shared', cat: 'Nothing filed here' },
   { kind: '', cat: '', hide: true }, { kind: '', cat: '', q: 'te' },
   { kind: '', cat: '', q: 'nothing on any list' }, { kind: 'own', cat: '', hide: true, q: 'bag' }]
 
-for (const camp of [false, true]) {
+for (const camp of [false, 'overview']) {
   for (const t of TABS) {
     S.tab = t.id
     S.camp = camp
@@ -220,6 +241,10 @@ S.filter = { kind: '', cat: '', hide: false, q: '' }
 S.folds.shut = new Set()
 
 // Fold all: one button that turns into its own undo.
+const beforeFoldAll = S.items
+S.items = [...S.items,
+  item({ t: 'Mallet', category: 'Camp kitchen' }),
+  item({ t: 'Lantern', category: 'Light & power' })]
 const foldAll = viewTrip()
 check('the page offers to fold every section', find(foldAll, 'data-act="fold-all" data-shut="true"'))
 check('the fold-all button says what it will do', find(foldAll, 'Fold all</button>'))
@@ -229,6 +254,7 @@ check('with everything folded the button offers the way back',
   find(allFolded, 'data-act="fold-all" data-shut="false"') && find(allFolded, 'Unfold all</button>'))
 check('everything folded means no rows at all', !find(allFolded, '<li class="item'))
 S.folds.shut = new Set()
+S.items = beforeFoldAll
 
 // Auto-folding: a heading with nothing left to answer folds itself, but only on
 // the way in, and never one you have folded or unfolded yourself.
@@ -306,11 +332,102 @@ check('list badges stay blaze (no inline colour)', find(pack, '<span class="tabb
 
 // Camp is reachable from the header and lights up when you are on it.
 check('the bar carries Camp alongside the tabs', find(pack, 'data-act="camp" >') || find(pack, 'data-act="camp">'))
-S.camp = true
+S.camp = 'overview'
 const campPageHtml = viewTrip()
 check('Camp is lit when you are on it', find(campPageHtml, 'data-act="camp" aria-current="page"'))
 check('trip page still renders its cards', find(campPageHtml, "Who's coming") && find(campPageHtml, 'Getting there'))
 check('one place is current at a time', (campPageHtml.match(/aria-current="page"/g) ?? []).length === 1)
+check('the overview links to the planning room instead of embedding it',
+  find(campPageHtml, 'href="/t/t1/room"') && !find(campPageHtml, 'id="chat-text"'))
+S.camp = 'room'
+const roomPageHtml = viewTrip()
+check('planning room renders durable messages',
+  find(roomPageHtml, 'Planning Room') && find(roomPageHtml, 'Can we leave by eight?'))
+check('planning room replaces the trip chrome with a focused chat header',
+  find(roomPageHtml, 'id="planning-room-title">Planning Room</h1>')
+  && find(roomPageHtml, 'class="roombar__back"')
+  && !find(roomPageHtml, 'Wasdale Weekend')
+  && !find(roomPageHtml, 'class="tabbar"')
+  && !find(roomPageHtml, 'auth-nudge'))
+check('planning room attributes the current member',
+  find(roomPageHtml, 'thread__message--mine') && find(roomPageHtml, 'Josh'))
+check('planning room has paged history and a labelled composer',
+  find(roomPageHtml, 'data-act="chat-older"') && find(roomPageHtml, 'class="sr-only" for="chat-text">Message the group'))
+check('planning room exposes its quiet delivery state',
+  find(roomPageHtml, 'data-chat-connection') && find(roomPageHtml, '>Connecting</span>'))
+check('Camp formats structured answers instead of leaking Markdown',
+  find(roomPageHtml, 'class="assistant-copy"') && find(roomPageHtml, '<ul>')
+  && find(roomPageHtml, '<strong>Shelter:</strong>') && !find(roomPageHtml, '**Shelter:**'))
+check('Camp formatting still escapes model-provided HTML',
+  find(roomPageHtml, '&lt;img src=x onerror=alert(1)&gt;') && !find(roomPageHtml, '<img src=x'))
+const readyChat = S.chat
+S.chat = { ...readyChat, assistantAvailable: true }
+check('planning room teaches the assistant without adding a new control',
+  find(viewTrip(), 'placeholder="Message the group or @camp…"')
+  && !find(viewTrip(), 'data-act="assistant"'))
+S.chat = { ...readyChat, messages: [], hasMore: false }
+check('planning room empty state teaches the first move',
+  find(viewTrip(), 'No messages yet') && find(viewTrip(), 'decision the group needs to make next'))
+S.chat = { ...readyChat, messages: [], error: 'No signal. That change is not saved.' }
+check('planning room error state offers a retry',
+  find(viewTrip(), 'role="alert"') && find(viewTrip(), 'data-act="chat-retry"'))
+S.chat = { ...readyChat, loading: true }
+check('planning room loading state holds its space',
+  find(viewTrip(), 'aria-busy="true"') && find(viewTrip(), 'Loading messages'))
+S.chat = readyChat
+
+// WebSocket delivery is only a wake-up path. A tiny browser stand-in proves
+// one connection per trip, immediate durable-row delivery, and retry state.
+class FakeSocket {
+  static all = []
+  constructor(url) { this.url = url; this.readyState = 0; this.listeners = {}; FakeSocket.all.push(this) }
+  addEventListener(type, fn) { (this.listeners[type] ??= []).push(fn) }
+  fire(type, detail = {}) { for (const fn of this.listeners[type] ?? []) fn(detail) }
+  close() { this.readyState = 3; this.fire('close') }
+}
+globalThis.WebSocket = FakeSocket
+ensureChatSocket()
+check('an unlinked legacy profile keeps the polling fallback',
+  FakeSocket.all.length === 0 && S.chat.connection === 'polling')
+S.auth.user = { id: 'u1', name: 'Josh', email: 'josh@example.com', picture: '' }
+ensureChatSocket()
+ensureChatSocket()
+const socket = FakeSocket.all[0]
+check('one socket connects to the current trip',
+  FakeSocket.all.length === 1 && socket.url === 'ws://x/ws?tripId=t1')
+socket.readyState = 1
+socket.fire('open')
+check('an open socket marks delivery live', S.chat.connection === 'live')
+document.activeElement = { id: 'chat-text' }
+socket.fire('message', { data: JSON.stringify({
+  type: 'message.created',
+  message: { id: 3, client_id: 'three', member_id: 'm2', author_name: 'Sam', body: 'I can drive.', created_at: new Date().toISOString() },
+}) })
+check('a socket delivery merges the durable message once',
+  S.chat.messages.filter((m) => m.id === 3).length === 1 && S.chat.messages.at(-1).body === 'I can drive.')
+socket.fire('message', { data: JSON.stringify({ type: 'assistant.started', runId: 'run-1' }) })
+socket.fire('message', { data: JSON.stringify({
+  type: 'assistant.delta', runId: 'run-1', delta: 'Add a tarp for Saturday rain.',
+}) })
+check('assistant deltas accumulate while the composer keeps focus',
+  S.chat.streams['run-1']?.body === 'Add a tarp for Saturday rain.')
+document.activeElement = null
+check('a streaming assistant remains a quiet row in the planning ledger',
+  find(viewTrip(), 'data-assistant-stream="run-1"') && find(viewTrip(), 'Add a tarp for Saturday rain.'))
+socket.fire('message', { data: JSON.stringify({
+  type: 'message.created',
+  message: { id: 4, client_id: 'assistant:run-1', member_id: null, role: 'assistant',
+    author_name: 'Camp', body: 'Add a tarp for Saturday rain.', created_at: new Date().toISOString() },
+}) })
+check('the durable assistant row replaces its transient stream',
+  !S.chat.streams['run-1'] && S.chat.messages.at(-1).role === 'assistant'
+  && find(viewTrip(), 'thread__message--assistant'))
+socket.readyState = 3
+socket.fire('close')
+check('a dropped socket enters reconnecting state', S.chat.connection === 'reconnecting')
+stopChatSocket()
+globalThis.WebSocket = undefined
+S.auth.user = null
 
 // Sheets, including the new food/drink picker.
 S.camp = false; S.tab = 'eat'
@@ -767,7 +884,10 @@ S.tab = 'pack'
 S.sheet = null; S.view = 'landing'; S.trips = []; render()
 check('landing renders', roots.root.innerHTML.includes('Start a trip'))
 S.view = 'join'; S.me = null; render()
-check('join renders', roots.root.innerHTML.includes('Who are you?'))
+check('unsigned join asks for identity', roots.root.innerHTML.includes('Sign in to join'))
+S.auth.user = { id: 'u1', name: 'Josh', email: 'josh@example.com', picture: '' }
+render()
+check('signed-in join asks for a trip name', roots.root.innerHTML.includes('How should your name appear?'))
 
 console.log(bad ? `\n${bad} FAILED` : '\nall passed')
 process.exit(bad ? 1 : 0)

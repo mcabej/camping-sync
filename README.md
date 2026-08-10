@@ -1,8 +1,9 @@
 # Camping Sync
 
-A shared trip planner for camping with friends. One link, no accounts. Everyone
-claims what they're bringing, and whatever nobody has picked up stays orange
-until somebody fixes that.
+A shared trip planner for camping with friends. One link, one quick sign-in.
+Everyone claims what they're bringing, whatever nobody has picked up stays
+orange, and the planning conversation stays with the trip instead of getting
+lost in a separate group chat.
 
 ## What it does
 
@@ -53,7 +54,19 @@ until somebody fixes that.
   asking the other question: not *who is bringing this* but *is it back in the
   car*. Whatever nobody ticks back in is what gets left in the grass.
 - **Camp smarts** — 14 things first-timers find out the hard way.
-- **Live sync** — clients poll a revision counter every 5s and refetch on change.
+- **Live sync** — trip/list changes still use the cheap 5s revision poll;
+  committed chat messages arrive immediately over a same-origin WebSocket.
+  Dropped connections retry with bounded backoff and fill any gap from the
+  durable message cursor. Polling remains the fallback for blocked upgrades
+  and for legacy profiles until Google links their membership.
+- **Planning room** — a durable, member-attributed trip thread with paginated
+  history and safe retries. Its own delivery cursor keeps conversation from
+  making every client refetch the packing lists.
+- **`@camp` assistant** — signed-in members can ask a trip-aware assistant about
+  the details, lists, people and recent planning thread. Replies stream through
+  the existing WebSocket and become durable messages when complete. Explicit
+  requests can add validated list items; ordinary questions never mutate the
+  trip.
 - **Activity feed** — who added, claimed, packed or dropped what.
 - **Installs, and works without a signal** — add it to a home screen and it
   opens full-screen showing the last state the server sent, which is the state
@@ -63,10 +76,20 @@ until somebody fixes that.
 
 ```bash
 npm install
+npm run dev        # reads .env.local when it exists
 npm start          # http://localhost:3000
 ```
 
-`npm run dev` restarts on file changes.
+`npm run dev` restarts on file changes. For Google sign-in and `@camp` locally,
+copy the example environment file and replace its placeholders. The assistant
+stays hidden and does not call OpenAI when `OPENAI_API_KEY` is absent.
+
+```bash
+cp .env.example .env.local
+```
+
+`OPENAI_MODEL` is optional; it defaults to the cost-sensitive
+`gpt-5.6-luna` model.
 
 ## How it's built
 
@@ -74,7 +97,7 @@ No build step, no framework. Node's built-in `node:sqlite` for storage and
 Express for routing; the frontend is three static files.
 
 ```
-server.js          REST API + static hosting
+server.js          REST API + WebSocket delivery + static hosting
 lib/db.js          schema, queries, trip codes
 lib/catalog.js     the camping knowledge (gear, food, drinks, plans, tips)
 public/            index.html, styles.css, app.js
@@ -85,8 +108,10 @@ scripts/           make-icons.mjs (regenerates public/icons)
 ### Data model
 
 One `items` table with a `list` discriminator (`gear` / `food` / `drinks` /
-`activities`), plus `trips`, `members`, `votes`, `stows` and `events`. Each trip
-carries a `rev` counter bumped on every write — that's what the clients poll.
+`activities`), plus `trips`, `members`, `votes`, `stows`, `events` and durable
+`messages`. Each trip carries a `rev` counter bumped on list and trip writes —
+that's what the clients poll. Messages use their own increasing cursor and a
+`role` that distinguishes member posts from durable Camp replies.
 
 An item's `kind` decides how it's tracked, and the two are mutually exclusive:
 
@@ -495,8 +520,8 @@ What is deliberately *not* cached: the `rev` counter, because a cached answer
 to "has anything changed?" is a lie; and every write, because a claim replayed
 an hour later is a worse lie — somebody else has bought the firewood by then.
 Offline, a write fails and says so. Trip state responses carry
-`Vary: x-member-id`, which the Cache API honours, so a shared phone can never
-be handed the copy cut for the other member. The home page's summary is a POST,
+`Vary: x-member-id, x-user-id`, which the Cache API honours, so a signed-out
+request cannot be handed private state cached for the previous user. The home page's summary is a POST,
 which no cache can key, so the last one is kept in `localStorage` instead.
 
 The forecast is the one kept answer that goes off on its own, so it carries the
@@ -509,17 +534,33 @@ colours — it draws the same tent as the favicon straight into PNG.
 
 ### Auth
 
-There isn't any. A trip code (`cedar-ridge-284`) is the capability: anyone with
-the link can read and write. Your identity is a member row, remembered in
-`localStorage` per trip. That's the right trade-off for four friends and a
-weekend — it is not the right trade-off for anything sensitive.
+Trip links remain readable without an account. Creating a trip, joining one and
+changing it require a membership: Google proves the user, then Camping Sync
+keeps its own 60-day session in an `HttpOnly`, `SameSite=Lax` cookie. The Google
+credential is verified on the server and is never stored; identities are keyed
+by Google's stable subject rather than by an email address.
+
+Members created before accounts have a null `user_id`. They continue to work on
+the device that already remembers them. The first Google sign-in sends that
+device's remembered trip/member pairs and attaches each still-unclaimed row to
+the account, after which the public member id no longer authenticates it. This
+is necessarily a one-time trust bridge: the old app had no stronger credential
+to migrate.
+
+Create an OAuth web client in Google Cloud, add the app's origins (for local
+development, usually `http://localhost:3000`) and set `GOOGLE_CLIENT_ID` in the
+ignored `.env.local` file. Production gets the same variable from Railway. No
+client secret is used by the Google Identity Services ID-token flow.
 
 ## Configuration
 
-| Variable  | Default             | Notes                                  |
-| --------- | ------------------- | -------------------------------------- |
-| `PORT`    | `3000`              | Set by Railway automatically.          |
-| `DB_PATH` | `./data/camping.db` | Point at a mounted volume in prod.     |
+| Variable           | Default             | Notes                                      |
+| ------------------ | ------------------- | ------------------------------------------ |
+| `PORT`             | `3000`              | Set by Railway automatically.              |
+| `DB_PATH`          | `./data/camping.db` | Point at a mounted volume in prod.         |
+| `GOOGLE_CLIENT_ID` | empty               | OAuth web client id; required for sign-in. |
+| `OPENAI_API_KEY`   | empty               | Enables `@camp`; keep it server-side.       |
+| `OPENAI_MODEL`     | `gpt-5.6-luna`      | Responses API model used by `@camp`.        |
 
 ## Deploying
 

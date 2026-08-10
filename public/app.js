@@ -32,6 +32,7 @@ const TABS = [
 // with the rest. It is kept out of TABS because it carries no list: everything
 // that counts, badges or filters a list would have to special-case it.
 const CAMP = { id: 'camp', lists: [], label: 'Trip', title: 'The trip' }
+const ROOM = { id: 'room', title: 'Planning room' }
 
 const tabById = (id) => TABS.find((t) => t.id === id) ?? TABS[0]
 const currentTab = () => tabById(S.tab)
@@ -75,6 +76,9 @@ const ICONS = {
   // A tent, not a globe. The button opens the trip — where it is, who is coming
   // — and a globe was the icon for "somewhere on Earth", which is nowhere.
   camp: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.6 20.5 14 3.8"/><path d="M20.4 20.5 10 3.8"/><path d="M15.5 20.5 12 14.6l-3.5 5.9"/><path d="M2.2 20.5h19.6"/></svg>',
+  room: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 5.5h13a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H11l-4.8 3v-3h-.7a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2Z"/><path d="M7.5 9.5h9M7.5 13.5h6"/></svg>',
+  back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>',
+  send: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h13M13 6l6 6-6 6"/></svg>',
   tick: '<svg viewBox="0 0 24 24" fill="none" stroke="#F4F8F0" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5 9.5 18 20 6.5"/></svg>',
   tickGreen: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5 9.5 18 20 6.5"/></svg>',
   x: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>',
@@ -100,15 +104,26 @@ const ICONS = {
 const S = {
   view: 'boot',      // boot | landing | join | trip | missing
   tab: 'pack',
-  // The trip page, over the top of whichever tab you were on. Not a tab of its
-  // own, so the bar always has exactly one answer to "where am I".
-  camp: false,
+  // A list tab, the trip overview, or the planning room nested under it. The
+  // room gets its own URL and screen without taking a sixth slot in the bar.
+  camp: false,       // false | overview | room
   // How the list on screen is narrowed: which day of the trip, who brings it,
   // what kind of thing it is, whether to bother with what is already handled,
   // and whatever you typed into the search box. All empty means everything,
   // which is where every tab starts — and where it goes back to when you leave.
   filter: { day: '', kind: '', cat: '', hide: false, q: '' },
   trip: null, members: [], items: [], events: [],
+  // Google proves one user across devices; a member is still their place on one
+  // particular trip. Unlinked local members remain usable while they migrate.
+  auth: { loaded: false, clientId: '', user: null, memberships: [] },
+  authBusy: false,
+  // Messages are paged and polled on their own cursor. They are durable server
+  // state, but not part of the large trip payload or its revision counter.
+  chat: {
+    tripId: '', messages: [], hasMore: false, loading: false,
+    loadingOlder: false, busy: false, error: '', draft: '', pending: null,
+    connection: 'idle', assistantAvailable: false, streams: {},
+  },
   catalog: null, tips: [],
   // The forecast for where and when this trip is: `{ key, state, days, advice }`.
   // Not part of the trip — nobody edits it and it is the same for everybody — so
@@ -148,6 +163,65 @@ const toastEl = document.getElementById('toast')
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => (
   { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
 
+// Camp answers in a small, deliberate subset of Markdown. Parse only the
+// structures that make a practical answer easier to scan, and escape every
+// piece of model text before adding our own markup.
+function assistantInline(text) {
+  const source = String(text ?? '')
+  const token = /(\*\*([^*\n]+)\*\*|`([^`\n]+)`)/g
+  let html = '', at = 0, match
+  while ((match = token.exec(source))) {
+    html += esc(source.slice(at, match.index))
+    html += match[2] !== undefined
+      ? `<strong>${esc(match[2])}</strong>`
+      : `<code>${esc(match[3])}</code>`
+    at = match.index + match[0].length
+  }
+  return html + esc(source.slice(at))
+}
+
+function assistantHtml(text) {
+  const lines = String(text ?? '').replace(/\r\n?/g, '\n').split('\n')
+  let html = '', paragraph = [], list = '', items = []
+  const flushParagraph = () => {
+    if (!paragraph.length) return
+    html += `<p>${assistantInline(paragraph.join(' '))}</p>`
+    paragraph = []
+  }
+  const flushList = () => {
+    if (!items.length) return
+    html += `<${list}>${items.map((item) => `<li>${assistantInline(item)}</li>`).join('')}</${list}>`
+    list = ''; items = []
+  }
+
+  for (const raw of lines) {
+    const line = raw.trim()
+    if (!line) { flushParagraph(); flushList(); continue }
+
+    const bullet = line.match(/^[-*]\s+(.+)/)
+    const numbered = line.match(/^\d+[.)]\s+(.+)/)
+    if (bullet || numbered) {
+      flushParagraph()
+      const kind = bullet ? 'ul' : 'ol'
+      if (list && list !== kind) flushList()
+      list = kind
+      items.push((bullet || numbered)[1])
+      continue
+    }
+
+    flushList()
+    const heading = line.match(/^#{1,3}\s+(.+)/)
+    if (heading) {
+      flushParagraph()
+      html += `<p class="assistant-copy__heading">${assistantInline(heading[1])}</p>`
+    } else {
+      paragraph.push(line)
+    }
+  }
+  flushParagraph(); flushList()
+  return html || '<p></p>'
+}
+
 const colorOf = (m) => MEMBER_COLORS[(m?.hue ?? 0) % MEMBER_COLORS.length]
 const memberById = (id) => S.members.find((m) => m.id === id) || null
 const meMember = () => memberById(S.me)
@@ -165,6 +239,10 @@ function toast(msg) {
 async function api(path, opts = {}) {
   const headers = { 'content-type': 'application/json' }
   if (S.me) headers['x-member-id'] = S.me
+  // Not a credential — the HttpOnly cookie is that. This public id only gives
+  // the offline cache a value that changes on sign-out, so private trip state
+  // from an authenticated session cannot match the signed-out request.
+  if (S.auth.user) headers['x-user-id'] = S.auth.user.id
   let res
   try {
     res = await fetch(`/api${path}`, { ...opts, headers, body: opts.body ? JSON.stringify(opts.body) : undefined })
@@ -187,7 +265,9 @@ async function api(path, opts = {}) {
 
 function absorb(state) {
   if (!state?.trip) return
+  if (S.trip?.id !== state.trip.id) resetChat()
   S.trip = state.trip
+  if (Object.hasOwn(state, 'viewer_id')) S.me = state.viewer_id
   S.members = state.members
   S.items = state.items
   S.events = state.events
@@ -205,6 +285,249 @@ async function mutate(fn) {
   } finally {
     S.busy = false
   }
+}
+
+function resetChat(tripId = '') {
+  S.chat = {
+    tripId, messages: [], hasMore: false, loading: false,
+    loadingOlder: false, busy: false, error: '', draft: '', pending: null,
+    connection: 'idle', assistantAvailable: false, streams: {},
+  }
+}
+
+function mergeMessages(incoming) {
+  const byId = new Map(S.chat.messages.map((m) => [Number(m.id), m]))
+  for (const message of incoming ?? []) {
+    byId.set(Number(message.id), message)
+    if (message.role === 'assistant' && message.client_id?.startsWith('assistant:')) {
+      delete S.chat.streams[message.client_id.slice('assistant:'.length)]
+    }
+  }
+  S.chat.messages = [...byId.values()].sort((a, b) => Number(a.id) - Number(b.id))
+}
+
+function newMessageId() {
+  return globalThis.crypto?.randomUUID?.()
+    ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+}
+
+async function wantMessages() {
+  const tripId = S.trip?.id
+  if (!tripId || (S.chat.tripId === tripId && !S.chat.error)) return
+  const connection = S.chat.connection
+  resetChat(tripId)
+  S.chat.connection = connection
+  S.chat.loading = true
+  try {
+    const data = await api(`/trips/${tripId}/messages`)
+    if (S.chat.tripId !== tripId) return
+    mergeMessages(data.messages)
+    S.chat.hasMore = !!data.hasMore
+    S.chat.assistantAvailable = !!data.assistantAvailable
+  } catch (err) {
+    if (S.chat.tripId === tripId) S.chat.error = err.message
+  } finally {
+    if (S.chat.tripId === tripId) {
+      S.chat.loading = false
+      if (S.view === 'trip' && S.camp === 'room') render()
+    }
+  }
+}
+
+async function olderMessages() {
+  const tripId = S.trip?.id
+  const first = S.chat.messages[0]?.id
+  if (!tripId || !first || S.chat.loadingOlder || !S.chat.hasMore) return
+  S.chat.loadingOlder = true
+  try {
+    const data = await api(`/trips/${tripId}/messages?before=${first}`)
+    if (S.chat.tripId !== tripId) return
+    mergeMessages(data.messages)
+    S.chat.hasMore = !!data.hasMore
+    S.chat.assistantAvailable = !!data.assistantAvailable
+  } catch (err) {
+    if (S.chat.tripId === tripId) toast(err.message)
+  } finally {
+    if (S.chat.tripId === tripId) {
+      S.chat.loadingOlder = false
+      render()
+    }
+  }
+}
+
+// WebSocket delivery is a fast notification of durable rows. Reconnect always
+// asks REST for everything after the last id, so a dropped packet or sleeping
+// phone cannot leave a permanent hole in the thread.
+let chatSocket = null
+let chatSocketTrip = ''
+let chatReconnectTimer = null
+let chatReconnectAttempt = 0
+let chatNeedsRender = false
+
+const chatConnectionLabel = (state) => ({
+  live: 'Live', connecting: 'Connecting', reconnecting: 'Reconnecting',
+  offline: 'Offline', polling: 'Checking every 5s', idle: 'Connecting',
+}[state] ?? 'Connecting')
+
+function setChatConnection(state) {
+  S.chat.connection = state
+  const status = root.querySelector?.('[data-chat-connection]')
+  if (!status) return
+  status.dataset.state = state
+  status.textContent = chatConnectionLabel(state)
+}
+
+function showChatChanges() {
+  if (S.camp !== 'room') return
+  if (document.activeElement?.id === 'chat-text') {
+    chatNeedsRender = true
+    return
+  }
+  chatNeedsRender = false
+  render()
+}
+
+function receiveAssistantEvent(data) {
+  const runId = String(data.runId ?? '')
+  if (!/^[a-z0-9-]{1,100}$/i.test(runId)) return
+  const current = S.chat.streams[runId] ?? { runId, body: '', state: 'thinking', error: '' }
+  S.chat.streams[runId] = current
+
+  if (data.type === 'assistant.delta' && typeof data.delta === 'string') {
+    current.body = (current.body + data.delta).slice(0, 12000)
+    current.state = 'writing'
+  } else if (data.type === 'assistant.failed') {
+    current.state = 'failed'
+    current.body = ''
+    current.error = String(data.error || 'Camp could not answer that.')
+  } else if (data.type !== 'assistant.started') {
+    return
+  }
+
+  const row = root.querySelector?.(`[data-assistant-stream="${runId}"]`)
+  if (!row) return showChatChanges()
+  row.dataset.state = current.state
+  row.setAttribute('aria-busy', current.state === 'failed' ? 'false' : 'true')
+  const answer = row.querySelector?.('[data-assistant-body]')
+  const status = row.querySelector?.('[data-assistant-status]')
+  if (answer) answer.innerHTML = assistantHtml(current.body || current.error || 'Thinking…')
+  if (status) status.textContent = current.state === 'failed' ? 'Could not answer' : 'Writing…'
+}
+
+async function syncNewMessages(tripId) {
+  if (S.chat.tripId !== tripId || S.chat.loading || S.chat.error) return false
+  let changed = false
+  let after = S.chat.messages.at(-1)?.id ?? 0
+  do {
+    const data = await api(`/trips/${tripId}/messages?after=${after}&limit=100`)
+    if (S.chat.tripId !== tripId) return false
+    if (data.messages?.length) {
+      mergeMessages(data.messages)
+      after = S.chat.messages.at(-1).id
+      changed = true
+    }
+    S.chat.assistantAvailable = !!data.assistantAvailable
+    if (!data.messages?.length) return changed
+    if (!data.hasMore) return changed
+  } while (true)
+}
+
+function stopChatSocket(state = 'idle') {
+  clearTimeout(chatReconnectTimer)
+  chatReconnectTimer = null
+  chatReconnectAttempt = 0
+  chatSocketTrip = ''
+  const socket = chatSocket
+  chatSocket = null
+  if (socket && socket.readyState < 2) socket.close(1000, 'Leaving trip')
+  setChatConnection(state)
+}
+
+function scheduleChatReconnect(tripId) {
+  if (chatReconnectTimer || S.view !== 'trip' || S.trip?.id !== tripId || !S.me) return
+  if (!S.auth.user) return setChatConnection('polling')
+  if (navigator.onLine === false) {
+    setChatConnection('offline')
+    return
+  }
+  setChatConnection('reconnecting')
+  const base = Math.min(1000 * (2 ** chatReconnectAttempt), 30000)
+  const delay = base + Math.floor(Math.random() * Math.min(1000, base / 4))
+  chatReconnectAttempt++
+  chatReconnectTimer = setTimeout(() => {
+    chatReconnectTimer = null
+    connectChatSocket(tripId)
+  }, delay)
+}
+
+function connectChatSocket(tripId) {
+  if (S.view !== 'trip' || S.trip?.id !== tripId || !S.me) return
+  if (!S.auth.user) return setChatConnection('polling')
+  if (navigator.onLine === false) return setChatConnection('offline')
+  setChatConnection(chatReconnectAttempt ? 'reconnecting' : 'connecting')
+
+  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
+  const url = `${protocol}//${location.host}/ws?tripId=${encodeURIComponent(tripId)}`
+  let socket
+  try { socket = new globalThis.WebSocket(url) } catch { return scheduleChatReconnect(tripId) }
+  chatSocket = socket
+  chatSocketTrip = tripId
+
+  socket.addEventListener('open', () => {
+    if (chatSocket !== socket || chatSocketTrip !== tripId) return
+    chatReconnectAttempt = 0
+    setChatConnection('live')
+    if (S.chat.error) wantMessages()
+    else syncNewMessages(tripId).then((changed) => { if (changed) showChatChanges() }, () => {})
+  })
+  socket.addEventListener('message', (event) => {
+    if (chatSocket !== socket || S.chat.tripId !== tripId) return
+    try {
+      const data = JSON.parse(event.data)
+      if (data.type === 'message.created' && data.message) {
+        mergeMessages([data.message])
+        showChatChanges()
+      } else if (data.type?.startsWith('assistant.')) {
+        receiveAssistantEvent(data)
+      }
+    } catch { /* ignore messages from an incompatible server */ }
+  })
+  socket.addEventListener('close', () => {
+    if (chatSocket !== socket) return
+    chatSocket = null
+    scheduleChatReconnect(tripId)
+  })
+  socket.addEventListener('error', () => { /* close schedules the retry */ })
+}
+
+function ensureChatSocket() {
+  const tripId = S.view === 'trip' && S.me ? S.trip?.id : ''
+  if (!tripId) return stopChatSocket()
+  // Legacy profiles retain the polling path until Google links the membership;
+  // their temporary public member id never becomes a credential in a URL.
+  if (!S.auth.user) return stopChatSocket('polling')
+  if (typeof globalThis.WebSocket !== 'function') return setChatConnection('polling')
+  if (navigator.onLine === false) return stopChatSocket('offline')
+  if (chatSocketTrip === tripId && chatSocket && chatSocket.readyState < 2) {
+    setChatConnection(chatSocket.readyState === 1 ? 'live' : 'connecting')
+    return
+  }
+  if (chatSocketTrip && chatSocketTrip !== tripId) stopChatSocket()
+  chatSocketTrip = tripId
+  connectChatSocket(tripId)
+}
+
+function reconnectChatNow() {
+  if (S.view !== 'trip' || !S.trip || !S.me || !S.auth.user
+      || typeof globalThis.WebSocket !== 'function') return
+  if (chatSocket?.readyState === 1) return
+  clearTimeout(chatReconnectTimer)
+  chatReconnectTimer = null
+  const old = chatSocket
+  chatSocket = null
+  if (old && old.readyState < 2) old.close()
+  chatSocketTrip = S.trip.id
+  connectChatSocket(S.trip.id)
 }
 
 // ---- derived ----------------------------------------------------------------
@@ -1138,8 +1461,83 @@ function joinBlock() {
     </section>`
 }
 
-// Whoever you were last time is almost certainly who you are this time.
-const lastKnownName = () => (S.trips ?? []).map((t) => t.you?.name).find(Boolean) ?? ''
+function googleSignIn(note = 'Your account keeps your name and trips together across devices.') {
+  if (!S.auth.clientId) {
+    return `<p class="auth__unavailable">Google sign-in has not been configured on this server yet.</p>`
+  }
+  return `<div class="auth" aria-busy="${S.authBusy}">
+            <div class="auth__google" data-google></div>
+            ${note ? `<p class="auth__note">${esc(note)}</p>` : ''}
+          </div>`
+}
+
+function accountBlock() {
+  if (!S.auth.user) return ''
+  return `<section class="landing__account">
+            <span>Signed in as <b>${esc(S.auth.user.name)}</b></span>
+            <button class="btn btn--sm btn--quiet" data-act="sign-out">Sign out</button>
+          </section>`
+}
+
+function applyAuth(data) {
+  S.auth = {
+    loaded: true,
+    clientId: String(data?.clientId ?? S.auth.clientId ?? ''),
+    user: data?.user ?? null,
+    memberships: Array.isArray(data?.memberships) ? data.memberships : [],
+  }
+  // A server-linked membership is authoritative. This also completes the
+  // one-time migration after Google sign-in without making people rejoin.
+  for (const m of S.auth.memberships) {
+    if (!m?.tripId || !m?.memberId) continue
+    localStorage.setItem(meKey(m.tripId), m.memberId)
+    rememberTrip(m.tripId)
+  }
+}
+
+const legacyMemberships = () => localTrips().map((tripId) => ({
+  tripId, memberId: localStorage.getItem(meKey(tripId)),
+})).filter((m) => m.memberId)
+
+async function signedInWithGoogle(result) {
+  if (S.authBusy || !result?.credential) return
+  S.authBusy = true
+  const tripId = S.trip?.id
+  try {
+    applyAuth(await api('/auth/google', {
+      method: 'POST', body: { credential: result.credential, legacyMemberships: legacyMemberships() },
+    }))
+    toast('Signed in. Your trips are linked to this account.')
+    if (tripId) await openTrip(tripId)
+    else await showLanding()
+  } catch (err) {
+    toast(err.message)
+  } finally {
+    S.authBusy = false
+    render()
+  }
+}
+
+let googleFor = ''
+function renderGoogleButtons() {
+  const g = window.google?.accounts?.id
+  if (!g || !S.auth.clientId) return
+  if (googleFor !== S.auth.clientId) {
+    g.initialize({ client_id: S.auth.clientId, callback: signedInWithGoogle })
+    googleFor = S.auth.clientId
+  }
+  for (const slot of root.querySelectorAll?.('[data-google]') ?? []) {
+    if (slot.dataset.ready) continue
+    slot.dataset.ready = 'true'
+    g.renderButton(slot, { type: 'standard', theme: 'outline', size: 'large', text: 'signin_with', shape: 'rectangular' })
+  }
+}
+
+document.getElementById('google-identity')?.addEventListener('load', renderGoogleButtons)
+
+// A signed-in name wins; otherwise whoever you were last time is probably who
+// you are this time on an old, not-yet-linked trip.
+const lastKnownName = () => S.auth.user?.name || (S.trips ?? []).map((t) => t.you?.name).find(Boolean) || ''
 
 function createBlock(folded) {
   if (folded && !S.showCreate) {
@@ -1147,10 +1545,17 @@ function createBlock(folded) {
               <button class="btn btn--wide" data-act="show-create">${ICONS.plus} Start another trip</button>
             </section>`
   }
+  if (!S.auth.user) {
+    return `<section class="landing__card">
+              <h2>Start a trip</h2>
+              <p>Sign in first so this trip follows you to another phone and nobody else can speak as you.</p>
+              ${googleSignIn()}
+            </section>`
+  }
   return `
     <section class="landing__card">
       <h2>Start a trip</h2>
-      <p>Takes about twenty seconds. You'll get a link to send your friends — no accounts, no app to install.</p>
+      <p>Takes about twenty seconds. You'll get a link to send your friends — no app to install.</p>
       <form data-act="create">
         <label class="field"><span>Your name</span>
           <input name="organiser" value="${esc(lastKnownName())}" placeholder="Josh" autocomplete="given-name" required maxlength="40"></label>
@@ -1200,7 +1605,7 @@ function viewLanding() {
     </header>
 
     <main class="landing__body">
-      <div class="landing__stack">${blocks}${installBlock()}</div>
+      <div class="landing__stack">${accountBlock()}${blocks}${installBlock()}</div>
     </main>
   </div>`
 }
@@ -1233,6 +1638,21 @@ function joinClashCard() {
 }
 
 function viewJoin() {
+  const card = !S.auth.user ? `
+      <div class="landing__card">
+        <h2>Sign in to join</h2>
+        <p>Your friends will know messages and packing claims really came from you.</p>
+        ${googleSignIn('One sign-in reconnects your trips on every device.')}
+      </div>` : S.joinClash ? joinClashCard() : `
+      <div class="landing__card">
+        <h2>How should your name appear?</h2>
+        <p>This is the name shown next to everything you're bringing.</p>
+        <form data-act="join">
+          <label class="field"><span>Name</span>
+            <input name="name" value="${esc(S.auth.user.name)}" placeholder="Sam" autocomplete="name" required maxlength="40" autofocus></label>
+          <button class="btn btn--primary btn--wide" type="submit">Join the trip</button>
+        </form>
+      </div>`
   return `
   <div class="landing">
     <header class="landing__hero">
@@ -1243,16 +1663,7 @@ function viewJoin() {
       </div>
     </header>
     <main class="landing__body">
-      ${S.joinClash ? joinClashCard() : `
-      <div class="landing__card">
-        <h2>Who are you?</h2>
-        <p>Your name shows up next to everything you're bringing, so the others know it's handled.</p>
-        <form data-act="join">
-          <label class="field"><span>Name</span>
-            <input name="name" placeholder="Sam" autocomplete="given-name" required maxlength="40" autofocus></label>
-          <button class="btn btn--primary btn--wide" type="submit">Join the trip</button>
-        </form>
-      </div>`}
+      ${card}
     </main>
   </div>`
 }
@@ -1314,6 +1725,20 @@ function dayBar() {
 // it. Nothing here is a control any more — the way to the trip page is the Trip
 // tab — so the header is purely a sign saying where you are standing.
 function topbar() {
+  if (S.camp === 'room') {
+    return `
+      <header class="topbar topbar--bare topbar--room">
+        <div class="roombar">
+          <a class="roombar__back" href="/t/${encodeURIComponent(S.trip.id)}" data-act="camp">
+            <span aria-hidden="true">${ICONS.back}</span>
+            <span class="sr-only">Back to trip overview</span>
+          </a>
+          <h1 class="roombar__title" id="planning-room-title">Planning Room</h1>
+          <span class="roombar__balance" aria-hidden="true"></span>
+        </div>
+      </header>`
+  }
+
   const tab = currentTab()
   const when = shortDates(S.trip)
   // Where, in the shortest form that is still an answer — "Wasdale Head", not
@@ -1338,8 +1763,8 @@ function topbar() {
   // is actually about is the section you are in, which had no heading at all
   // until now. So the h1 says both, out loud, to whoever is listening.
   return `
-    <header class="topbar${under ? '' : ' topbar--bare'}">
-      <h1 class="sr-only">${esc(S.trip.name)} — ${esc(S.camp ? CAMP.title : tabTitle(tab))}</h1>
+    <header class="topbar${under ? '' : ' topbar--bare'}${S.camp ? ' topbar--trip' : ''}">
+      <h1 class="sr-only">${esc(S.trip.name)} — ${esc(S.camp === 'room' ? ROOM.title : S.camp ? CAMP.title : tabTitle(tab))}</h1>
       <div class="topbar__trip">
         <span class="topbar__title">${esc(S.trip.name)}</span>
         ${meta ? `<span class="topbar__meta">${meta}</span>` : ''}
@@ -1622,7 +2047,7 @@ function statusCard() {
   const c = countdown(S.trip)
   const mine = statsFor(S.items)
   return `
-    <div class="card status">
+    <section class="card status" aria-label="How the trip is looking">
       <span class="eyebrow">How it's looking</span>
       <p class="countdown">
         ${c?.n ? `<span class="countdown__n">${c.n}</span><span class="countdown__word">${c.word}</span>`
@@ -1630,7 +2055,7 @@ function statusCard() {
       </p>
       <div class="ready">${TABS.filter((t) => t.lists.length).map(readyRow).join('')}</div>
       ${mine.own ? `<p class="status__mine">Your own kit: <b>${mine.mine} of ${mine.own}</b> packed. Nobody else can see this.</p>` : ''}
-    </div>`
+    </section>`
 }
 
 // One tap to turn-by-turn. A pasted link wins over everything: whoever booked
@@ -1720,7 +2145,7 @@ async function loadWeather(key) {
     if (S.wx?.key !== key) return
     S.wx = { key, state: 'fail' }
   }
-  if (S.camp) render()
+  if (S.camp === 'overview') render()
 }
 
 // The first day the forecast will reach a trip that is still too far off, so the
@@ -2141,9 +2566,97 @@ function peopleCard() {
           <span class="code-box__code">${esc(link)}</span>
           <button class="btn btn--sm" data-act="share">Copy</button>
         </div>
-        <p class="invite__note">Anyone with this link can add things and claim them. No sign-up.</p>
+        <p class="invite__note">Anyone with this link can see the trip. Only members can read or write in the planning room.</p>
       </div>
     </div>`
+}
+
+function roomDoor() {
+  return `
+    <a class="room-door" href="/t/${encodeURIComponent(S.trip.id)}/room" data-act="room">
+      <span class="room-door__icon" aria-hidden="true">${ICONS.room}</span>
+      <span class="room-door__copy">
+        <strong>Planning room</strong>
+        <span>Questions, decisions and <span class="mono">@camp</span> help live here.</span>
+      </span>
+      <span class="room-door__go">Open <span aria-hidden="true">→</span></span>
+    </a>`
+}
+
+function chatCard() {
+  const chat = S.chat
+  const waiting = chat.tripId !== S.trip.id || chat.loading
+  const messages = chat.messages
+  const streams = Object.values(chat.streams)
+  const messageRows = messages.map((message) => {
+    const member = memberById(message.member_id)
+    const when = new Date(message.created_at)
+    const assistant = message.role === 'assistant'
+    return `
+      <li class="thread__message${message.member_id === S.me ? ' thread__message--mine' : ''}${assistant ? ' thread__message--assistant' : ''}">
+        <span class="thread__mark"${assistant ? '' : ` style="background:${member ? colorOf(member) : 'var(--ink-faint)'}"`} aria-hidden="true">${assistant ? ICONS.camp : ''}</span>
+        <div class="thread__content">
+          <div class="thread__meta">
+            <strong>${esc(message.author_name)}${assistant ? ' <span class="thread__camp mono">assistant</span>' : ''}</strong>
+            <time class="mono" datetime="${esc(message.created_at)}" title="${esc(when.toLocaleString())}">${ago(message.created_at)}</time>
+          </div>
+          ${assistant ? `<div class="assistant-copy">${assistantHtml(message.body)}</div>` : `<p>${esc(message.body)}</p>`}
+        </div>
+      </li>`
+  }).join('')
+  const streamRows = streams.map((stream) => `
+    <li class="thread__message thread__message--assistant thread__message--streaming"
+      data-assistant-stream="${esc(stream.runId)}" data-state="${esc(stream.state)}"
+      aria-busy="${stream.state === 'failed' ? 'false' : 'true'}">
+      <span class="thread__mark" aria-hidden="true">${ICONS.camp}</span>
+      <div class="thread__content">
+        <div class="thread__meta">
+          <strong>Camp <span class="thread__camp mono">assistant</span></strong>
+          <span class="thread__status mono" data-assistant-status>${stream.state === 'failed' ? 'Could not answer' : 'Writing…'}</span>
+        </div>
+        <div class="assistant-copy" data-assistant-body>${assistantHtml(stream.body || stream.error || 'Thinking…')}</div>
+      </div>
+    </li>`).join('')
+
+  return `
+    <section class="chat-card chat-card--page" aria-labelledby="planning-room-title" aria-busy="${waiting}">
+      <span class="sr-only chat__connection mono" data-chat-connection
+        data-state="${esc(chat.connection)}" role="status" aria-live="polite">${chatConnectionLabel(chat.connection)}</span>
+      <p class="sr-only" id="chat-help">${chat.assistantAvailable
+        ? 'Keep decisions with the trip. Start with <span class="mono">@camp</span> for help using its details and lists.'
+        : 'Keep decisions with the trip, where everybody can find them later.'}</p>
+      ${waiting ? '<div class="skel" aria-label="Loading messages"></div>' : chat.error ? `
+        <div class="chat__error" role="alert">
+          <p>${esc(chat.error)}</p>
+          <button class="btn btn--sm" data-act="chat-retry">Try again</button>
+        </div>` : `
+        ${chat.hasMore ? `<button class="chat__older" data-act="chat-older"
+          ${chat.loadingOlder ? 'disabled' : ''}>${chat.loadingOlder ? 'Loading…' : 'Earlier messages'}</button>` : ''}
+        ${messages.length || streams.length ? `
+          <ol class="thread" aria-label="Planning messages">
+            ${messageRows}${streamRows}
+          </ol>` : `
+          <div class="chat__empty">
+            <strong>No messages yet</strong>
+            <span>Start with the decision the group needs to make next.</span>
+        </div>`}
+        <form class="chat__composer" data-act="send-message">
+          <label class="sr-only" for="chat-text">${chat.assistantAvailable ? 'Message the group or @camp' : 'Message the group'}</label>
+          <div class="chat__write">
+            <textarea id="chat-text" name="text" rows="1" maxlength="2000" required
+              aria-describedby="chat-help" placeholder="${chat.assistantAvailable ? 'Message the group or @camp…' : 'Write a message…'}">${esc(chat.draft)}</textarea>
+            <button class="btn btn--primary chat__send" type="submit" aria-label="${chat.busy ? 'Sending message' : 'Send message'}"
+              ${chat.busy ? 'disabled' : ''}>${chat.busy ? '<span class="chat__sending" aria-hidden="true">…</span>' : ICONS.send}</button>
+          </div>
+        </form>`}
+    </section>`
+}
+
+function roomPage() {
+  return `
+    <main class="room-page">
+      ${chatCard()}
+    </main>`
 }
 
 // Both long lists on this page open a few rows at a time, so neither of them
@@ -2157,53 +2670,83 @@ function moreBtn(what, total, shown) {
 function campPage() {
   const tips = S.expand.tips ? S.tips : S.tips.slice(0, 3)
   const events = S.expand.feed ? S.events : S.events.slice(0, 8)
+  const home = homeCard()
 
   return `
-    <main class="page">
-      ${statusCard()}
-      ${homeCard()}
-      ${weatherCard()}
-      ${whereCard()}
-      ${notesCard()}
-      ${peopleCard()}
+    <main class="page trip-page">
+      <header class="trip-page__head">
+        <h2>Trip overview</h2>
+        <p>See what is covered, where you are going, and who is coming.</p>
+      </header>
 
-      <div class="card">
-        <h3>Trip details</h3>
-        <form data-act="save-trip">
-          <label class="field"><span>Trip name</span><input name="name" value="${esc(S.trip.name)}" maxlength="80"></label>
-          <div class="field field--split">
-            <label class="field"><span>Arrive</span><input type="date" name="start_date" value="${esc(S.trip.start_date)}"></label>
-            <label class="field"><span>Leave</span><input type="date" name="end_date" value="${esc(S.trip.end_date)}"></label>
+      <div class="trip-lead">
+        ${statusCard()}
+        ${roomDoor()}
+      </div>
+
+      ${home ? `<section class="trip-urgent" aria-label="Pack-down status">${home}</section>` : ''}
+
+      <section class="trip-section" aria-labelledby="trip-essentials-title">
+        <div class="trip-section__head">
+          <h2 id="trip-essentials-title">Essentials</h2>
+          <p>The details everyone needs before setting off.</p>
+        </div>
+        <div class="trip-columns">
+          <div class="trip-stack">
+            ${weatherCard()}
+            ${whereCard()}
+            ${notesCard()}
           </div>
-          <button class="btn btn--primary" type="submit">Save details</button>
-        </form>
-      </div>
-
-      <div class="card">
-        <h3>Camp smarts</h3>
-        <p>The things people find out the hard way on their first trip.</p>
-        <div class="tips">
-          ${tips.map((t, i) => `
-            <div class="tip">
-              <span class="tip__mark">${i + 1}</span>
-              <div><h4>${esc(t.title)}</h4><p>${esc(t.body)}</p></div>
-            </div>`).join('')}
+          <div class="trip-stack">
+            ${peopleCard()}
+            <div class="card">
+              <h3>Trip details</h3>
+              <form data-act="save-trip">
+                <label class="field"><span>Trip name</span><input name="name" value="${esc(S.trip.name)}" maxlength="80"></label>
+                <div class="field field--split">
+                  <label class="field"><span>Arrive</span><input type="date" name="start_date" value="${esc(S.trip.start_date)}"></label>
+                  <label class="field"><span>Leave</span><input type="date" name="end_date" value="${esc(S.trip.end_date)}"></label>
+                </div>
+                <button class="btn btn--primary" type="submit">Save details</button>
+              </form>
+            </div>
+          </div>
         </div>
-        ${moreBtn('tips', S.tips.length, 3)}
-      </div>
+      </section>
 
-      <div class="card">
-        <h3>What's been happening</h3>
-        <div class="feed">
-          ${events.length ? events.map((e) => `
-            <div class="feed__row">
-              <span class="feed__who">${esc(e.actor || 'Someone')}</span>
-              <span class="feed__what">${esc(e.text)}</span>
-              <span class="feed__when" title="${esc(new Date(e.created_at).toLocaleString())}">${ago(e.created_at)}</span>
-            </div>`).join('') : '<p class="card__body">Nothing yet.</p>'}
+      <section class="trip-section" aria-labelledby="trip-extra-title">
+        <div class="trip-section__head">
+          <h2 id="trip-extra-title">Good to know</h2>
+          <p>Recent changes and practical reminders for the weekend.</p>
         </div>
-        ${moreBtn('feed', S.events.length, 8)}
-      </div>
+        <div class="trip-extras">
+          <div class="card">
+            <h3>Camp smarts</h3>
+            <p>The things people find out the hard way on their first trip.</p>
+            <div class="tips">
+              ${tips.map((t) => `
+                <div class="tip">
+                  <span class="tip__mark" aria-hidden="true">${ICONS.spark}</span>
+                  <div><h4>${esc(t.title)}</h4><p>${esc(t.body)}</p></div>
+                </div>`).join('')}
+            </div>
+            ${moreBtn('tips', S.tips.length, 3)}
+          </div>
+
+          <div class="card">
+            <h3>Recent changes</h3>
+            <div class="feed">
+              ${events.length ? events.map((e) => `
+                <div class="feed__row">
+                  <span class="feed__who">${esc(e.actor || 'Someone')}</span>
+                  <span class="feed__what">${esc(e.text)}</span>
+                  <span class="feed__when" title="${esc(new Date(e.created_at).toLocaleString())}">${ago(e.created_at)}</span>
+                </div>`).join('') : '<p class="card__body">Nothing yet.</p>'}
+            </div>
+            ${moreBtn('feed', S.events.length, 8)}
+          </div>
+        </div>
+      </section>
     </main>`
 }
 
@@ -2245,10 +2788,19 @@ function tabbar() {
     </nav>`
 }
 
+function authNudge() {
+  if (S.auth.user || !S.me) return ''
+  return `<aside class="auth-nudge">
+            <div><b>Keep this profile</b><span>Sign in once to use ${esc(meMember()?.name || 'your name')} on another device.</span></div>
+            ${googleSignIn('')}
+          </aside>`
+}
+
 function viewTrip() {
   const tab = currentTab()
-  const page = S.camp ? campPage() : tab.id === 'mine' ? minePage() : listPage()
-  return `<div class="app">${topbar()}${page}</div>${tabbar()}`
+  const page = S.camp === 'room' ? roomPage() : S.camp ? campPage() : tab.id === 'mine' ? minePage() : listPage()
+  if (S.camp === 'room') return `<div class="app app--room">${topbar()}${page}</div>`
+  return `<div class="app">${topbar()}${authNudge()}${page}</div>${tabbar()}`
 }
 
 // ---- sheets -----------------------------------------------------------------
@@ -2840,8 +3392,21 @@ function edges(row) {
 
 const markEdges = () => { for (const row of root.querySelectorAll?.(ROWS) ?? []) edges(row) }
 
-function render() {
+const CHAT_BOX_MAX = 180
+function fitChatBox(box) {
+  if (!box) return
+  box.style.height = 'auto'
+  box.style.height = `${Math.min(box.scrollHeight, CHAT_BOX_MAX)}px`
+  box.style.overflowY = box.scrollHeight > CHAT_BOX_MAX ? 'auto' : 'hidden'
+}
+
+function render({ chatBottom = false } = {}) {
   const y = window.scrollY
+  const oldChat = root.querySelector?.('.chat-card--page')
+  const oldChatTop = oldChat?.scrollTop ?? 0
+  const chatWasAtBottom = oldChat
+    ? oldChat.scrollHeight - oldChat.scrollTop - oldChat.clientHeight < 96
+    : false
   for (const sel of SIDEWAYS) {
     const was = root.querySelector(sel)
     if (was) rowsAt.x[sel] = was.scrollLeft
@@ -2852,9 +3417,17 @@ function render() {
 
   const views = { landing: viewLanding, join: viewJoin, trip: viewTrip }
   root.innerHTML = views[S.view]?.() ?? '<div class="page"><p>Loading…</p></div>'
+  fitChatBox(root.querySelector?.('#chat-text'))
+  const nextChat = root.querySelector?.('.chat-card--page')
+  if (nextChat) {
+    nextChat.scrollTop = chatBottom || !oldChat || chatWasAtBottom
+      ? nextChat.scrollHeight
+      : oldChatTop
+  }
+  chatNeedsRender = false
   // The install card floats over the bottom of the screen, which on the trip
   // page already has a tab bar standing on it.
-  document.body.classList.toggle('has-tabbar', S.view === 'trip')
+  document.body.classList.toggle('has-tabbar', S.view === 'trip' && S.camp !== 'room')
   renderSheet()
   if (S.view === 'trip') window.scrollTo(0, y)
 
@@ -2862,7 +3435,7 @@ function render() {
   // a new tab starts at the left, the same as it would if you had just arrived.
   // Then each is asked which way it can still go, which is what the fade at its
   // ends is drawn from.
-  const here = `${S.view}:${S.camp ? 'camp' : S.tab}`
+  const here = `${S.view}:${S.camp || S.tab}`
   const kept = {}
   for (const sel of SIDEWAYS) {
     const row = root.querySelector(sel)
@@ -2881,11 +3454,17 @@ function render() {
     if (found) { found.focus(); found.setSelectionRange(caret.start, caret.end) }
   }
 
+  // Google's button owns its inner markup, so it is mounted after our
+  // string-rendered page is in the document and remounted after a redraw.
+  renderGoogleButtons()
+
   // Asked for after the page is on screen, and only where it is shown: the
   // forecast is the one thing here that comes from somewhere else, so nothing
   // waits on it. It answers once per question — see wantWeather — so this being
   // in render() costs a string comparison and nothing else.
-  if (S.view === 'trip' && S.camp) wantWeather()
+  if (S.view === 'trip' && S.camp === 'overview') wantWeather()
+  if (S.view === 'trip' && S.camp === 'room') wantMessages()
+  ensureChatSocket()
 }
 
 // ---- actions ----------------------------------------------------------------
@@ -2944,9 +3523,9 @@ function arrive(state) {
   render()
 }
 
-// There are no accounts, so "your trips" is whatever this device remembers.
-// Most-recent first, with the per-trip member keys as a fallback so trips joined
-// before this list existed still show up.
+// The account's memberships are copied into the same small local index old
+// devices used. That keeps the offline home page and the migration path one
+// mechanism rather than maintaining a second account-only trip picker.
 function localTrips() {
   let ids = []
   try { ids = JSON.parse(localStorage.getItem(TRIPS_KEY) ?? '[]') } catch { /* rewritten below */ }
@@ -3029,8 +3608,14 @@ function tripCodeFrom(raw) {
 }
 
 async function goToTrip(code) {
-  history.pushState({}, '', `/t/${encodeURIComponent(code)}`)
+  S.camp = false
+  history.pushState({ tripView: false }, '', `/t/${encodeURIComponent(code)}`)
   await openTrip(code)
+}
+
+function pushTripView(view) {
+  const suffix = view === 'room' ? '/room' : ''
+  history.pushState({ tripView: view }, '', `/t/${encodeURIComponent(S.trip.id)}${suffix}`)
 }
 
 // Joining is the one place a name is load-bearing, so it lives in one function:
@@ -3042,7 +3627,7 @@ async function joinAs(rawName, claim = '') {
   try {
     const { member } = await api(`/trips/${S.trip.id}/members`, {
       method: 'POST',
-      body: { name, ...(claim ? { claim } : {}) },
+      body: { name, self: true, ...(claim ? { claim } : {}) },
     })
     localStorage.setItem(meKey(S.trip.id), member.id)
     rememberTrip(S.trip.id)
@@ -3068,7 +3653,9 @@ async function openTrip(code) {
     // back with this trip's ticks stripped out, so your own kit reads unpacked.
     S.me = localStorage.getItem(meKey(code))
     const state = await api(`/trips/${encodeURIComponent(code)}`)
-    if (S.me && !state.members.some((m) => m.id === S.me)) S.me = null
+    S.me = Object.hasOwn(state, 'viewer_id')
+      ? state.viewer_id
+      : (S.me && state.members.some((m) => m.id === S.me) ? S.me : null)
     if (S.me) rememberTrip(code)
     S.joinCode = ''
     S.joinError = ''
@@ -3093,6 +3680,17 @@ document.addEventListener('click', async (ev) => {
   if (el.tagName === 'BUTTON' && el.type !== 'submit') ev.preventDefault()
 
   switch (act) {
+    case 'sign-out': {
+      try {
+        applyAuth(await api('/auth/logout', { method: 'POST' }))
+        S.me = null
+        toast('Signed out.')
+        if (S.trip?.id) await openTrip(S.trip.id)
+        else await showLanding()
+      } catch (err) { toast(err.message) }
+      break
+    }
+
     case 'open-trip':
       await goToTrip(el.dataset.id)
       window.scrollTo(0, 0)
@@ -3129,6 +3727,7 @@ document.addEventListener('click', async (ev) => {
       break
 
     case 'tab':
+      if (S.camp) pushTripView(false)
       S.tab = el.dataset.tab
       S.camp = false
       // A filter belongs to the list you set it on. Carrying "Shelter" onto the
@@ -3150,9 +3749,26 @@ document.addEventListener('click', async (ev) => {
     // have been the one button in the bar that put you somewhere you did not
     // press for.
     case 'camp':
-      S.camp = true
+      if (S.camp !== 'overview') pushTripView('overview')
+      S.camp = 'overview'
       render()
       window.scrollTo(0, 0)
+      break
+
+    case 'room':
+      if (S.camp !== 'room') pushTripView('room')
+      S.camp = 'room'
+      render()
+      window.scrollTo(0, 0)
+      break
+
+    case 'chat-older':
+      await olderMessages()
+      break
+
+    case 'chat-retry':
+      resetChat()
+      render()
       break
 
     // Not a toggle: All is the way back out, and it is sitting at the left-hand
@@ -3627,7 +4243,8 @@ document.addEventListener('submit', async (ev) => {
         S.me = memberId
         S.view = 'trip'
         S.tab = 'pack'
-        history.pushState({}, '', `/t/${trip.id}`)
+        S.camp = false
+        history.pushState({ tripView: false }, '', `/t/${trip.id}`)
         arrive(await api(`/trips/${trip.id}`))
         toast('Trip created. Send the link to your friends.')
       } catch (err) { toast(err.message) }
@@ -3672,6 +4289,60 @@ document.addEventListener('submit', async (ev) => {
       // Standing on Saturday, two of those three landed somewhere you cannot
       // see. Said once, rather than a sheet that stays open to prove it.
       if (days.length > 1) toast(`Added on ${days.length} days.`)
+      break
+    }
+
+    case 'send-message': {
+      const text = String(f.text ?? '').trim()
+      if (!text || S.chat.busy || S.chat.tripId !== S.trip.id) break
+      const tripId = S.trip.id
+      const pending = S.chat.pending?.text === text
+        ? S.chat.pending
+        : { clientId: newMessageId(), text }
+      S.chat.pending = pending
+      S.chat.draft = text
+      S.chat.busy = true
+      const send = form.querySelector('button[type="submit"]')
+      if (send) {
+        send.disabled = true
+        send.setAttribute('aria-label', 'Sending message')
+        send.innerHTML = '<span class="chat__sending" aria-hidden="true">…</span>'
+      }
+      try {
+        const { message, assistant, assistantAvailable } = await api(`/trips/${tripId}/messages`, {
+          method: 'POST', body: pending,
+        })
+        if (S.chat.tripId !== tripId) break
+        mergeMessages([message])
+        S.chat.assistantAvailable = !!assistantAvailable
+        if (assistant?.status === 'queued' && assistant.runId) {
+          S.chat.streams[assistant.runId] ??= {
+            runId: assistant.runId, body: '', state: 'thinking', error: '',
+          }
+        } else if (assistant?.status === 'unavailable') {
+          toast('Camp is not available yet. Your message was saved for the group.')
+        } else if (assistant?.status === 'busy') {
+          toast('Camp already has a few requests queued. Try again shortly.')
+        }
+        S.chat.pending = null
+        S.chat.draft = ''
+        S.chat.busy = false
+        render({ chatBottom: true })
+        root.querySelector('#chat-text')?.focus()
+      } catch (err) {
+        if (S.chat.tripId !== tripId) break
+        // If the request reached the server but its answer did not reach us,
+        // the same client id goes with the retry. A true key conflict needs a
+        // fresh id, otherwise it could never recover.
+        if (err.payload?.conflict === 'message-retry') S.chat.pending = null
+        S.chat.busy = false
+        if (send) {
+          send.disabled = false
+          send.setAttribute('aria-label', 'Send message')
+          send.innerHTML = ICONS.send
+        }
+        toast(err.message)
+      }
       break
     }
 
@@ -3777,8 +4448,23 @@ function typedFind(box) {
 }
 
 document.addEventListener('input', (ev) => {
+  if (ev.target.id === 'chat-text') {
+    S.chat.draft = ev.target.value
+    fitChatBox(ev.target)
+  }
   const box = ev.target.closest?.('[data-find]')
   if (box && !ev.isComposing) typedFind(box)
+})
+
+window.addEventListener('resize', () => fitChatBox(root.querySelector?.('#chat-text')))
+
+// Incoming rows are stored while somebody is typing but the composer is not
+// rebuilt under their cursor. The first blur catches the visible thread up.
+document.addEventListener('focusout', (ev) => {
+  if (ev.target.id !== 'chat-text' || !chatNeedsRender) return
+  setTimeout(() => {
+    if (chatNeedsRender && document.activeElement?.id !== 'chat-text') showChatChanges()
+  }, 0)
 })
 
 document.addEventListener('compositionend', (ev) => {
@@ -4158,8 +4844,18 @@ window.addEventListener('popstate', boot)
 
 // ---- sync -------------------------------------------------------------------
 
+async function pollMessages() {
+  if (S.camp !== 'room' || S.chat.tripId !== S.trip.id || S.chat.loading
+      || S.chat.busy || S.chat.error || document.activeElement?.matches('input, textarea')) return
+  const tripId = S.trip.id
+  try {
+    if (await syncNewMessages(tripId)) showChatChanges()
+  } catch { /* offline; try again next tick */ }
+}
+
 async function poll() {
   if (S.view !== 'trip' || !S.trip || document.hidden || S.busy) return
+  await pollMessages()
   try {
     const { rev } = await api(`/trips/${S.trip.id}/rev`)
     if (rev !== S.rev) {
@@ -4179,11 +4875,15 @@ document.addEventListener('visibilitychange', () => {
   if (document.hidden) return
   turnDay()
   poll()
+  ensureChatSocket()
 })
 
 // A phone that walks back into signal should not wait out the rest of the tick.
-window.addEventListener('online', poll)
-window.addEventListener('offline', () => toast('No signal. The list still reads; changes will not save.'))
+window.addEventListener('online', () => { poll(); reconnectChatNow() })
+window.addEventListener('offline', () => {
+  stopChatSocket('offline')
+  toast('No signal. The list still reads; changes will not save.')
+})
 
 // ---- installed app ----------------------------------------------------------
 
@@ -4377,17 +5077,25 @@ function installBlock() {
 // ---- boot -------------------------------------------------------------------
 
 async function boot() {
-  try {
-    const { catalog, tips } = await api('/catalog')
-    S.catalog = catalog
-    S.tips = tips
-  } catch { /* the app still works without suggestions */ }
+  await Promise.all([
+    api('/auth').then(applyAuth, () => {
+      S.auth = { loaded: true, clientId: '', user: null, memberships: [] }
+    }),
+    api('/catalog').then(({ catalog, tips }) => {
+      S.catalog = catalog
+      S.tips = tips
+    }, () => { /* the app still works without suggestions */ }),
+  ])
 
-  const m = location.pathname.match(/^\/t\/([^/]+)/)
-  if (m) await openTrip(decodeURIComponent(m[1]))
+  const m = location.pathname.match(/^\/t\/([^/]+)(?:\/(room))?\/?$/)
+  if (m) {
+    const route = m[2] === 'room' ? 'room' : history.state?.tripView
+    S.camp = route === 'room' || route === 'overview' ? route : false
+    await openTrip(decodeURIComponent(m[1]))
+  }
   else await showLanding()
 
   considerInstall()
 }
 
-boot()
+if (!globalThis.__CAMPING_SYNC_TEST__) boot()
