@@ -6,6 +6,8 @@ const MEMBER_COLORS = ['#2F6B57', '#37698F', '#7A5AA6', '#8C6A2F', '#B23C6B', '#
 
 // Four places you do something, and no more. A tab bar is a promise that these
 // are the things the app is for, and it stops being one somewhere around five.
+// Camp rides alongside them in the bar but is not one of them — it is the trip
+// itself, not a fifth thing to keep on top of.
 //
 // Eat carries two lists. Food and drink are one shop, one cooler and one
 // question — "who is feeding us" — and keeping them apart cost a whole tab to
@@ -17,14 +19,18 @@ const MEMBER_COLORS = ['#2F6B57', '#37698F', '#7A5AA6', '#8C6A2F', '#B23C6B', '#
 const TABS = [
   { id: 'pack', lists: ['gear'], label: 'Pack', title: 'Packing list' },
   { id: 'eat', lists: ['food', 'drinks'], label: 'Eat', title: 'Food and drink' },
-  { id: 'do', lists: ['activities'], label: 'Do', title: 'Plans' },
+  // "Do" was a shrug — it read as a to-do list, which is the one thing this tab
+  // is not. Nothing here is assigned to anybody and nothing gets ticked off:
+  // it is a board of ideas you vote for. "Plan" says that, and it keeps the
+  // bar's rhythm — Pack, Eat, Plan — of naming the thing you came here to do.
+  { id: 'do', lists: ['activities'], label: 'Plan', title: 'Plans' },
   { id: 'mine', lists: [], label: 'Mine', title: 'Yours to pack' },
 ]
 
-// Where the trip is, who is coming, the invite link: read now and then rather
-// than worked in, so it hangs off the header instead of taking a fifth of the
-// bar. It is reached from the one thing on screen already about the trip — its
-// name — which is where people look for it anyway.
+// Where the trip is, who is coming, the invite link. It is a place you go, not
+// a panel you pull down over the list you were reading, so it sits in the bar
+// with the rest. It is kept out of TABS because it carries no list: everything
+// that counts, badges or filters a list would have to special-case it.
 const CAMP = { id: 'camp', lists: [], label: 'Camp', title: 'The trip' }
 
 const tabById = (id) => TABS.find((t) => t.id === id) ?? TABS[0]
@@ -50,9 +56,14 @@ const ICONS = {
   pack: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8h12l1 12H5L6 8Z"/><path d="M9 8V6a3 3 0 0 1 6 0v2"/></svg>',
   // A fork and a glass: the tab is one shop, and the icon has to say so.
   eat: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 3v7a2 2 0 0 0 4 0V3"/><path d="M6.5 10v11"/><path d="M13.2 4h7.6l-1.1 7.4a2.9 2.9 0 0 1-5.4 0L13.2 4Z"/><path d="M17 14.5V21"/><path d="M14.2 21h5.6"/></svg>',
-  do: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 3 20h18L12 3Z"/><path d="M12 12 7 20h10l-5-8Z"/></svg>',
+  // A compass, for the tab that asks "what are we doing with the day". The
+  // mountain that used to sit here now belongs to the tent next door, and two
+  // triangles in one bar told you nothing about either.
+  do: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m15.6 8.4-2.1 5.1-5.1 2.1 2.1-5.1 5.1-2.1Z"/></svg>',
   mine: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4h6v3H9V4Z"/><path d="M9 5.5H6.5A1.5 1.5 0 0 0 5 7v12.5A1.5 1.5 0 0 0 6.5 21h11a1.5 1.5 0 0 0 1.5-1.5V7a1.5 1.5 0 0 0-1.5-1.5H15"/><path d="m9 13.5 2 2 4.5-4.5"/></svg>',
-  camp: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 3v18M3 12h18"/><path d="M12 3a14 14 0 0 1 0 18a14 14 0 0 1 0-18Z"/></svg>',
+  // A tent, not a globe. The button opens the trip — where it is, who is coming
+  // — and a globe was the icon for "somewhere on Earth", which is nowhere.
+  camp: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.6 20.5 14 3.8"/><path d="M20.4 20.5 10 3.8"/><path d="M15.5 20.5 12 14.6l-3.5 5.9"/><path d="M2.2 20.5h19.6"/></svg>',
   tick: '<svg viewBox="0 0 24 24" fill="none" stroke="#F4F8F0" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5 9.5 18 20 6.5"/></svg>',
   tickGreen: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5 9.5 18 20 6.5"/></svg>',
   x: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>',
@@ -297,23 +308,30 @@ function fmtDates(trip) {
   return a || b || ''
 }
 
-// The header has one line and has to share it with the trip name, so a trip
-// that begins and ends in the same month names the month once.
+// "13–15 Nov 26", for the header only — the trip page and the trip picker keep
+// the full "Fri 13 Nov – Sun 15 Nov" form, because that is where you read the
+// dates to plan around them. The header is a label: you are checking which trip
+// this is, so it drops the weekday and shortens the year, but keeps the month
+// as a word. Nobody has to work out what "11" is.
+//
+// A range says the parts it repeats once — same month, one month; same year,
+// one year — so a weekend is "13–15 Nov 26" rather than twice the same tail.
 function shortDates(trip) {
-  if (trip?.start_date && trip.start_date === trip.end_date) {
-    return fmtDates({ start_date: trip.start_date })
-  }
   const day = (s) => {
     if (!s) return null
     const d = new Date(`${s}T12:00:00`)
     return Number.isNaN(+d) ? null : d
   }
+  const yy = (d) => String(d.getFullYear() % 100).padStart(2, '0')
+  const dm = (d) => `${d.getDate()} ${d.toLocaleDateString(undefined, { month: 'short' })}`
+  const full = (d) => `${dm(d)} ${yy(d)}`
+
   const a = day(trip?.start_date), b = day(trip?.end_date)
-  if (!a || !b || a.getMonth() !== b.getMonth() || a.getFullYear() !== b.getFullYear()) {
-    return fmtDates(trip ?? {})
-  }
-  const dm = (d) => d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric' })
-  return `${dm(a)} – ${dm(b)} ${b.toLocaleDateString(undefined, { month: 'short' })}`
+  if (!a || !b) return a || b ? full(a ?? b) : ''
+  if (+a === +b) return full(a)
+  if (a.getFullYear() !== b.getFullYear()) return `${full(a)} – ${full(b)}`
+  if (a.getMonth() !== b.getMonth()) return `${dm(a)} – ${full(b)}`
+  return `${a.getDate()}–${full(b)}`
 }
 
 function ago(iso) {
@@ -392,7 +410,7 @@ function mineParts() {
 function coverageBar(p) {
   return `
     <div class="cov">
-      <div class="cov__track" role="img" aria-label="${p.aria}">
+      <div class="cov__track${p.empty ? ' cov__track--empty' : ''}" role="img" aria-label="${p.aria}">
         ${p.empty ? `<span class="cov__empty">${p.empty}</span>` : p.segs}</div>
       <p class="cov__say">${p.say}</p>
     </div>`
@@ -781,17 +799,29 @@ function viewJoin() {
   </div>`
 }
 
-// One height, always: the trip you are in and the days it runs. Where it is,
-// who is coming and the invite link each have a card on the Camp tab, so the
-// header carries only the two things you want while looking at a list.
+// One height, always: which trip you are on, and the two facts that identify
+// it. Nothing here is a control any more — the way to the trip page is the Camp
+// tab — so the header is purely a sign saying where you are standing.
 function topbar() {
   const tab = currentTab()
   const when = shortDates(S.trip)
+  // Where, in the shortest form that is still an answer — "Wasdale Head", not
+  // the postcode and the country. It is the other half of what you tell someone
+  // about a trip, and it was the one thing you had to open the trip page to see.
+  const where = shortWhere(S.trip)
   // Two rows now, on every list: the trip and one bar. Narrowing the list is a
   // page control rather than a fixture, so the room it used to take is the
   // room the items get. The trip page brings its own summary, so it gets none.
   const under = S.camp ? ''
     : coverageBar(S.tab === 'mine' ? mineParts() : barParts(tab, activeSection()))
+
+  // Where and when go on their own line under the name rather than fighting it
+  // for one. They are a pair — the two answers to "which trip is this" — and on
+  // a phone a single row made all three of them compete for the same 300px.
+  const meta = [
+    where ? `<span class="topbar__where"><span class="topbar__pin" aria-hidden="true">${ICONS.pin}</span>${esc(where)}</span>` : '',
+    when ? `<span class="topbar__when">${esc(when)}</span>` : '',
+  ].filter(Boolean).join('<span class="topbar__dot" aria-hidden="true"></span>')
 
   // The trip name is app furniture rather than a page heading — what the page
   // is actually about is the section you are in, which had no heading at all
@@ -799,12 +829,10 @@ function topbar() {
   return `
     <header class="topbar${under ? '' : ' topbar--bare'}">
       <h1 class="sr-only">${esc(S.trip.name)} — ${esc(S.camp ? CAMP.title : tab.title)}</h1>
-      <button class="topbar__trip" data-act="camp" aria-pressed="${S.camp}">
+      <div class="topbar__trip">
         <span class="topbar__title">${esc(S.trip.name)}</span>
-        ${when ? `<span class="topbar__when">${esc(when)}</span>` : ''}
-        <span class="topbar__cog" aria-hidden="true">${ICONS.camp}</span>
-        <span class="sr-only">Trip details</span>
-      </button>
+        ${meta ? `<span class="topbar__meta">${meta}</span>` : ''}
+      </div>
       ${under}
     </header>`
 }
@@ -1214,6 +1242,10 @@ function tabbar() {
                   <span>${t.label}</span>
                 </button>`
       }).join('')}
+      <button class="tabbar__btn" data-act="camp" ${S.camp ? 'aria-current="page"' : ''}>
+        <span class="tabbar__icon">${ICONS.camp}</span>
+        <span>${CAMP.label}</span>
+      </button>
     </nav>`
 }
 
@@ -1652,10 +1684,12 @@ document.addEventListener('click', async (ev) => {
       window.scrollTo(0, 0)
       break
 
-    // The trip page sits over whichever tab you were on, so the way in is also
-    // the way out and you never land back somewhere you did not choose.
+    // A destination in the bar rather than an overlay, so it goes one way: you
+    // leave it by picking a list, the same as every other tab. Toggling would
+    // have been the one button in the bar that put you somewhere you did not
+    // press for.
     case 'camp':
-      S.camp = !S.camp
+      S.camp = true
       render()
       window.scrollTo(0, 0)
       break

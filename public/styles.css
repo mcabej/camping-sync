@@ -338,54 +338,57 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
   color: #EAF0E6;
   padding: calc(12px + env(safe-area-inset-top)) 18px 0;
 }
-/* The trip itself — where it is, who is coming, the invite link — is not a
-   fifth list, so it is not a fifth tab. It lives behind the one thing already
-   on screen that is about the trip: its name. The whole row is the target,
-   because a 30px glyph in a corner is a thing you have to be told about. */
+/* Name over facts: the name is what you read, the place and the date are what
+   you check. Stacking them lets the name have the width it wants instead of
+   trading it away to a date on the same line. */
 .topbar__trip {
-  display: flex; align-items: center; gap: 12px; width: 100%;
-  max-width: 720px; margin: 0 auto; padding: 3px 0;
-  text-align: left; color: inherit;
+  display: flex; flex-direction: column; gap: 1px; width: 100%;
+  max-width: 720px; margin: 0 auto; padding: 1px 0 2px;
 }
-.topbar__cog {
-  flex: none; width: 30px; height: 30px; border-radius: 50%;
-  display: grid; place-items: center;
-  color: rgba(234, 240, 230, .7); background: rgba(0, 0, 0, .22);
-  transition: background .14s ease, color .14s ease;
-}
-.topbar__cog svg { width: 17px; height: 17px; }
-.topbar__trip:hover .topbar__cog { color: #F4F8F0; background: rgba(0, 0, 0, .34); }
-/* Lit while you are on it, so the way in is visibly also the way out. */
-.topbar__trip[aria-pressed="true"] .topbar__cog { background: var(--paper); color: var(--forest-deep); }
 /* One line, ellipsised. The header is a label for where you are, not a summary
-   of the trip — the trip page holds the where, the when and the who. */
+   of the trip — the trip page still holds the address and the who. */
 .topbar__title {
-  flex: 1; min-width: 0;
+  min-width: 0;
   font-family: var(--display); font-weight: 800; letter-spacing: -0.02em;
-  font-size: 15px; color: #F4F8F0;
+  font-size: 17px; color: #F4F8F0;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* The place and the date, in quiet mono under the name. They share a line, and
+   the place is the one that gives way when it runs out: a clipped place name
+   still reads as a place, whereas half a date is a wrong date. */
+.topbar__meta {
+  display: flex; align-items: center; gap: 6px; min-width: 0;
+  font-family: var(--mono); font-size: 11.5px; letter-spacing: .03em;
+  color: rgba(234, 240, 230, .62);
+}
+/* Not a flex row: the pin rides inline with the text so the ellipsis lands on
+   the name rather than on an anonymous flex item that will never shrink. */
+.topbar__where { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.topbar__pin { display: inline-block; vertical-align: -2px; margin-right: 3px; }
+.topbar__pin svg { width: 12px; height: 12px; display: block; }
+.topbar__when { flex: none; white-space: nowrap; }
+.topbar__dot {
+  flex: none; width: 3px; height: 3px; border-radius: 50%;
+  background: currentColor; opacity: .55;
 }
 
 /* The Camp tab has no bar under the title, so the header needs its own floor. */
 .topbar--bare { padding-bottom: 12px; }
-
-/* Never wraps and never shrinks: a half-shown date is worse than no date, so
-   the trip name gives up the room instead. */
-.topbar__when {
-  flex: none;
-  font-family: var(--mono); font-size: 11.5px; letter-spacing: .03em;
-  color: rgba(234, 240, 230, .62); white-space: nowrap;
-}
 
 /* ---- the signature: coverage bar ---------------------------------------- */
 
 /* One bar for the section on screen, on a single line: the track takes the room,
    the sentence after it says what the orange means. */
 .cov { max-width: 720px; margin: 0 auto; padding: 9px 0 10px; display: flex; align-items: center; gap: 11px; }
+/* Thin: the bar is read at a glance and never touched, so it only has to be
+   seen. The height it gives back goes to the list underneath. */
 .cov__track {
-  flex: 1; min-width: 0; display: flex; gap: 2px; height: 13px;
+  flex: 1; min-width: 0; display: flex; gap: 2px; height: 6px;
   border-radius: 3px; overflow: hidden; background: rgba(0, 0, 0, .22);
 }
+/* Except when it has a word in it — a hairline has nowhere to put one. */
+.cov__track--empty { height: 13px; }
 .cov__say { flex: none; margin: 0; font-size: 12.5px; color: rgba(234, 240, 230, .7); white-space: nowrap; }
 .cov__say b { color: #F4F8F0; font-weight: 600; }
 .cov__empty {
@@ -395,6 +398,15 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 }
 
 .coverage__seg { transition: flex-grow .35s cubic-bezier(.4, 0, .2, 1); min-width: 3px; }
+/* Hazard tape, one angle on every bar that carries it.
+   Known and chosen, so it does not get "fixed" again: on the 6px header bar the
+   diagonal makes the segment look tilted up out of line with its neighbours. It
+   is not — it measures flush to the pixel. A 45° stripe shears sideways by the
+   height of the bar as it crosses it, so at 6px the lean and the edge are the
+   same size and the eye reads one as the other. Nothing about the stripe fixes
+   it (a finer pitch does not help, shallower angles are worse) because the
+   shear is set by the height; only losing the angle does, and the angle is
+   worth more than the illusion costs. */
 .coverage__seg--gap {
   background: repeating-linear-gradient(-45deg, var(--blaze) 0 5px, #A83C15 5px 10px);
 }
@@ -808,9 +820,9 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
   transition: color .12s ease;
 }
 /* A wrapped label would push its icon off centre and stagger the whole bar,
-   which is worse than a label that runs close to the edge. Four tabs leave
-   ~80px each on the narrowest phone, so this only ever guards a long trip
-   name's worth of bad luck. */
+   which is worse than a label that runs close to the edge. Five buttons leave
+   ~64px each on the narrowest phone and no label here runs past four
+   characters, so this is a guard rather than a working constraint. */
 .tabbar__btn > span:last-child { white-space: nowrap; }
 .tabbar__btn svg { width: 21px; height: 21px; }
 .tabbar__btn[aria-current="page"] { color: var(--forest-deep); border-top-color: var(--blaze); }
