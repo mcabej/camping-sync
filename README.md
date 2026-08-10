@@ -6,7 +6,8 @@ until somebody fixes that.
 
 ## What it does
 
-- **Pack / Eat / Drink / Do** — four shared lists, grouped by category.
+- **Pack / Eat / Plan** — four shared lists (drinks sit under Eat), grouped by
+  category.
 - **For the group vs personal kit** — one tent covers four people; one sleeping
   bag covers one. Group items are claimed by a single person. Personal items
   (`kind = 'own'`) can't be claimed at all — every person ticks off their own,
@@ -36,6 +37,15 @@ until somebody fixes that.
   location that matters: nobody needs directions to the tent they are sleeping
   in, and "the sunset spot" means nothing to whoever has not been there. The
   chip on the row opens the same search box, with the map link behind it.
+- **Weather** — the trip already knows where and when it is, so the forecast
+  needs nothing from anybody. Days on the Camp tab, and what they mean for the
+  list offered as one-tap adds: a wet Saturday is the reason a tarp exists.
+- **Dietary needs** — one line per person, shown at the top of the food list and
+  again at the moment somebody takes on Saturday dinner, rather than buried on a
+  page about people.
+- **Going home** — flip the trip round on the last morning and every list starts
+  asking the other question: not *who is bringing this* but *is it back in the
+  car*. Whatever nobody ticks back in is what gets left in the grass.
 - **Camp smarts** — 14 things first-timers find out the hard way.
 - **Live sync** — clients poll a revision counter every 5s and refetch on change.
 - **Activity feed** — who added, claimed, packed or dropped what.
@@ -69,8 +79,8 @@ scripts/           make-icons.mjs (regenerates public/icons)
 ### Data model
 
 One `items` table with a `list` discriminator (`gear` / `food` / `drinks` /
-`activities`), plus `trips`, `members`, `votes` and `events`. Each trip carries
-a `rev` counter bumped on every write — that's what the clients poll.
+`activities`), plus `trips`, `members`, `votes`, `stows` and `events`. Each trip
+carries a `rev` counter bumped on every write — that's what the clients poll.
 
 An item's `kind` decides how it's tracked, and the two are mutually exclusive:
 
@@ -131,6 +141,84 @@ postcard: place, village, postcode, country.
 If the volume ever outgrows Nominatim's policy, this is one function to point at
 a paid geocoder — nothing else in the app knows where suggestions come from.
 
+### Weather
+
+`GET /api/weather?lat=&lon=&start=&end=` proxies
+[Open-Meteo](https://open-meteo.com) — free, no key, the same shape as the
+geocoder above. It is still somebody else's server, so answers are cached for
+half an hour and calls in flight are shared: thirty phones opening the same trip
+at once make one request between them, not thirty. The key rounds the pin to
+three decimal places, which is about a hundred metres — the same forecast, and
+one cache entry rather than one per phone that rounded differently.
+
+The window asked for is the part of the trip that is both still ahead and still
+knowable: yesterday's weather is not news, and anything past about a fortnight is
+a seasonal average wearing a date, which is worse than saying nothing because
+somebody would pack for it. When the trip runs past that horizon the answer
+carries `cut: true` and the card says so. When there is nothing to ask about at
+all the endpoint answers `{ days: [], reason }` — `nowhere` for a place typed by
+hand with no pin behind it (the card says to pick it from the search, which is
+the fix), `nowhen`, `past`, `far` with the date the forecast will reach it, or
+`failed`. A forecast is a nicety; nothing else on the trip depends on it.
+
+What makes it worth having is not the numbers but what they change. `days` come
+back shaped for the card — nulls rather than zeros for a missing reading, because
+a day with no wind figure is not a still day — and `advice` is read against the
+*worst* of them one number at a time. Averaging would hide the Saturday it rains
+all day behind two dry ones, and the Saturday is the whole reason anybody would
+pack differently. The five rules live in `lib/catalog.js`, and each names its
+gear by catalogue title, resolved through `catalogEntry()` into the real entry —
+heading, note and all — so the client can offer "add a tarp" without knowing
+anything about camping. A rename in the catalogue would quietly leave a tip with
+nothing to offer, so that is checked at boot and warned about rather than
+discovered by somebody wondering where the tarp button went.
+
+The client asks once per question — the pin and the dates — and only while the
+Camp tab is on screen; move the trip and the old answer is dropped rather than
+left sitting under a new pin. Anything already on the list is not offered again.
+
+### Dietary needs
+
+A `diet` line on `members`, 200 characters, and `PATCH
+/api/trips/:id/members/:mid` to set it. Unlike personal kit it is shared on
+purpose: the entire value of writing it down is that whoever ends up cooking
+finds out without going round the table one at a time.
+
+Anybody on the trip can fill in anybody's, because the person who knows about the
+nut allergy is as often whoever booked the pitch as whoever has it — so the feed
+names the author when the line is not their own. It shows in the two places the
+question is live: at the head of the Eat list, and inside the sheet for a food or
+drink item, where somebody is deciding whether to take Saturday dinner on. The
+way to fill it in sits beside the person it is about, on the Camp tab, and the
+prompt is on every row whether or not it has been answered — otherwise the field
+is only findable by the people who need it least.
+
+### Going home
+
+A trip faces one of two ways. `going_home` on `trips` is the switch, flipped by
+whoever notices it is over and flippable back, because a pack-down that carries
+on into Monday is a normal trip. It is offered rather than turned on for you —
+only the people standing in the field know when they have started packing up —
+and only once the trip is under way at all, since "is this back in the car?" is a
+nonsense question on a Tuesday three weeks out.
+
+The ticks go in `stows`, one row per person per item, the same shape as
+`own_checks`. A second set rather than a reuse of `packed`: "I packed the stove
+on Friday" and "the stove is in the boot on Sunday" are different facts, and
+clearing Friday's answer to record Sunday's would throw away the only record of
+who brought what. A group thing is back once *everybody* who carried a piece of
+it says so; a personal item's stows are cut to the viewer exactly as its packing
+ticks are, for the same reason.
+
+On the way home the Mine tab keeps its shape and changes its question — the tick
+stays in the same place with the same tap, and only the answer it records moves.
+There is no claiming step left: by Sunday, whoever brought a thing is whoever has
+to find it again. The Camp card counts what is still out there and who it is
+waiting on. It says out loud that other people's personal kit is not in that
+number, rather than quietly reporting a figure that is only most of the answer.
+None of it reaches the activity feed: a pack-down is fifty ticks in ten minutes,
+and a feed of them would bury the trip they belong to.
+
 ### Installing it
 
 `manifest.webmanifest` and `public/sw.js` are what make it an app you can add
@@ -146,7 +234,7 @@ an unchanged path. Three caches, three lifetimes:
 | Cache   | Holds                              | Strategy                          |
 | ------- | ---------------------------------- | --------------------------------- |
 | `shell` | `/`, hashed `app.js` / `styles.css`| Cache first; dropped every deploy. |
-| `data`  | `GET /api/catalog`, trip state     | Network first, cache as fallback.  |
+| `data`  | `GET /api/catalog`, trip state, the forecast | Network first, cache as fallback. |
 | `fonts` | Google Fonts                       | Cache first; outlives deploys.     |
 
 What is deliberately *not* cached: the `rev` counter, because a cached answer
@@ -156,6 +244,11 @@ Offline, a write fails and says so. Trip state responses carry
 `Vary: x-member-id`, which the Cache API honours, so a shared phone can never
 be handed the copy cut for the other member. The home page's summary is a POST,
 which no cache can key, so the last one is kept in `localStorage` instead.
+
+The forecast is the one kept answer that goes off on its own, so it carries the
+time it was fetched and the card says how old it is. Last night's outlook is
+worth reading in a field with no bars; last night's outlook presented as this
+morning's would not be.
 
 Regenerate the icons with `npm run icons` after changing the mark or the
 colours — it draws the same tent as the favicon straight into PNG.

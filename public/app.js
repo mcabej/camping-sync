@@ -110,13 +110,17 @@ const S = {
   // Not part of the trip — nobody edits it and it is the same for everybody — so
   // it is fetched on its own and keyed by the question it answers.
   wx: null,
+  // Which forecast day has its numbers open, as an ISO date. A row only has room
+  // for the number worth acting on, and the rest of them are a tap away rather
+  // than a hover away — there is no hovering on the phone this is read on.
+  wxOpen: null,
   me: null,          // member id
   rev: 0,
   sheet: null,       // { kind, ...payload }
   busy: false,
   editNotes: false,  // the shared notes read as text until you ask to change them
   editWhere: false,  // same for where the trip is, which is read far more than written
-  expand: { tips: false, feed: false },
+  expand: { tips: false, feed: false, diets: false },
   // Which headings are folded shut, as "tab:heading" — a long list is read a
   // section at a time, and Shelter & sleep should stay shut on the packing list
   // without shutting Dinner on the food. `touched` is the ones you have folded
@@ -506,28 +510,28 @@ function coverageBar(p) {
 const FIND_MIN = 8
 
 // Above the chips: the two controls that are about the shape of the list rather
-// than about what is on it. Both earn their place or neither is drawn — a page
-// with six things on it and one heading has nothing to search and nothing to
-// fold.
+// than about what is on it. A long list is worth searching whether or not it has
+// headings to fold, so the box earns its place on its own — but the fold button
+// only ever earns one beside it. On its own above a row of chips it reads as a
+// stray control rather than a row of tools, and a list too short to search is
+// too short for folding to be worth a button.
 function listTools(all) {
   const f = activeFilter()
   const groups = pageGroups()
-  const findable = all.length >= FIND_MIN || !!f.q
+  if (all.length < FIND_MIN && !f.q) return ''
   const foldable = groups.length > 1 && !f.cat && !f.q.trim()
-  if (!findable && !foldable) return ''
 
   const allShut = foldable && groups.every(([name]) => isShut(name))
   return `
     <div class="tools">
-      ${findable ? `
-        <div class="find">
-          <span class="find__icon" aria-hidden="true">${ICONS.find}</span>
-          <label class="sr-only" for="cs-find">Search this list</label>
-          <input class="find__box" id="cs-find" data-find value="${esc(f.q)}"
-                 placeholder="Search this list" enterkeyhint="search" inputmode="search"
-                 autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" maxlength="60">
-          ${f.q ? `<button class="find__x" data-act="find-clear" aria-label="Clear the search">${ICONS.x}</button>` : ''}
-        </div>` : ''}
+      <div class="find">
+        <span class="find__icon" aria-hidden="true">${ICONS.find}</span>
+        <label class="sr-only" for="cs-find">Search this list</label>
+        <input class="find__box" id="cs-find" data-find value="${esc(f.q)}"
+               placeholder="Search this list" enterkeyhint="search" inputmode="search"
+               autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" maxlength="60">
+        ${f.q ? `<button class="find__x" data-act="find-clear" aria-label="Clear the search">${ICONS.x}</button>` : ''}
+      </div>
       ${foldable ? `
         <button class="tools__fold" data-act="fold-all" data-shut="${!allShut}"
                 aria-label="${allShut ? 'Unfold every section' : 'Fold every section'}">
@@ -570,8 +574,11 @@ function filterBar(all, kinds, count) {
       ${settled ? `<span class="filters__n filters__n--quiet">${settled}</span>` : ''}</button>
     <span class="filters__div" aria-hidden="true"></span>`
 
+  // First, so it is on screen without scrolling the row: it is the one control
+  // here somebody came looking for rather than reached for.
   return `
     <div class="filters" role="group" aria-label="Filter this list">
+      ${currentTab().lists.includes('food') ? dietChip() : ''}
       ${isPlanTab(currentTab()) ? '' : hideChip}
       ${kinds ? `${kindChip('shared')}${kindChip('own')}
         <span class="filters__div" aria-hidden="true"></span>` : ''}
@@ -1086,7 +1093,6 @@ function listPage() {
   // list is now, and the sheets say what each half means as you use them.
   return `
     <main class="page">
-      ${currentTab().lists.includes('food') ? dietStrip() : ''}
       ${pool.length ? listTools(pool) : ''}
       ${filterBar(all, kinds, count)}
       ${body}
@@ -1289,6 +1295,7 @@ function wantWeather() {
   const key = wxKey(S.trip)
   if (!key || S.wx?.key === key) return
   S.wx = { key, state: 'load' }
+  S.wxOpen = null   // an open day belongs to the forecast it was opened on
   loadWeather(key)
 }
 
@@ -1321,6 +1328,16 @@ function wxOpens(start) {
   return d.toLocaleDateString(undefined, { day: 'numeric', month: 'long' })
 }
 
+// The rest of the numbers, spelled out rather than abbreviated — this is the
+// line that says what the 24% in the row above it was a percentage of.
+function wxDetail(d) {
+  return [
+    d.pop !== null ? `${Math.round(d.pop)}% chance of rain` : '',
+    d.rain !== null ? `${d.rain.toFixed(1)} mm` : '',
+    d.wind !== null ? `wind to ${Math.round(d.wind)} km/h` : '',
+  ].filter(Boolean).join(' · ')
+}
+
 function wxRow(d) {
   const [word, glyph] = wxOf(d.code)
   // Two numbers per row and no more. Rain is the one people act on, so it gets
@@ -1328,19 +1345,26 @@ function wxRow(d) {
   // there is more of that than of rain.
   const wet = d.pop !== null && d.pop >= 20 ? `${Math.round(d.pop)}%` : ''
   const blow = !wet && d.wind !== null && d.wind >= 30 ? `${Math.round(d.wind)} km/h` : ''
-  const title = [
-    d.rain !== null ? `${d.rain.toFixed(1)} mm of rain` : '',
-    d.wind !== null ? `wind to ${Math.round(d.wind)} km/h` : '',
-  ].filter(Boolean).join(', ')
+  const detail = wxDetail(d)
+  const open = !!detail && S.wxOpen === d.date
+
+  // Nothing to open means nothing to press: a row with no numbers behind it
+  // stays a row, rather than a button that answers a tap with nothing.
+  const row = `
+    <span class="wx__when">${esc(wxDay(d.date))}</span>
+    <span class="wx__glyph" aria-hidden="true">${WX_ICONS[glyph]}</span>
+    <span class="wx__word">${esc(word)}</span>
+    <span class="wx__temp">${d.hi === null ? '' : `<b>${Math.round(d.hi)}°</b>`}${
+      d.lo === null ? '' : `<span>${Math.round(d.lo)}°</span>`}</span>
+    <span class="wx__wet mono">${esc(wet || blow)}</span>`
 
   return `
-    <li class="wx__day">
-      <span class="wx__when">${esc(wxDay(d.date))}</span>
-      <span class="wx__glyph" aria-hidden="true">${WX_ICONS[glyph]}</span>
-      <span class="wx__word">${esc(word)}</span>
-      <span class="wx__temp">${d.hi === null ? '' : `<b>${Math.round(d.hi)}°</b>`}${
-        d.lo === null ? '' : `<span>${Math.round(d.lo)}°</span>`}</span>
-      <span class="wx__wet mono" ${title ? `title="${esc(title)}"` : ''}>${esc(wet || blow)}</span>
+    <li class="wx__row${open ? ' wx__row--open' : ''}">
+      ${detail ? `
+        <button class="wx__day" data-act="wx-day" data-date="${esc(d.date)}"
+                aria-expanded="${open}">${row}</button>`
+      : `<div class="wx__day">${row}</div>`}
+      ${open ? `<p class="wx__detail">${esc(detail)}</p>` : ''}
     </li>`
 }
 
@@ -1501,25 +1525,105 @@ function notesCard() {
 // without going round the table asking.
 const diets = () => S.members.filter((m) => String(m.diet ?? '').trim())
 
+// Two people who both wrote "vegan" are one fact about the shopping, not two.
+// So identical needs pool into a single row and the faces beside it say who is
+// behind it. Case and stray spacing are the same need typed twice; anything
+// else is somebody's own words and keeps its own row.
+function dietGroups() {
+  const by = new Map()
+  for (const m of diets()) {
+    const need = String(m.diet).trim()
+    const key = need.toLowerCase()
+    if (by.has(key)) by.get(key).who.push(m)
+    else by.set(key, { need, who: [m] })
+  }
+  // Whatever rules out the most dinners is the one to read first. Sort is
+  // stable, so people who share a need stay in the order the trip lists them.
+  return [...by.values()].sort((a, b) => b.who.length - a.who.length)
+}
+
+// Written the way a cook reads it, not the way it was entered: the thing to
+// avoid is the line, and the people are the footnote. Whoever is doing Saturday
+// dinner wants a short column of constraints to shop against, and asking them to
+// pull that out of a list of names is work the page can do instead.
+//
 // It belongs at the top of the list people claim food from, not on a page about
 // people: the moment it matters is the moment somebody says they will do Saturday
 // dinner. Drawn only when there is something to say — a heading over an empty
 // list would be on every Eat tab forever, and the way to fill it in is on the
 // Camp tab beside the person it is about.
-function dietStrip() {
-  const needs = diets()
-  if (!needs.length) return ''
+// Four rows is about the most this is worth where it sits over the claim
+// buttons: a trip where everybody has something to avoid would otherwise push
+// the names — the only reason that sheet is open — off the bottom of it. So the
+// rest fold away behind a count, the way the tips and the feed do on Camp.
+// Nothing is dropped quietly: the heading says how many there are first.
+const DIET_ROWS = 4
+
+function dietTable({ eyebrow, sheet, cap }) {
+  const groups = dietGroups()
+  if (!groups.length) return ''
+  // How big the table is, which the old list never said: two people to cook
+  // around reads very differently at a trip of three than at a trip of ten.
+  const all = S.members.length
+  const named = groups.reduce((n, g) => n + g.who.length, 0)
+  const rest = all - named
+  // Counted off the whole set, not the shown ones — folding rows away must not
+  // change who the card says eats anything.
+  const shown = cap && !S.expand.diets ? groups.slice(0, DIET_ROWS) : groups
+
   return `
-    <div class="diets">
-      <span class="eyebrow">At the table</span>
+    <div class="diets${sheet ? ` diets--${sheet === 'plain' ? 'plain' : 'sheet'}` : ''}">
+      <div class="diets__head">
+        <span class="eyebrow">${eyebrow}</span>
+        <span class="diets__count mono">${named} of ${all}</span>
+      </div>
       <ul class="diets__list">
-        ${needs.map((m) => `
+        ${shown.map((g) => `
           <li class="diets__row">
-            <span class="diets__who" style="--who:${colorOf(m)}">${esc(m.name)}</span>
-            <span class="diets__what">${esc(m.diet)}</span>
+            <span class="diets__what">${esc(g.need)}</span>
+            <span class="diets__who" aria-label="${esc(g.who.map((m) => m.name).join(', '))}">
+              ${g.who.map((m) => `
+                <span class="who__face" style="--who:${colorOf(m)}"
+                      aria-hidden="true">${esc(initials(m.name))}</span>`).join('')}
+            </span>
           </li>`).join('')}
       </ul>
+      ${cap ? moreBtn('diets', groups.length, DIET_ROWS) : ''}
+      ${rest ? `<p class="diets__rest">${rest === 1 ? 'One other eats' : `The other ${rest} eat`} anything.</p>` : ''}
     </div>`
+}
+
+// On the page itself it is a door, not a notice. What people cannot eat is
+// reference — true all week, read on the two or three occasions somebody is
+// actually deciding what to cook — and a standing card charges every visit to
+// the Eat tab for something you look up on purpose. So the page keeps the one
+// fact you cannot act on without: that there is something to know, and how
+// much of it. The rest is a tap away.
+//
+// It rides in the chip row rather than on a line of its own. A lone control
+// above the chips reads as something that fell off the page, and that row is
+// already the one place a food tab keeps its small round controls — it scrolls
+// sideways, so it takes another one for nothing, and the count wears the same
+// quiet badge the Hide chip does.
+function dietChip() {
+  const n = diets().length
+  if (!n) return ''
+  return `
+    <button class="filters__chip filters__chip--door" data-act="diets"
+            aria-label="Dietary needs — ${n} ${n === 1 ? 'person' : 'people'}, open the list">
+      Dietary needs<span class="filters__n filters__n--quiet">${n}</span></button>
+    <span class="filters__div" aria-hidden="true"></span>`
+}
+
+// The list, once you have asked for it. No cap here: a dialog you opened on
+// purpose scrolls, and hiding a row behind a second tap inside it would be
+// hiding the thing you came for.
+function sheetDiets() {
+  return sheetShell({
+    title: 'Dietary needs',
+    blurb: 'What everybody has said they avoid. Add or change your own beside your name on the Camp tab.',
+    body: dietTable({ eyebrow: 'At the table', sheet: 'plain' }),
+  })
 }
 
 // ---- going home -------------------------------------------------------------
@@ -1814,18 +1918,9 @@ function sheetItem(s) {
   // Putting your name to Saturday dinner is the moment what somebody cannot eat
   // stops being a fact about them and becomes a fact about the shopping. So it
   // is said here, where the decision is, as well as at the top of the list.
-  const feeding = (item.list === 'food' || item.list === 'drinks') ? diets() : []
-  const table = !feeding.length ? '' : `
-    <div class="diets diets--sheet">
-      <span class="eyebrow">Before you take this on</span>
-      <ul class="diets__list">
-        ${feeding.map((m) => `
-          <li class="diets__row">
-            <span class="diets__who" style="--who:${colorOf(m)}">${esc(m.name)}</span>
-            <span class="diets__what">${esc(m.diet)}</span>
-          </li>`).join('')}
-      </ul>
-    </div>`
+  const table = (item.list === 'food' || item.list === 'drinks')
+    ? dietTable({ eyebrow: 'Before you take this on', sheet: true, cap: true })
+    : ''
 
   // The item, and then the names. There is no separate "I'll bring it" button:
   // your own name is in the list like everybody else's, and tapping it is the
@@ -1878,7 +1973,7 @@ function sheetEdit(s) {
       <form data-act="save-item" data-id="${item.id}">
         <label class="field"><span>What is it?</span>
           <input name="title" required maxlength="120" autofocus value="${esc(item.title)}"></label>
-        <div class="field--split" style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div class="field--split">
           <label class="field"><span>Group</span>
             <input name="category" list="cs-cats" maxlength="60" value="${esc(item.category ?? '')}"
                    placeholder="${esc(cats[0] ?? 'Other')}"></label>
@@ -1970,7 +2065,7 @@ function sheetAdd(s) {
         <label class="field"><span>What is it?</span>
           <input name="title" required maxlength="120" autofocus placeholder="${s.list === 'food' ? 'Sausages' : s.list === 'activities' ? 'Sunrise walk to the ridge' : 'Bottle opener'}"></label>
         ${listPick}
-        <div class="field--split" style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div class="field--split">
           <label class="field"><span>Group</span>
             <input name="category" list="cs-cats" maxlength="60" placeholder="${esc(cats[0] ?? 'Other')}"></label>
           <label class="field"><span>How much <span style="font-weight:400">(optional)</span></span>
@@ -2053,7 +2148,7 @@ let sheetSig = null
 
 function renderSheet() {
   if (!S.sheet) { sheetRoot.innerHTML = ''; sheetSig = null; return }
-  const map = { item: sheetItem, edit: sheetEdit, add: sheetAdd, suggest: sheetSuggest, place: sheetPlace, diet: sheetDiet }
+  const map = { item: sheetItem, edit: sheetEdit, add: sheetAdd, suggest: sheetSuggest, place: sheetPlace, diet: sheetDiet, diets: sheetDiets }
   const html = map[S.sheet.kind]?.(S.sheet) ?? ''
   const sig = `${S.sheet.kind}:${S.sheet.id ?? ''}`
   const open = sheetRoot.querySelector('.sheet')
@@ -2560,6 +2655,11 @@ document.addEventListener('click', async (ev) => {
       renderSheet()
       break
 
+    case 'diets':
+      S.sheet = { kind: 'diets' }
+      renderSheet()
+      break
+
     case 'clear-diet': {
       const id = el.dataset.id
       S.sheet = null
@@ -2567,6 +2667,13 @@ document.addEventListener('click', async (ev) => {
       await mutate(() => api(`/trips/${S.trip.id}/members/${id}`, { method: 'PATCH', body: { diet: '' } }))
       break
     }
+
+    // One day's numbers at a time: opening a second closes the first, so the
+    // card never grows a second table underneath the one you were reading.
+    case 'wx-day':
+      S.wxOpen = S.wxOpen === el.dataset.date ? null : el.dataset.date
+      render()
+      break
 
     // The forecast said it was worth having and the list did not have it. The
     // catalogue entry came down with the advice, so this adds the real thing —

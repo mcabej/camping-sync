@@ -115,7 +115,20 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 }
 .field input:focus, .field textarea:focus { border-color: var(--forest); outline-offset: 1px; }
 .field textarea { min-height: 96px; resize: vertical; }
-.field--split { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+/* Two fields side by side, until there is no room for two. A date input has a
+   width it will not go under — the numbers and the picker button have to fit —
+   and as a grid item it would rather push the card out sideways than accept a
+   narrower column. So the columns wrap on the width of whatever the pair is
+   sitting in: one per row the moment two no longer fit, in a card or a sheet or
+   a phone held sideways, without anybody guessing a screen width. `min-width`
+   is the backstop for a container narrower than one field, where something has
+   to give and a clipped date beats a card with its corner hanging off. */
+.field--split {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 11rem), 1fr));
+  gap: 10px;
+}
+.field--split > .field { min-width: 0; }
 
 /* The "Where" box searches for real places; the results hang off it. */
 .places { position: relative; }
@@ -140,9 +153,6 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 .places__name { display: block; font-weight: 600; line-height: 1.3; }
 .places__detail { display: block; margin-top: 2px; font-size: 13px; color: var(--ink-soft); line-height: 1.35; }
 .places__msg { margin: 0; padding: 10px; font-size: 14px; color: var(--ink-soft); }
-/* A date input's min-content width is wider than half a narrow card, so on
-   small phones the pair pushed the card out sideways. */
-@media (max-width: 400px) { .field--split { grid-template-columns: 1fr; } }
 
 /* ==========================================================================
    Landing
@@ -508,6 +518,16 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 
 /* Who brings it is a different question from what sort of thing it is. */
 .filters__div { flex: none; width: 1.5px; height: 18px; background: var(--line-strong); border-radius: 2px; }
+
+/* The one chip in this row that opens something instead of narrowing what is
+   under it, so it is raised out of the paper rather than sunk into it — the
+   difference the app draws between a thing you press and a thing you toggle —
+   and it is cut off from the toggles by the same divider the row already uses
+   to separate one question from another. It never takes the pressed state. */
+.filters__chip--door {
+  background: var(--paper); box-shadow: inset 0 0 0 1.5px var(--line);
+}
+.filters__chip--door:hover { box-shadow: inset 0 0 0 1.5px var(--line-strong); }
 
 /* ---- category group ----------------------------------------------------- */
 
@@ -904,12 +924,16 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
    the weather is the only part allowed to run out of room: the day, the
    temperatures and the number worth acting on all hold their width. */
 .wx { list-style: none; margin: 0; padding: 0; }
+/* The rule belongs to the day rather than to the row of numbers, so the day's
+   own detail line stays on its side of it when it is open. */
+.wx__row { border-bottom: 1px solid var(--line); }
+.wx__row:last-child { border-bottom: 0; }
 .wx__day {
   display: grid; grid-template-columns: 3.6rem 22px 1fr auto 3.4rem;
   align-items: center; gap: 10px;
-  padding: 8px 0; border-bottom: 1px solid var(--line);
+  width: 100%; padding: 8px 0; text-align: left; color: inherit;
 }
-.wx__day:last-child { border-bottom: 0; }
+button.wx__day:hover .wx__wet, .wx__row--open .wx__wet { color: var(--ink); }
 .wx__when { font-size: 13.5px; font-weight: 600; white-space: nowrap; }
 .wx__glyph { display: grid; place-items: center; color: var(--forest); }
 .wx__glyph svg { width: 20px; height: 20px; display: block; }
@@ -923,6 +947,13 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 .wx__temp b { font-size: 15px; font-weight: 600; }
 .wx__temp span { margin-left: 5px; font-size: 13px; color: var(--ink-faint); }
 .wx__wet { font-size: 11.5px; color: var(--ink-soft); text-align: right; white-space: nowrap; }
+/* Everything the row had to leave out, in words. Indented to start under the
+   weather it belongs to, so an open day reads as one thing and not as a sixth
+   row that appeared out of nowhere. */
+.wx__detail {
+  margin: 0; padding: 0 0 9px calc(3.6rem + 42px);
+  font-size: 12.5px; color: var(--ink-soft); font-variant-numeric: tabular-nums;
+}
 
 .wx__cut { margin: 12px 0 0; font-size: 12.5px; color: var(--ink-faint); }
 
@@ -965,21 +996,49 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 /* ---- what people can eat ------------------------------------------------- */
 
 /* Sitting over the food list, in the sunk paper the rest of the app uses for
-   something the page is telling you rather than something you can change. */
+   something the page is telling you rather than something you can change.
+   Read as a cook's brief: a column of things not to buy, ruled off like a
+   list, with the faces they belong to trailing on the right. */
 .diets {
-  margin-bottom: 14px; padding: 13px 15px;
+  margin-bottom: 14px; padding: 11px 15px 12px;
   border-radius: var(--r-md); background: var(--paper-sunk);
   border: 1.5px solid var(--line);
 }
-.diets > .eyebrow { display: block; margin-bottom: 8px; }
 .diets--sheet { margin: 0 0 16px; }
+/* In the dialog that exists only for this, the box is a border drawn inside a
+   border. The dialog is already the container, so the rows stand on their own. */
+.diets--plain { margin: 0; padding: 0; background: none; border: 0; }
+
+/* The heading carries the size of the table, because "two of nine" and "two of
+   three" are the same two people and completely different evenings. */
+.diets__head {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+  padding-bottom: 7px; border-bottom: 1px solid var(--line);
+}
+.diets__count { flex: none; font-size: 11px; font-weight: 600; color: var(--ink-faint); }
 .diets__list { list-style: none; margin: 0; padding: 0; }
-.diets__row { display: flex; gap: 10px; align-items: baseline; font-size: 14px; line-height: 1.45; }
-.diets__row + .diets__row { margin-top: 6px; }
-/* The name wears the colour it wears everywhere else, so the line is matched to
-   a face on the trip rather than read as a rule about the food. */
-.diets__who { flex: none; font-weight: 600; color: var(--who); }
-.diets__what { flex: 1; color: var(--ink-soft); overflow-wrap: anywhere; }
+.diets__row {
+  display: flex; gap: 12px; align-items: center; justify-content: space-between;
+  padding: 6px 0; border-bottom: 1px solid var(--line);
+  font-size: 14.5px; line-height: 1.35;
+}
+.diets__row:last-child { border-bottom: 0; }
+/* The loud half. This is the line you shop against, so it is in reading ink
+   while everything around it stays quiet. */
+.diets__what { flex: 1; min-width: 0; font-weight: 600; color: var(--ink); overflow-wrap: anywhere; }
+/* The same faces the item rows use, so a need is matched to somebody on the
+   trip by the mark they already wear rather than by reading their name again. */
+.diets__who { flex: none; display: inline-flex; align-items: center; }
+.diets__who .who__face + .who__face { margin-left: -8px; }
+/* The card is sunk, so the ring that separates overlapping faces has to be too. */
+.diets__who .who__face { box-shadow: inset 0 0 0 2px var(--who), 0 0 0 2px var(--paper-sunk); }
+/* Everybody the rows did not mention. Without it the card looks like the whole
+   table has a problem, when usually most of it does not. */
+.diets__rest { margin: 9px 0 0; font-size: 12.5px; color: var(--ink-faint); }
+/* Tighter than the same button gets on Camp: it is closing a short card here,
+   not standing between two of them. */
+.diets .more { margin-top: 11px; }
+.diets .more + .diets__rest { margin-top: 11px; }
 
 /* ==========================================================================
    Tab bar
