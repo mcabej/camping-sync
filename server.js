@@ -61,6 +61,35 @@ function coords(body) {
   return lat === null || lon === null ? [null, null] : [lat, lon]
 }
 
+// When a thing happens, on the trip's own calendar: which day, and for a plan
+// which hour of it. Only the shape is checked. A day outside the trip's dates is
+// not the same kind of wrong as half a coordinate — the dates themselves move,
+// and a plan that was Sunday's until somebody shortened the trip is still what
+// somebody meant — so it is kept and the client draws it where it falls. What is
+// not a day at all becomes no day, which is the case every list already handles.
+// One value that is not a date and is not nothing: the teabags, which are for
+// every day of the trip rather than for one of them or for none. It is a third
+// answer to the same question, so it lives in the same column — and the column
+// is TEXT, so nothing has to change underneath it.
+const ALL_WEEK = 'any'
+const isDay = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s)
+const dayField = (v) => {
+  const s = clean(v, 10)
+  return isDay(s) || s === ALL_WEEK ? s : ''
+}
+const timeField = (v) => (/^([01]\d|2[0-3]):[0-5]\d$/.test(clean(v, 5)) ? clean(v, 5) : '')
+
+// The feed is written in English and read by whoever is on the trip, not by the
+// machine it runs on, so the weekday is named rather than dated. A date with the
+// right shape and no such day in it — the 31st of February — reads back as it
+// was written rather than as "Invalid Date".
+function dayName(day) {
+  if (day === ALL_WEEK) return 'every day'
+  const d = new Date(`${day}T12:00:00`)
+  return Number.isNaN(+d) ? day
+    : d.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })
+}
+
 // Plans are always a group thing; there is no "bring your own hike".
 const kindOf = (raw, list) => (raw === 'own' && list !== 'activities' ? 'own' : 'shared')
 
@@ -240,7 +269,6 @@ const weatherCache = new Map()
 // second phone to ask waits on the first one's call instead of starting another.
 const weatherFlight = new Map()
 
-const isDay = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s)
 const dayFrom = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10)
 
 // Nulls rather than zeros for anything missing: a day with no wind reading is
@@ -583,8 +611,8 @@ app.post('/api/trips/:id/items', (req, res) => {
 
   const incoming = Array.isArray(req.body?.items) ? req.body.items : [req.body]
   const ts = now()
-  const insert = db.prepare(`INSERT INTO items (id, trip_id, list, category, title, note, qty, kind, owner_id, place, lat, lon, position, created_at, updated_at)
-                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+  const insert = db.prepare(`INSERT INTO items (id, trip_id, list, category, title, note, qty, kind, owner_id, place, lat, lon, day, time, position, created_at, updated_at)
+                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
   const added = []
 
   // Personal kit needs somebody to belong to, so it can only be added by a
@@ -604,10 +632,11 @@ app.post('/api/trips/:id/items', (req, res) => {
     insert.run(
       id, trip.id, list, clean(raw?.category, 60), title, clean(raw?.note, 500), clean(raw?.qty, 40), kind,
       kind === 'own' ? me : null, clean(raw?.place, PLACE_MAX), lat, lon,
+      dayField(raw?.day), timeField(raw?.time),
       nextPosition(trip.id, list), ts, ts,
     )
     // Only group kit is news. What you put on your own list is yours alone.
-    if (kind !== 'own') added.push(title)
+    if (kind !== 'own') added.push({ title, day: dayField(raw?.day) })
   }
 
   if (refused && !added.length) {
@@ -616,9 +645,16 @@ app.post('/api/trips/:id/items', (req, res) => {
 
   if (added.length) {
     const who = actorName(trip.id, req)
+    // One thing on several days is not several things, and the feed should not
+    // pretend otherwise: the same title on as many distinct days as there are
+    // rows is somebody putting the noodles down for three nights.
+    const spread = added.every((a) => a.title === added[0].title && a.day)
+      && new Set(added.map((a) => a.day)).size === added.length
     logEvent(trip.id, who, added.length === 1
-      ? `added ${added[0]}`
-      : `added ${added.length} things to the ${clean(incoming[0]?.list, 20)} list`)
+      ? `added ${added[0].title}`
+      : spread
+        ? `added ${added[0].title} on ${added.length} days`
+        : `added ${added.length} things to the ${clean(incoming[0]?.list, 20)} list`)
   }
   bumpRev(trip.id)
   res.json(getTripState(trip.id, viewerId(req)))
@@ -637,6 +673,14 @@ app.patch('/api/items/:id', (req, res) => {
   if (req.body?.note !== undefined) push('note', clean(req.body.note, 500))
   if (req.body?.qty !== undefined) push('qty', clean(req.body.qty, 40))
   if (req.body?.category !== undefined) push('category', clean(req.body.category, 60))
+
+  // Which day it is on, and the hour if it has one. Two fields rather than one
+  // because they are set from different places: the day is a chip you tap and
+  // the time is something you type, and a plan can perfectly well have a day
+  // and no hour.
+  const timed = req.body?.day !== undefined || req.body?.time !== undefined
+  if (req.body?.day !== undefined) push('day', dayField(req.body.day))
+  if (req.body?.time !== undefined) push('time', timeField(req.body.time))
 
   // Same rule as the trip's own location: the pin travels with the words, so
   // rewriting where the sunset spot is never leaves last week's coordinates
@@ -684,6 +728,22 @@ app.patch('/api/items/:id', (req, res) => {
     logEvent(item.trip_id, who, where
       ? `said where ${item.title} is`
       : `took the place off ${item.title}`)
+  } else if (timed) {
+    // The one change on a list that moves something out from under the heading
+    // somebody else was reading, so it is worth a line — but only when it moved.
+    // Sending a time the server will not keep is not news, and neither is
+    // pressing the day something is already on.
+    const day = req.body?.day !== undefined ? dayField(req.body.day) : item.day
+    const at = req.body?.time !== undefined ? timeField(req.body.time) : item.time
+    if (day !== item.day) {
+      logEvent(item.trip_id, who, day
+        ? `put ${item.title} on ${dayName(day)}`
+        : `took the day off ${item.title}`)
+    } else if (at !== item.time) {
+      logEvent(item.trip_id, who, at
+        ? `set ${item.title} for ${at}`
+        : `took the time off ${item.title}`)
+    }
   }
 
   bumpRev(item.trip_id)

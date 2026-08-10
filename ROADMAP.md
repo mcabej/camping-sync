@@ -24,15 +24,38 @@ they go; this is the app taking its own advice.*
 Touches: `claims`, a settle-up panel, possibly `paid_by` for the person who put
 the card in when somebody else carried the thing.
 
-### 2. Days
+### 2. Days — **built**
 
-`trips` has `start_date` and `end_date`, and a plan can say where it happens but
-not when. A `day` on an item turns the Plan tab into an itinerary and — the part
-that matters more — turns the Eat list from a pile of food into meals. "Have we
-actually got Sunday lunch covered?" is a question the app cannot currently
-answer.
+`trips` had `start_date` and `end_date`, and a plan could say where it happens
+but not when. A `day` on an item puts a strip of the trip's days over the Eat and
+Plan lists: press Sunday and the page is Sunday, so "have we actually got
+Sunday lunch covered?" is one tap. On Plan it also puts the list in the order it
+happens, which is what makes it read as an itinerary.
 
-Touches: `items.day`, the Plan tab, the Eat tab's categories.
+Four richer shapes were tried and all four were worse, each one putting the day
+in two places at once — the day in the Eat headings made "Dinner" a heading five
+times, a days × meals coverage grid was a nine-cell table saying what pressing a
+day says on its own, and heading the Plan tab by day made a ten-day trip ten
+headings saying "nothing yet" (or, once the empty ones were dropped, a page that
+reorganised itself under you). The strip is the day axis. The accordion answers
+what kind of thing something is, which has one answer all week.
+
+The strip started in the sticky header and came out of it, for the same reason
+the filter chips did before it: the header says which trip you are on, and the
+list should be narrowed from one place rather than two. It holds dates and
+nothing else — "no day" is a filter chip with the other cuts, because a calendar
+cannot have a stop on it that is not a date.
+
+`day` carries three answers rather than two — a date, nothing, or `any` — because
+"nobody has said" and "this is for the whole trip" are different, and spelling
+both of them as nothing made a day under-report what it had.
+
+A row belongs to one day, and the add sheet lets you tick several: noodles on
+three nights is three rows, one per night. A row that spanned days would be
+tidier on screen and would break everything downstream of it — one claim would
+cover three dinners, and the coverage bar is the app's whole signature.
+
+See the README's *Days* section.
 
 ### 3. Headcount that drives quantities
 

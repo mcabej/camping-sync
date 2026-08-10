@@ -37,18 +37,23 @@ globalThis.fetch = async () => ({ ok: true, json: async () => ({ catalog: {}, ti
 
 const src = readFileSync('public/app.js', 'utf8')
 const hooks = ['S', 'render', 'viewTrip', 'renderSheet', 'CAMP', 'TABS',
-  'loadFolds', 'saveFolds', 'autoFold', 'pageGroups']
+  'loadFolds', 'saveFolds', 'autoFold', 'pageGroups', 'tripDays',
+  'dayTurned', 'turnDay', 'tillMidnight', 'edges', 'perDay', 'daysPicked']
 new Function(`${src}\n;Object.assign(globalThis, {${hooks.map((h) => `__${h}: ${h}`).join(',')}})`)()
 
 const { __S: S, __render: render, __viewTrip: viewTrip, __renderSheet: renderSheet, __TABS: TABS,
-  __loadFolds: loadFolds, __saveFolds: saveFolds, __autoFold: autoFold } = globalThis
+  __loadFolds: loadFolds, __saveFolds: saveFolds, __autoFold: autoFold,
+  __tripDays: tripDays, __dayTurned: dayTurned, __turnDay: turnDay,
+  __tillMidnight: tillMidnight, __edges: edges, __perDay: perDay,
+  __daysPicked: daysPicked } = globalThis
 const { CATALOG } = await import('../lib/catalog.js')
 
 // A trip with a bit of everything: claimed by one, claimed by three, unclaimed,
 // half packed, personal, plans.
 const claim = (id, packed = false) => ({ member_id: id, packed })
 const item = (o) => ({ id: o.t, list: 'gear', category: 'Shelter', title: o.t, note: '', qty: '',
-  kind: 'shared', claims: [], place: '', lat: null, lon: null, votes: [], own: [], ...o })
+  kind: 'shared', claims: [], place: '', lat: null, lon: null, day: '', time: '',
+  votes: [], own: [], ...o })
 
 S.catalog = CATALOG
 S.tips = [{ title: 'a', body: 'b' }]
@@ -345,6 +350,418 @@ check('your own name is still there to tap',
   new RegExp('data-act="claim" data-id="Crisps" data-member="m1"').test(unclaimed))
 S.sheet = { kind: 'place', id: 'Hike' }; renderSheet()
 check('place sheet renders', find(roots['sheet-root'].innerHTML, 'Where is Hike?'))
+
+// Days: what turns the Plan tab into an itinerary and the Eat list into meals.
+// The trip runs Fri 4 – Sun 6 September 2026.
+S.sheet = null
+S.filter = { kind: '', cat: '', hide: false, q: '' }
+const [FRI, SAT, SUN] = ['2026-09-04', '2026-09-05', '2026-09-06']
+// Worked out the same way the app does, so the checks below say nothing about
+// what locale the machine running them happens to be in.
+const shortDay = (iso) => new Date(`${iso}T12:00:00`).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric' })
+const fullDay = (iso) => new Date(`${iso}T12:00:00`).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })
+// A heading, as opposed to the same words on a filter chip further up the page.
+const heads = (html, name) => find(html, `data-group="${name}"`)
+// Attributes wrap where the templates wrap and sit in whatever order the tag
+// puts them, so a check for several of them asks only that they are in the same
+// tag and in this order — not that they are touching.
+const attrs = (html, ...parts) => new RegExp(parts.join('[^>]*')).test(html)
+// One tab out of the day strip, from its own attributes to its closing tag, so a
+// check about Saturday cannot be answered by the mark on Sunday.
+const dayTab = (html, iso) => {
+  const at = html.indexOf(`data-value="${iso}"`)
+  return at < 0 ? '' : html.slice(at, html.indexOf('</button>', at))
+}
+
+check('a trip with dates knows its days', String(tripDays(S.trip)) === String([FRI, SAT, SUN]))
+check('a one-day trip is one day', tripDays({ start_date: FRI, end_date: '' }).length === 1)
+check('a trip with no dates has none to offer', tripDays({ start_date: '', end_date: '' }).length === 0)
+check('an end before the start does not run backwards for ever',
+  tripDays({ start_date: SUN, end_date: FRI }).length === 1)
+
+// The Eat list is filed by meal and stays filed by meal, dated or not: how a
+// list is organised and what it covers are two questions, and days answer the
+// second one. So the headings never move.
+const flat = S.items
+S.tab = 'eat'
+const undated = viewTrip()
+check('the Eat list keeps its plain headings', heads(undated, 'Dinner') && heads(undated, 'Snacks'))
+check('and no day ever becomes a heading on it', !find(undated, `data-group="${shortDay(FRI)}`))
+S.tab = 'do'
+check('an undated Plan tab is still a board', heads(viewTrip(), 'Daytime'))
+
+// The day bar: a strip at the top of the page, All first, one tab per day. It
+// is a filter, so the list keeps its own headings and only its contents move.
+S.items = flat.map((i) => (i.id === 'Burgers' ? { ...i, day: SAT } : i))
+S.tab = 'eat'
+const bar = viewTrip()
+check('the page carries a day strip', find(bar, 'class="daybar"'))
+check('All comes first and is the way out', bar.indexOf('data-value=""') < bar.indexOf(`data-value="${FRI}"`))
+check('one tab per day of the trip',
+  [FRI, SAT, SUN].every((d) => attrs(bar, 'data-act="filter-day"', `data-value="${d}"`)))
+check('with nothing picked, All is the one pressed',
+  attrs(bar, 'data-value=""', 'aria-pressed="true"') && !attrs(bar, `data-value="${SAT}"`, 'aria-pressed="true"'))
+// It lived in the header once. The header says which trip you are on and
+// nothing else, so the strip belongs on the page with the other narrowings —
+// widest first, above the search box and the chips.
+check('the day strip is on the page, not in the header',
+  bar.indexOf('class="daybar"') > bar.indexOf('<main class="page"'))
+check('and it leads the narrowings it belongs with',
+  bar.indexOf('class="daybar"') < bar.indexOf('class="filters"'))
+check('the header is back to saying only where you are',
+  bar.slice(0, bar.indexOf('<main class="page"')).includes('topbar__title')
+    && !find(bar.slice(0, bar.indexOf('<main class="page"')), 'data-act="filter-day"'))
+check('the list underneath is untouched',
+  heads(bar, 'Dinner') && heads(bar, 'Snacks') && !find(bar, `data-group="${shortDay(SAT)} · Dinner"`))
+check('"Dinner" is a heading once, not five times', (bar.match(/data-group="Dinner"/g) ?? []).length === 1)
+check('a dated row says which day it is for', attrs(bar, 'data-act="when"', 'data-id="Burgers"'))
+check('an undated one is not nagged about it',
+  !attrs(bar, 'data-act="when" data-id="Crisps"[^>]*>[^<]*Add a day'))
+
+// Today, on a trip that is happening now. The fixture trip is in September 2026,
+// so the same page has to be able to say nothing at all.
+check('a trip that is not happening now marks no day as today', !find(bar, 'daybar__now--on'))
+check('but every day keeps the room for the mark',
+  (bar.match(/class="daybar__now/g) ?? []).length === 3)
+const then = S.trip
+const isoOf = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+const iso = isoOf(new Date())
+S.trip = { ...then, start_date: iso, end_date: iso }
+const now = viewTrip()
+check('today wears a dot in the strip', find(now, 'daybar__now--on'))
+check('and says so where it cannot be seen', find(now, ', today"'))
+S.trip = then
+
+// And the day is watched rather than read once, because a phone left on the tab
+// overnight is a phone showing yesterday. Midnight is faked here; the app aims a
+// timer at the real one and checks again whenever the tab comes back.
+check('nothing has turned when nothing has turned', !dayTurned(iso))
+check('the same page marks no day as today', !find(viewTrip(), 'daybar__now--on'))
+check('but midnight turning into Saturday moves the dot onto Saturday',
+  dayTurned(SAT) && find(dayTab(viewTrip(), SAT), 'daybar__now--on')
+    && !find(dayTab(viewTrip(), SUN), 'daybar__now--on'))
+check('and takes it off again when the day is nobody\'s', dayTurned(iso) && !find(viewTrip(), 'daybar__now--on'))
+check('the timer is aimed at the next midnight, not at a flat 24 hours',
+  tillMidnight() > 0 && tillMidnight() <= 86400000 + 1000)
+check('and lands on the far side of it',
+  isoOf(new Date(Date.now() + tillMidnight())) !== iso)
+
+// Midnight redraws the page, unless somebody is in the middle of typing on it.
+document.activeElement = { matches: () => true }
+roots.root.innerHTML = ''
+turnDay(SUN)
+check('a page being typed into is not redrawn under the typist', roots.root.innerHTML === '')
+check('but the day has turned all the same, for the next thing they do',
+  find(dayTab(viewTrip(), SUN), 'daybar__now--on'))
+document.activeElement = null
+roots.root.innerHTML = ''
+turnDay(iso)
+check('and a page nobody is touching redraws itself at midnight', roots.root.innerHTML.length > 500)
+check('with the dot gone with the day', !find(viewTrip(), 'daybar__now--on'))
+
+// Press a day and the page is that day.
+S.filter = { day: SAT, kind: '', cat: '', hide: false, q: '' }
+const sat = viewTrip()
+check('picking a day marks it in the strip', attrs(sat, `data-value="${SAT}"`, 'aria-pressed="true"'))
+check('and keeps only that day', find(sat, 'data-id="Burgers"') && !find(sat, 'data-id="Crisps"'))
+check('the meal it is under is still its heading', heads(sat, 'Dinner'))
+
+// The day nobody has covered, which is the question this was all for.
+S.filter = { day: SUN, kind: '', cat: '', hide: false, q: '' }
+const sun = viewTrip()
+check('an empty day says which day it is', find(sun, `Nothing on ${fullDay(SUN)}`))
+check('and offers to fill it, knowing the day',
+  attrs(sun, 'data-act="add-to"', `data-day="${SUN}"`))
+check('and offers the way back to all of them',
+  attrs(sun, 'data-act="filter-day"', 'data-value=""'))
+
+// "No day": the things nobody has slotted yet, which is the question you start
+// asking the moment you plan by day at all. It is a filter chip, not a stop on
+// the strip — the strip is the trip's calendar and "no day" is not a date. But
+// it is still not a new meaning for All, because All is the way back out of a
+// day, so the two are exclusive rather than stacked.
+S.filter = { day: '', kind: '', cat: '', hide: false, q: '' }
+S.tab = 'eat'
+const mixed = viewTrip()
+check('a tab with some dated and some not offers "No day"',
+  attrs(mixed, 'data-act="filter-day"', 'data-value="none"'))
+check('and it is a chip with the cuts, not a stop on the calendar',
+  find(mixed, 'class="filters__chip" data-act="filter-day"')
+    && !find(mixed.slice(mixed.indexOf('class="daybar"'), mixed.indexOf('class="filters"')), 'data-value="none"'))
+check('it leads the cuts, being the tail of the question above them',
+  mixed.indexOf('data-value="none"') < mixed.indexOf('data-act="filter-cat"'))
+check('and says how many are still waiting on one',
+  attrs(mixed, 'data-value="none"', '>No day<span class="filters__n filters__n--quiet">3</span>'))
+check('and All is still there and still means all',
+  attrs(mixed, 'data-act="filter-day"', 'data-value=""')
+    && find(mixed, 'data-id="Burgers"') && find(mixed, 'data-id="Crisps"'))
+
+S.filter = { day: 'none', kind: '', cat: '', hide: false, q: '' }
+const loose = viewTrip()
+check('pressing it keeps what has no day', find(loose, 'data-id="Crisps"'))
+check('and drops what has one', !find(loose, 'data-id="Burgers"'))
+check('it shows as pressed like any other', attrs(loose, 'data-value="none"', 'aria-pressed="true"'))
+check('and All lets go of it', !attrs(loose, 'data-value=""', 'aria-pressed="true"'))
+check('the strip is still there, with no day of it held down',
+  find(loose, 'class="daybar"') && !attrs(loose, 'class="daybar__tab"', 'aria-pressed="true"'))
+
+// The teabags. "Any day" on food is a third answer, not the absence of one: it
+// means every day of the trip, so pressing a day finds it — which is what makes
+// "have we got Sunday breakfast covered?" a question the page can answer with
+// the bread on it.
+const undatedEat = S.items
+S.items = undatedEat.map((i) => (i.id === 'Crisps' ? { ...i, day: 'any' } : i))
+S.filter = { day: SUN, kind: '', cat: '', hide: false, q: '' }
+const sunday = viewTrip()
+check('what is for the whole trip turns up under a day', find(sunday, 'data-id="Crisps"'))
+check('and still says so, so the day can be told from the week',
+  attrs(sunday, 'data-act="when"', 'data-id="Crisps"') && find(sunday, 'Any day'))
+check('while the day\'s own things do not repeat the day', !find(sunday, `${shortDay(SUN)}<`))
+S.filter = { day: 'none', kind: '', cat: '', hide: false, q: '' }
+check('and "No day" is not for it, because it has been answered',
+  !find(viewTrip(), 'data-id="Crisps"'))
+S.items = undatedEat
+S.filter = { day: 'none', kind: '', cat: '', hide: false, q: '' }
+
+// Standing on "No day" is saying the opposite of standing on a day, so a row
+// under it is still asked for one rather than for the hour.
+const eatKept = S.items
+S.tab = 'do'
+S.items = [item({ id: 'Ridge', t: 'Ridge walk', list: 'activities', category: 'Daytime', day: SAT }),
+  item({ id: 'Swim', t: 'Swim', list: 'activities', category: 'Daytime' })]
+check('and a row under it is asked for a day, not for an hour', find(viewTrip(), 'Add a day'))
+S.items = eatKept
+S.tab = 'eat'
+
+// It lets go of itself, so nobody is ever standing on an answer that has stopped
+// being one: a tab where everything is dated has no such question.
+const flatDays = S.items
+S.items = flatDays.map((i) => (i.list === 'food' || i.list === 'drinks' ? { ...i, day: SAT } : i))
+const allDated = viewTrip()
+check('a tab with a day on everything does not offer it',
+  !attrs(allDated, 'data-act="filter-day"', 'data-value="none"'))
+check('and standing on it falls back to All rather than to nothing',
+  find(allDated, 'data-id="Burgers"') && attrs(allDated, 'data-value=""', 'aria-pressed="true"'))
+S.items = flatDays.map((i) => (i.list === 'food' ? { ...i, day: '' } : i))
+check('nor does a tab with a day on nothing',
+  !attrs(viewTrip(), 'data-act="filter-day"', 'data-value="none"'))
+S.items = flatDays
+
+// The Pack tab has no days: you pack the tent once, not on Saturday.
+S.filter = { day: '', kind: '', cat: '', hide: false, q: '' }
+S.tab = 'pack'
+check('the packing list gets no day strip', !find(viewTrip(), 'class="daybar"'))
+S.tab = 'do'
+check('the Plan tab does', find(viewTrip(), 'class="daybar"'))
+
+// And nor does a tab with nothing on it: there is no day of the trip on which
+// nothing is still nothing, and the empty card is the only thing worth reading.
+const some = S.items
+S.items = []
+check('a list with nothing on it gets no day strip', !find(viewTrip(), 'class="daybar"'))
+check('just the card that gets it started', find(viewTrip(), 'data-act="suggest"'))
+S.items = some
+S.tab = 'eat'
+
+// Both rows that scroll sideways — the days and the chips — fade out at the end
+// they can still be pushed towards, which is the only way either of them has of
+// saying there is more. Which end that is has to be measured: a fade on a week
+// that fits on the screen is a lie, and one at the left of a row already at its
+// left is a smudge on the first day of the trip.
+const row = (scrollLeft, scrollWidth, clientWidth) => {
+  const at = { scrollLeft, scrollWidth, clientWidth, dataset: {} }
+  edges(at)
+  return at.dataset.more
+}
+check('a trip that fits on the screen fades at neither end', row(0, 300, 300) === '')
+check('a fortnight fades at the end there is more of it', row(0, 900, 300) === 'end')
+check('pushed into the middle it fades at both', row(300, 900, 300) === 'both')
+check('and at the far end, only back the way it came', row(600, 900, 300) === 'start')
+check('a fraction of a pixel is not somewhere left to go', row(0.4, 300.6, 300) === '')
+
+// Standing on a day is as good as saying so, so the add sheet arrives knowing.
+S.filter = { day: SAT, kind: '', cat: '', hide: false, q: '' }
+S.sheet = { kind: 'add', tab: 'eat', list: 'food', section: 'shared', day: S.filter.day }
+renderSheet()
+check('adding from a day lands on that day',
+  find(roots['sheet-root'].innerHTML, `<input type="hidden" name="day" value="${SAT}">`))
+S.sheet = null
+S.filter = { day: '', kind: '', cat: '', hide: false, q: '' }
+
+// Your own page flattens the lists, so the row has to carry the day itself.
+S.tab = 'mine'
+check('Mine says which day a thing is for', find(viewTrip(), shortDay(SAT)))
+
+// Plans keep the headings they have always had — the day is the strip in the
+// header, and a heading saying it too would be the page repeating itself. What
+// the days do here is the order: the list reads in the order it happens.
+S.items = [...flat.map((i) => (i.id === 'Hike' ? { ...i, day: SAT, time: '09:30' } : i)),
+  item({ t: 'Stargazing', list: 'activities', category: 'After dark', day: SAT, time: '21:00' }),
+  item({ t: 'Sunset spot', list: 'activities', category: 'After dark', day: SAT }),
+  item({ t: 'Ferry', list: 'activities', category: 'Daytime', day: FRI }),
+  item({ t: 'Swimming', list: 'activities', category: 'Daytime' })]
+S.tab = 'do'
+const plan = viewTrip()
+check('the Plan tab stays filed by kind', heads(plan, 'Daytime') && heads(plan, 'After dark'))
+check('and no day is ever a heading on it',
+  ![FRI, SAT, SUN].some((d) => heads(plan, fullDay(d))) && !heads(plan, 'Any day'))
+check('an earlier day comes first inside a heading',
+  plan.indexOf('data-id="Ferry"') < plan.indexOf('data-id="Hike"'))
+check('an hour comes before no hour on the same day',
+  plan.indexOf('data-id="Stargazing"') < plan.indexOf('data-id="Sunset spot"'))
+check('and a plan with no day at all goes last, still on the page',
+  plan.indexOf('data-id="Hike"') < plan.indexOf('data-id="Swimming"'))
+check('a row says which day it is on, and the hour with it',
+  find(plan, `${shortDay(SAT)} · 09:30`))
+check('and offers a day where there is none', find(plan, 'Add a day'))
+
+// Press a day and the rows stop saying what the pressed tab already says.
+S.filter = { day: SAT, kind: '', cat: '', hide: false, q: '' }
+const planSat = viewTrip()
+check('a pressed day leaves the headings where they were', heads(planSat, 'After dark'))
+check('and the rows say the hour, not the day',
+  find(planSat, '>09:30<') && !find(planSat, `${shortDay(SAT)} · `))
+check('and offer the hour where there is none', find(planSat, 'Add a time'))
+check('and Saturday is all that is left', !find(planSat, 'data-id="Swimming"'))
+S.filter = { day: '', kind: '', cat: '', hide: false, q: '' }
+
+// A list long enough to be worth searching stops being one the moment a day cuts
+// it down, and the search box goes with it.
+const plans = S.items
+S.items = Array.from({ length: 10 }, (_, i) =>
+  item({ t: `Idea ${i}`, list: 'activities', category: 'Daytime', day: i < 2 ? FRI : SAT }))
+check('a list long enough to search gets the box', find(viewTrip(), 'id="cs-find"'))
+S.filter = { day: FRI, kind: '', cat: '', hide: false, q: '' }
+check('and loses it when a day cuts it down to two', !find(viewTrip(), 'id="cs-find"'))
+S.filter = { day: FRI, kind: '', cat: '', hide: false, q: 'idea' }
+check('but never while something is typed in it', find(viewTrip(), 'id="cs-find"'))
+S.filter = { day: '', kind: '', cat: '', hide: false, q: 'nothing on any list' }
+check('and searching down to nothing does not delete the field', find(viewTrip(), 'id="cs-find"'))
+S.items = plans
+S.filter = { day: '', kind: '', cat: '', hide: false, q: '' }
+
+// The same trip with the dates taken off it: nothing about days is drawn at all.
+const dated = S.trip
+S.trip = { ...dated, start_date: '', end_date: '' }
+const nowhen = viewTrip()
+check('no dates means no day headings', !find(nowhen, 'Any day') && find(nowhen, '>Daytime<'))
+check('no dates means nothing on the row offering one',
+  !find(nowhen, 'data-act="when"') && find(nowhen, 'data-act="place"'))
+S.sheet = { kind: 'when', id: 'Hike' }; renderSheet()
+check('and the when sheet says why it has nothing to offer',
+  find(roots['sheet-root'].innerHTML, 'No dates yet'))
+S.sheet = { kind: 'add', tab: 'do', list: 'activities', section: 'shared' }; renderSheet()
+check('and the add sheet does not ask', !find(roots['sheet-root'].innerHTML, 'name="day"'))
+S.trip = dated
+
+// The sheets, with dates back on.
+S.sheet = { kind: 'when', id: 'Hike' }; renderSheet()
+const when = roots['sheet-root'].innerHTML
+check('the when sheet offers every day of the trip',
+  attrs(when, 'data-act="on-day"', 'data-id="Hike"', `data-day="${FRI}"`) && find(when, `data-day="${SUN}"`))
+check('and "no day" as an answer like any other',
+  attrs(when, 'data-act="on-day"', 'data-id="Hike"', 'data-day=""'))
+check('the day it is on shows as pressed', attrs(when, 'aria-pressed="true"', `data-day="${SAT}"`))
+check('and it says a second day is a second one of these', find(when, 'one on each day'))
+check('a plan is asked for an hour', find(when, 'name="time"') && find(when, 'value="09:30"'))
+check('a plan is not asked which meal it is', !find(when, 'data-act="set-meal"'))
+S.sheet = { kind: 'when', id: 'Burgers' }; renderSheet()
+const meal = roots['sheet-root'].innerHTML
+check('food is asked which meal, not what time',
+  attrs(meal, 'data-act="set-meal"', 'data-id="Burgers"', 'data-cat="Breakfast"') && !find(meal, 'name="time"'))
+check('and the meal it is already filed under shows as pressed',
+  attrs(meal, 'aria-pressed="true"', 'data-cat="Dinner"'))
+S.sheet = { kind: 'when', id: 'Crisps' }; renderSheet()
+check('a category that is not a meal is offered rather than overwritten',
+  attrs(roots['sheet-root'].innerHTML, 'aria-pressed="true"', 'data-cat="Snacks"'))
+
+// The sheet asks about the thing, not the row it was opened from. Bacon on two
+// mornings is two rows — one claim and one packed tick each — and both of them
+// are the answer to "which days is bacon for?".
+const held = S.items
+S.items = [...held,
+  item({ id: 'bacon-fri', t: 'Bacon', list: 'food', category: 'Breakfast', day: FRI }),
+  item({ id: 'bacon-sat', t: 'Bacon', list: 'food', category: 'Breakfast', day: SAT }),
+  item({ id: 'bacon-din', t: 'Bacon', list: 'food', category: 'Dinner', day: SUN }),
+]
+S.sheet = { kind: 'when', id: 'bacon-fri' }; renderSheet()
+const two = roots['sheet-root'].innerHTML
+check('every day the thing is on shows as pressed, not just this row\'s',
+  attrs(two, 'aria-pressed="true"', `data-day="${FRI}"`)
+    && attrs(two, 'aria-pressed="true"', `data-day="${SAT}"`))
+check('the same name under another meal is a different question',
+  !attrs(two, 'aria-pressed="true"', `data-day="${SUN}"`))
+check('and "Any day" is not one of them while it has days',
+  !attrs(two, 'aria-pressed="true"', 'data-day=""'))
+check('the hint says how to drop one again', find(two, 'Press a day again'))
+
+// An undated one of the same thing is a pressed "Any day", not an absence.
+S.items = [...held, item({ id: 'tea-any', t: 'Tea', list: 'food', category: 'Snacks' })]
+S.sheet = { kind: 'when', id: 'tea-any' }; renderSheet()
+check('food nobody has answered for holds nothing down',
+  !attrs(roots['sheet-root'].innerHTML, 'aria-pressed="true"', 'data-day='))
+S.items = [...held, item({ id: 'tea-any', t: 'Tea', list: 'food', category: 'Snacks', day: 'any' })]
+S.sheet = { kind: 'when', id: 'tea-any' }; renderSheet()
+check('and one that is for the whole trip holds "Any day" down',
+  attrs(roots['sheet-root'].innerHTML, 'aria-pressed="true"', 'data-day="any"'))
+// A plan has no such state: "Any day" there is no day at all, waiting for one.
+S.items = [...held, item({ id: 'swim-any', t: 'Swim', list: 'activities', category: 'Daytime' })]
+S.sheet = { kind: 'when', id: 'swim-any' }; renderSheet()
+check('a plan with no day still holds "Any day" down, which is an answer',
+  attrs(roots['sheet-root'].innerHTML, 'aria-pressed="true"', 'data-day=""'))
+S.items = held
+
+S.sheet = { kind: 'add', tab: 'eat', list: 'food', section: 'shared', day: SAT, category: 'Lunch' }
+renderSheet()
+const seeded = roots['sheet-root'].innerHTML
+check('the add sheet offers the days', find(seeded, `data-act="pick-day" data-value="${FRI}"`))
+check('an empty slot seeds the sheet it opens',
+  attrs(seeded, 'aria-pressed="true"', `data-value="${SAT}"`) && find(seeded, 'value="Lunch"')
+  && find(seeded, `<input type="hidden" name="day" value="${SAT}">`))
+check('and only that one', !attrs(seeded, 'aria-pressed="true"', `data-value="${FRI}"`))
+
+// Instant noodles three nights running: the days are a multiple choice, and what
+// comes back is one row per night rather than one row saying three.
+S.sheet = { kind: 'add', tab: 'eat', list: 'food', section: 'shared', day: `${FRI},${SUN}` }
+renderSheet()
+const many = roots['sheet-root'].innerHTML
+check('the add sheet can be holding down several days at once',
+  attrs(many, 'aria-pressed="true"', `data-value="${FRI}"`)
+    && attrs(many, 'aria-pressed="true"', `data-value="${SUN}"`))
+check('and the day between them is not one of them',
+  !attrs(many, 'aria-pressed="true"', `data-value="${SAT}"`))
+check('"Any day" lets go as soon as a day is held', !attrs(many, 'aria-pressed="true"', 'data-value=""'))
+check('the field carries the lot', find(many, `name="day" value="${FRI},${SUN}"`))
+check('and the sheet says what more than one of them will do', find(many, 'one on each day'))
+
+S.sheet = { kind: 'add', tab: 'eat', list: 'food', section: 'shared' }
+renderSheet()
+check('food with nothing picked holds nothing down, because nobody has said',
+  !attrs(roots['sheet-root'].innerHTML, 'aria-pressed="true"', 'data-act="pick-day"'))
+S.sheet = { kind: 'add', tab: 'do', list: 'activities', section: 'shared' }
+renderSheet()
+check('a plan with nothing picked is "Any day", which is an answer',
+  attrs(roots['sheet-root'].innerHTML, 'aria-pressed="true"', 'data-value=""'))
+S.sheet = { kind: 'add', tab: 'eat', list: 'food', section: 'shared', day: 'any' }
+renderSheet()
+check('and food for the whole trip has "Any day" to press',
+  attrs(roots['sheet-root'].innerHTML, 'aria-pressed="true"', 'data-value="any"'))
+
+// What the picked days turn into on the way to the server.
+const noodles = { title: 'Instant noodles', list: 'food' }
+check('three days picked is three rows, one per day',
+  JSON.stringify(perDay(noodles, [FRI, SAT, SUN]).map((i) => i.day)) === JSON.stringify([FRI, SAT, SUN]))
+check('each of them the same thing', perDay(noodles, [FRI, SAT]).every((i) => i.title === 'Instant noodles'))
+check('and no day picked is still one row, on no day',
+  perDay(noodles, []).length === 1 && perDay(noodles, [])[0].day === '')
+check('an empty field is no days rather than one blank one', daysPicked('').length === 0)
+check('and a field of days is those days', JSON.stringify(daysPicked(`${FRI},${SAT}`)) === JSON.stringify([FRI, SAT]))
+S.sheet = { kind: 'add', tab: 'pack', list: 'gear', section: 'shared' }; renderSheet()
+check('the packing list is never asked which day', !find(roots['sheet-root'].innerHTML, 'name="day"'))
+
+S.sheet = null
+S.items = flat
+S.tab = 'pack'
 
 // The two views that are not the trip.
 S.sheet = null; S.view = 'landing'; S.trips = []; render()

@@ -83,6 +83,9 @@ const ICONS = {
   caret: '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 9 7 7 7-7"/></svg>',
   find: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>',
   pin: '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s7-6.1 7-11a7 7 0 1 0-14 0c0 4.9 7 11 7 11Z"/><circle cx="12" cy="10" r="2.5"/></svg>',
+  // A clock, for when a thing happens — the other half of the question the pin
+  // beside it answers.
+  clock: '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 1.8"/></svg>',
   spark: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5 13.8 9l5.7 1.8-5.7 1.8L12 18l-1.8-5.4L4.5 10.8 10.2 9 12 3.5Z"/><path d="M19 3v3M20.5 4.5h-3"/></svg>',
   // iOS draws its Share button as a box with an arrow leaving it, and the only
   // way to install on that phone is to say "tap this" and mean that one.
@@ -99,11 +102,11 @@ const S = {
   // The trip page, over the top of whichever tab you were on. Not a tab of its
   // own, so the bar always has exactly one answer to "where am I".
   camp: false,
-  // How the list on screen is narrowed: who brings it, what kind of thing it
-  // is, whether to bother with what is already handled, and whatever you typed
-  // into the search box. All empty means everything, which is where every tab
-  // starts — and where it goes back to when you leave it.
-  filter: { kind: '', cat: '', hide: false, q: '' },
+  // How the list on screen is narrowed: which day of the trip, who brings it,
+  // what kind of thing it is, whether to bother with what is already handled,
+  // and whatever you typed into the search box. All empty means everything,
+  // which is where every tab starts — and where it goes back to when you leave.
+  filter: { day: '', kind: '', cat: '', hide: false, q: '' },
   trip: null, members: [], items: [], events: [],
   catalog: null, tips: [],
   // The forecast for where and when this trip is: `{ key, state, days, advice }`.
@@ -275,7 +278,28 @@ function matchesQuery(it, q) {
 
 // Everything except the category, because the category chips are built out of
 // what is left after the others have had their say.
-const preCat = (it, f) => inKind(it, f.kind) && (!f.hide || !isSettled(it)) && matchesQuery(it, f.q)
+// The one answer in the day strip that is not a day: what nobody has got round
+// to putting on one. A word rather than a date, so it can share the field with
+// the days without ever being mistaken for one.
+const NO_DAY = 'none'
+
+// And the one answer on an item that is not a day either. `day` was doing two
+// jobs at once — "nobody has said" and "this one is for the whole trip" — and
+// they are different answers. The teabags are for every day of the trip; a
+// dinner nobody has slotted is for none of them yet. Spelling both of them as
+// an empty string meant pressing Sunday could say "Nothing on Sun 6 Sep" with
+// the bread to cover it sitting on the list, and it meant "No day" filled up
+// with things that were never going to have one.
+const ALL_WEEK = 'any'
+const allWeek = (it) => it.day === ALL_WEEK
+
+// So a day of the trip holds what was put on that day, plus what was put on all
+// of them. "No day" holds only what has not been answered — being all week is an
+// answer, and a good one.
+const onDay = (it, day) => (day === NO_DAY ? !it.day : it.day === day || allWeek(it))
+
+const preCat = (it, f) => (!f.day || onDay(it, f.day)) && inKind(it, f.kind)
+  && (!f.hide || !isSettled(it)) && matchesQuery(it, f.q)
 const matchesFilter = (it, f) => preCat(it, f) && (!f.cat || catOf(it) === f.cat)
 
 // What the page on screen can be narrowed: everything it would show unfiltered,
@@ -296,6 +320,13 @@ function pageParts() {
 // press, so a leftover 'own' from the tab you came from cannot hide a list.
 function activeFilter() {
   return {
+    // A day you cannot see the bar for is a day you cannot get back off, so it
+    // only counts where the bar is drawn — and never for a day the trip has
+    // since stopped covering, which would leave the list empty with every tab
+    // in the bar unpressed. The same goes for "No day" once the last thing
+    // without one has been given one: the pill goes, so standing on it stops.
+    day: dayTabs().includes(S.filter.day) || (S.filter.day === NO_DAY && offersNoDay())
+      ? S.filter.day : '',
     kind: pageParts().kinds ? S.filter.kind : '',
     cat: S.filter.cat,
     // Plans are not brought by anybody, so there is nothing on that tab for
@@ -372,13 +403,205 @@ function groupByCategory(items) {
 const firstPart = (s) => String(s ?? '').split(',')[0].trim()
 const shortWhere = (trip) => firstPart(trip?.location)
 
-function fmtDates(trip) {
-  const f = (d) => {
-    if (!d) return ''
-    const dt = new Date(`${d}T12:00:00`)
-    if (Number.isNaN(+dt)) return d
-    return dt.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })
+// ---- days -------------------------------------------------------------------
+
+// A trip already knew when it was; an item did not. A day on an item is what
+// turns the Plan tab from a board into an itinerary and the Eat list from a pile
+// of food into meals — "have we actually got Sunday lunch covered?" is the
+// question none of this could answer before.
+//
+// It is optional everywhere and always will be. A trip in March has no dates
+// yet, and half of what is on the lists is not any particular day's — so a page
+// with nothing dated on it is the page it has always been, not a broken version
+// of the dated one.
+
+const isDayString = (s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s ?? ''))
+
+// Built out of the parts rather than through UTC: `toISOString` on a local noon
+// is the day before in New Zealand, and the day a trip starts is the day where
+// the trip is.
+const isoOf = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+
+// One heading per day is only a good idea for as long as a trip is a trip. A
+// year mistyped as 2062 should not answer with thirteen thousand of them.
+const TRIP_DAYS_MAX = 31
+
+// The days of the trip, in order. Empty until it has a start date, which is the
+// whole of "a trip with no dates still has to work": there is nothing to offer,
+// so nothing about days is drawn at all.
+function tripDays(trip) {
+  const start = trip?.start_date
+  if (!isDayString(start)) return []
+  const d = new Date(`${start}T12:00:00`)
+  if (Number.isNaN(+d)) return []
+  const end = isDayString(trip?.end_date) && trip.end_date >= start ? trip.end_date : start
+
+  const out = []
+  for (let i = 0; i < TRIP_DAYS_MAX; i++) {
+    const iso = isoOf(d)
+    out.push(iso)
+    if (iso >= end) break
+    d.setDate(d.getDate() + 1)
   }
+  return out
+}
+
+// "Fri 4 Sep" for a plan, which is a thing on a date. "Fri 4" for a meal, which
+// is one of three on a day you have already been told — and the same form the
+// forecast rows use, so the two lists of days on screen read alike.
+const dayAt = (iso) => {
+  const d = new Date(`${iso}T12:00:00`)
+  return Number.isNaN(+d) ? null : d
+}
+// "Any day" is a day as far as anything reading one is concerned, so the two
+// that put a day into words answer for it rather than leaving 'any' on screen.
+const dayFull = (iso) => (iso === ALL_WEEK ? ANY_DAY
+  : dayAt(iso)?.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' }) ?? iso)
+const dayShort = (iso) => (iso === ALL_WEEK ? ANY_DAY
+  : dayAt(iso)?.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric' }) ?? iso)
+
+// Which of these is today, once the trip is the thing you are standing in rather
+// than the thing you are planning. Working it out from the phone's own clock is
+// the point: on the Saturday morning of the trip, which of these is today should
+// not be arithmetic.
+//
+// Held rather than read, for two reasons. A render that straddled midnight could
+// otherwise mark two days as today or none, and this is the one thing on the
+// page that changes without anybody touching it — so something has to notice
+// when it does. See watchMidnight.
+let todayIso = isoOf(new Date())
+const isToday = (iso) => iso === todayIso
+
+// Whether the day has turned since the last time anybody looked, and the place
+// the new one is written down. `now` is an argument so that the turn can be
+// tested without waiting until midnight.
+function dayTurned(now = isoOf(new Date())) {
+  if (now === todayIso) return false
+  todayIso = now
+  return true
+}
+
+// Milliseconds until the next local midnight, plus a second so the timer lands
+// on the far side of it rather than on the line. Local, and worked out by asking
+// for hour 24 of today, which is the next midnight even on the nights the clocks
+// move — a fixed 24 hours would drift by an hour twice a year.
+function tillMidnight() {
+  const at = new Date()
+  at.setHours(24, 0, 0, 1)
+  return Math.max(1000, at - Date.now())
+}
+
+// A phone left on the tab overnight kept the dot on yesterday. So the day is
+// watched: a timer aimed at the next midnight, rescheduled from the clock each
+// time rather than by adding a day to itself, so a late or early wake-up costs
+// nothing. A sleeping phone does not run timers at all, which is what the check
+// on the way back into the tab is for — see the visibilitychange below.
+//
+// The dot is not the only thing this fixes. "2 days to go" on the trip card has
+// always been wrong by one from midnight until whenever you next touched it.
+//
+// Somebody typing is left alone, the same as the poll leaves them alone. The day
+// has still turned by then — it is written down before the page is asked to
+// redraw — so the next thing they do shows the new one.
+function turnDay(now) {
+  if (!dayTurned(now)) return
+  if (document.activeElement?.matches('input, textarea')) return
+  render()
+}
+
+function watchMidnight() {
+  setTimeout(() => { turnDay(); watchMidnight() }, tillMidnight())
+}
+watchMidnight()
+
+// The three meals a day has. Everything else on the Eat tab — the snacks, the
+// drinks, the oil and the teabags — is not a meal and wants no day: it is there
+// all weekend.
+const MEALS = ['Breakfast', 'Lunch', 'Dinner']
+const mealRank = (cat) => {
+  const i = MEALS.indexOf(cat)
+  return i < 0 ? MEALS.length : i
+}
+
+// The first pill in the picker, and an answer somebody can pick rather than the
+// absence of one. It is named out loud because taking a day back off something
+// has to be as easy as putting one on.
+//
+// One name, two meanings, and they are the same meaning to whoever taps it: not
+// on a particular day. What differs is what that is worth on each tab. Food that
+// is for any day is on the list for Sunday — the teabags are there on Sunday, so
+// pressing Sunday shows them, and the pill writes ALL_WEEK. A plan for any day is
+// not happening on Sunday; it is waiting for somebody to say when, so there the
+// pill writes no day at all and the plan sits under All until it has one.
+const ANY_DAY = 'Any day'
+//
+// Which leaves a third state on food with no pill of its own, because it is what
+// nothing pressed looks like: nobody has answered yet. That is the pile "No day"
+// is for, and it is the one worth being able to see.
+const anyDayMeans = (plan) => (plan ? '' : ALL_WEEK)
+
+// Days are worth offering on the two tabs where when is a real question. You
+// pack the tent once, not on Saturday, so the packing list never asks.
+const takesDays = (tab) => tab.id === 'eat' || isPlanTab(tab)
+
+// The days the strip offers, which is the trip's own days on the two tabs that
+// take them and nothing anywhere else. Empty is All, and All is not in here: it
+// is the way out of a day rather than a day of its own.
+const dayTabs = () => (takesDays(currentTab()) ? tripDays(S.trip) : [])
+
+// And whether "No day" is on offer as well: the things nobody has got round to
+// slotting, which is the question you start asking the moment you plan by day at
+// all. It waits until the tab has both kinds on it, because a control that would
+// show the whole list and one that would show none of it are both a control that
+// does nothing — the same rule the search box and the hide chip already keep.
+// That also means it lets go on its own once the last one is slotted.
+//
+// It is a filter chip and not a tab in the strip. The strip is the trip's
+// calendar and every stop on it is a date; "no day" is not a date, and putting
+// it in there made the calendar carry something that is not one of its days. It
+// is a cut, like hiding what is sorted — so it lives with the cuts.
+//
+// It is still not a new meaning for All, though. All is the way back, and a
+// filter that stayed on across a pressed day would leave that day with no one
+// tap out of it. So it is exclusive with the strip: pressing it lets every day
+// go, and pressing a day lets it go. A day and no day cannot both be true.
+function offersNoDay() {
+  if (!dayTabs().length) return false
+  const all = itemsOn(currentTab())
+  return all.some((i) => i.day) && all.some((i) => !i.day)
+}
+
+// No tab is filed by day, though. The day is a strip in the header on both of
+// them, and the headings underneath stay what they have always been: the meal on
+// Eat, the kind of thing on Plan.
+//
+// The Plan tab was headed by days for a while, on the argument that an itinerary
+// *is* a list of days. Two goes at it were worse than the strip both times — a
+// heading for every day of the trip made a ten-day trip ten headings saying
+// "nothing yet", and dropping the empty ones only meant the page reorganised
+// itself under you as things were dated. And with the strip in the header, a day
+// heading is the second copy of a control that is already on screen: press
+// Saturday up there and the page is Saturday, so a heading saying so underneath
+// is the page repeating itself. The accordion is for the other question — what
+// kind of thing is this — and that question has one answer all week.
+//
+// The same reasoning killed the day in the Eat headings, where it also turned
+// five headings into fifteen with "Dinner" among them five times.
+//
+// Which day a sheet opened from here should arrive holding: the one you are
+// standing on, and nothing at all if where you are standing is "No day".
+const seedDay = () => (activeFilter().day === NO_DAY ? '' : activeFilter().day)
+
+// So the only thing that makes a row's day already-said is having pressed it —
+// and "No day" says the opposite, so the rows under it still offer to be given
+// one, which is the whole reason you would be standing there.
+const daySaid = () => {
+  const day = activeFilter().day
+  return !!day && day !== NO_DAY
+}
+
+function fmtDates(trip) {
+  const f = (d) => (d ? dayFull(d) : '')
   const a = f(trip.start_date), b = f(trip.end_date)
   if (a && b) return `${a} – ${b}`
   return a || b || ''
@@ -515,10 +738,16 @@ const FIND_MIN = 8
 // only ever earns one beside it. On its own above a row of chips it reads as a
 // stray control rather than a row of tools, and a list too short to search is
 // too short for folding to be worth a button.
-function listTools(all) {
+//
+// `shown` is the list as it stands, not the list as it was filed: press Thursday
+// and eight ideas become one, and a search box over a single row is a control
+// asking you to narrow what a tap has already narrowed. The one thing that never
+// takes the box away is the box — whatever is typed in it keeps it on screen, or
+// searching down to two results would delete the field mid-word.
+function listTools(shown) {
   const f = activeFilter()
   const groups = pageGroups()
-  if (all.length < FIND_MIN && !f.q) return ''
+  if (shown.length < FIND_MIN && !f.q) return ''
   const foldable = groups.length > 1 && !f.cat && !f.q.trim()
 
   const allShut = foldable && groups.every(([name]) => isShut(name))
@@ -564,6 +793,18 @@ function filterBar(all, kinds, count) {
   // say, so the row never offers a cut that comes back empty.
   const cats = [...new Set(all.filter((i) => preCat(i, f)).map(catOf))]
 
+  // The one cut that answers the strip above rather than narrowing under it, so
+  // it leads the row: it is the tail of the same question, and pressing it lets
+  // every day go. The count is quiet — undated is not unclaimed, and blaze means
+  // only ever the one thing. It goes when there is nothing left under it, unless
+  // that is where you are standing, which needs the way back to stay on screen.
+  const loose = all.filter((i) => !i.day && inKind(i, f.kind)).length
+  const dayChip = !offersNoDay() || (!loose && f.day !== NO_DAY) ? '' : `
+    <button class="filters__chip" data-act="filter-day" data-value="${NO_DAY}"
+            aria-pressed="${f.day === NO_DAY}">No day${loose
+      ? `<span class="filters__n filters__n--quiet">${loose}</span>` : ''}</button>
+    <span class="filters__div" aria-hidden="true"></span>`
+
   // Most of a packing list is settled by the time you leave, and the part that
   // is not is the whole reason you opened it. This is the biggest cut on the
   // page and it wears no blaze: what it hides is the handled half, not the gap.
@@ -574,10 +815,12 @@ function filterBar(all, kinds, count) {
       ${settled ? `<span class="filters__n filters__n--quiet">${settled}</span>` : ''}</button>
     <span class="filters__div" aria-hidden="true"></span>`
 
-  // First, so it is on screen without scrolling the row: it is the one control
-  // here somebody came looking for rather than reached for.
+  // The two at the front are the ones somebody came looking for rather than
+  // reached for, so they are on screen without scrolling the row: what still has
+  // no day, and who cannot eat what.
   return `
     <div class="filters" role="group" aria-label="Filter this list">
+      ${dayChip}
       ${currentTab().lists.includes('food') ? dietChip() : ''}
       ${isPlanTab(currentTab()) ? '' : hideChip}
       ${kinds ? `${kindChip('shared')}${kindChip('own')}
@@ -591,6 +834,35 @@ function filterBar(all, kinds, count) {
 // the one you are most likely to have meant to undo.
 function noMatch(f) {
   const q = f.q.trim()
+  // A day with nothing on it is the answer to the question days were added for,
+  // so it is not a dead end: it says which day, and it offers to fill it. This
+  // is "have we actually got Sunday lunch covered?" — you press Sunday, and
+  // either the food is there or this is.
+  // Standing on "No day" with nothing under it only happens with another filter
+  // on, because the pill lets go of itself once everything has a day. Which is
+  // worth saying out loud, since it is the good ending.
+  if (f.day === NO_DAY && !q) {
+    return `
+      <div class="empty">
+        <h3>Everything has a day</h3>
+        <p>${f.cat || f.kind || f.hide
+          ? 'Nothing without a day that also matches the other filters.'
+          : 'Nothing on this list is still waiting to be put on one.'}</p>
+        <button class="empty__or" data-act="filter-day" data-value="">or show every day</button>
+      </div>`
+  }
+  if (f.day && !q) {
+    return `
+      <div class="empty">
+        <h3>Nothing on ${esc(dayFull(f.day))}</h3>
+        <p>${f.cat || f.kind || f.hide
+          ? 'Nothing for this day that also matches the other filters.'
+          : 'Nobody has put anything on this day yet.'}</p>
+        <button class="btn btn--blaze" data-act="add-to" data-day="${esc(f.day)}" data-cat="">
+          Add something for ${esc(dayShort(f.day))}</button>
+        <button class="empty__or" data-act="filter-day" data-value="">or show every day</button>
+      </div>`
+  }
   if (q) {
     return `
       <div class="empty">
@@ -693,6 +965,32 @@ function placeChip(item) {
             ${ICONS.pin}<span class="chip__where">${esc(place)}</span></button>`
 }
 
+// When a thing happens, in whatever is still worth saying. On an itinerary the
+// heading overhead has already said which day, so the chip is down to the hour;
+// anywhere else it is the whole answer. Nothing at all until the trip has dates,
+// because until then there is no day to offer and a chip that opens onto an
+// apology is worse than no chip.
+//
+// `offer` is whether an empty one is worth a prompt. A plan row has room for the
+// invitation — the same row already offers a place — but thirty rows of food
+// each asking to be given a day is a list you cannot read. There the way in is
+// the item sheet, and the chip only ever appears once there is something to say.
+// Standing on Saturday says a row's day for it — except for the rows that are
+// there every day, which are on Saturday's page without being Saturday's. Those
+// keep saying so, or the page cannot tell what it has for Saturday from what it
+// has all week, which is the whole reason they are both on it.
+function whenChip(item, offer) {
+  if (!tripDays(S.trip).length) return ''
+  const dated = daySaid() && !allWeek(item)
+  const said = [dated ? '' : item.day && dayShort(item.day), item.time].filter(Boolean).join(' · ')
+  if (!said) {
+    return !offer ? '' : `<button class="tag" data-act="when" data-id="${item.id}">
+              ${ICONS.clock} Add a ${dated ? 'time' : 'day'}</button>`
+  }
+  return `<button class="chip chip--when" data-act="when" data-id="${item.id}">
+            ${ICONS.clock}<span class="chip__where">${esc(said)}</span></button>`
+}
+
 // `mixed` is whether group things and personal kit are sharing the page. When
 // they are, an own row says so: it is the difference between a tick everyone is
 // counting on and one only you will ever see.
@@ -706,6 +1004,9 @@ function itemRow(item, mixed) {
   const votes = plan ? item.votes.length : 0
 
   const meta = [
+    // Food keeps its meal heading, so the day is the one thing the row does not
+    // already say — and only when there is one.
+    takesDays(currentTab()) ? whenChip(item, plan) : '',
     plan ? placeChip(item) : '',
     votes ? `<span class="item__votes">${votes} up for it</span>` : '',
   ].filter(Boolean).join('')
@@ -958,6 +1259,59 @@ function viewJoin() {
   </div>`
 }
 
+// The days of the trip as a strip you swipe, at the top of the page.
+//
+// This is a filter, not a heading and not a table: tap Sunday and the page is
+// Sunday. That is the whole of "have we got Sunday lunch covered?" — you look,
+// and either something is there or the page says nothing is. It costs one row,
+// it reads the same at one day and at thirty, and a trip where nobody is
+// planning by day simply never leaves All.
+//
+// It sat in the header for a while, which was wrong twice over. The header says
+// which trip you are on and nothing else — putting a control in it made the one
+// fixed thing on screen a thing you could change. And it stood over the chips
+// that do the same job, so the page narrowed itself from two places at once.
+// Down here the day is the first of the three, and it scrolls away with them,
+// which is the same argument the filter chips already won.
+//
+// The weekday over the date is the shape every calendar uses, so it needs no
+// explaining; All keeps the left-hand end, where the thumb starts.
+function dayBar() {
+  const days = dayTabs()
+  if (!days.length) return ''
+  const now = activeFilter().day
+
+  const tab = (day, body, label) => `
+    <button class="daybar__tab" data-act="filter-day" data-value="${esc(day)}"
+            aria-pressed="${now === day}" aria-label="${esc(label)}">${body}</button>`
+
+  // One track, in the same paper and the same hairline as the search box under
+  // it, because on the page a control with no surface reads as stray text. The
+  // track is the object; the days inside it are text until one is pressed.
+  //
+  // Two elements rather than one: the days fade out at whichever end there is
+  // more of them, and a fade is a mask, and a mask over the track would take
+  // the track's own border and corner with it. So the track holds, and the row
+  // inside it scrolls and fades.
+  return `
+    <div class="daybar">
+      <div class="daybar__row" role="group" aria-label="Which day of the trip">
+        ${tab('', '<span class="daybar__all">All</span>', 'Every day of the trip')}
+        ${days.map((d) => {
+          const at = dayAt(d)
+          // The dot is drawn on every day and coloured in on one, so today does
+          // not sit two pixels higher than the days either side of it.
+          const now = isToday(d)
+          return tab(d, `
+            <span class="daybar__dow">${esc(at ? at.toLocaleDateString(undefined, { weekday: 'short' }) : d)}</span>
+            <span class="daybar__num">${esc(at ? at.getDate() : '')}</span>
+            <span class="daybar__now${now ? ' daybar__now--on' : ''}"></span>`,
+          now ? `${dayFull(d)}, today` : dayFull(d))
+        }).join('')}
+      </div>
+    </div>`
+}
+
 // One height, always: which trip you are on, and the two facts that identify
 // it. Nothing here is a control any more — the way to the trip page is the Camp
 // tab — so the header is purely a sign saying where you are standing.
@@ -1001,18 +1355,62 @@ function topbar() {
 // and folded, its tally is still on screen, which is the part you were reading
 // the section for anyway. Shut sections are left out of the page rather than
 // hidden in it: nothing to scroll through, nothing to tab into.
+
+// Days first, then whatever a day the trip has not got — somebody shortens a
+// trip and Sunday's plans do not stop existing, they just stop being on it.
+const byDay = (days) => {
+  const order = new Map(days.map((d, i) => [d, i]))
+  return (a, b) => (order.get(a) ?? Infinity) - (order.get(b) ?? Infinity) || (a < b ? -1 : a > b ? 1 : 0)
+}
+
+// Inside a heading on the Plan tab, time runs forward: the day, then the hour,
+// then whatever order the list already had. Whatever has no hour follows the
+// hours of its own day — "sometime on Saturday" belongs to Saturday, not to nine
+// in the morning — and whatever has no day at all goes last, where it is still a
+// plan: "we should swim at some point" is an answer, not an omission.
+const byDayTime = (days) => {
+  const day = byDay(days)
+  const has = (x) => (x ? 0 : 1)
+  return (a, b) =>
+    has(a.day) - has(b.day) || (a.day && b.day ? day(a.day, b.day) : 0) ||
+    has(a.time) - has(b.time) || (a.time < b.time ? -1 : a.time > b.time ? 1 : 0)
+}
+
 // The headings on the page as it stands, in the order it draws them, each with
-// what is under it. One answer for both kinds of page, so "fold all" and the
-// auto-folding are looking at exactly what you are looking at.
+// what is under it. One answer for every kind of page, so "fold all" and the
+// auto-folding are looking at exactly what you are.
 function pageGroups() {
   const f = activeFilter()
+  const tab = currentTab()
   const shown = pageParts().items.filter((it) => matchesFilter(it, f))
-  if (S.tab !== 'mine') return groupByCategory(shown)
-  // Grouped by the tab each thing came from, in tab order, so the page maps
-  // onto the app you already know.
-  return TABS.filter((t) => t.lists.length && !isPlanTab(t))
-    .map((tab) => [tab.label, tab.lists.flatMap((l) => shown.filter((it) => it.list === l))])
-    .filter(([, list]) => list.length)
+  if (S.tab === 'mine') {
+    // Grouped by the tab each thing came from, in tab order, so the page maps
+    // onto the app you already know.
+    return TABS.filter((t) => t.lists.length && !isPlanTab(t))
+      .map((t) => [t.label, t.lists.flatMap((l) => shown.filter((it) => it.list === l))])
+      .filter(([, list]) => list.length)
+  }
+
+  // The plans are filed by kind like everything else, but read in the order they
+  // happen: a category with Saturday's swim above Thursday's hike is a list you
+  // have to sort in your head.
+  const days = tripDays(S.trip)
+  const when = isPlanTab(tab) && days.length ? byDayTime(days) : null
+  const groups = groupByCategory(shown)
+    .map(([cat, list]) => [cat, when ? [...list].sort(when) : list])
+
+  // Breakfast, lunch, dinner is the order a day happens in, and the grid at the
+  // top of the Eat tab says so. A list under it running dinner, breakfast, lunch
+  // — whatever order things were added in — is the page disagreeing with itself.
+  // Snacks and drinks are not meals and tie, so a stable sort leaves them in the
+  // order they were, after the meals.
+  if (tab.id === 'eat') groups.sort((a, b) => mealRank(a[0]) - mealRank(b[0]))
+
+  // An empty heading means "nobody has covered this", which is only true of a
+  // page showing everything. Behind a filter it would mean "nothing here matches
+  // what you asked for", and a row of those is not a gap, it is noise.
+  const narrowed = !!(f.day || f.kind || f.cat || f.hide || f.q.trim())
+  return narrowed ? groups.filter(([, list]) => list.length) : groups
 }
 
 // A pressed category chip, or something typed in the search box, has already
@@ -1047,7 +1445,7 @@ function categoryGroups(groups, mixed) {
   return groups.map(([cat, list]) => {
     const done = list.filter((i) => (isOwn(i) ? isMine(i) : isClaimed(i))).length
     const tally = list.every(isOwn) ? `${done}/${list.length} packed` : `${done}/${list.length}`
-    return groupSection(cat, list[0] && isPlan(list[0]) ? `${list.length}` : tally,
+    return groupSection(cat, isPlan(list[0]) ? `${list.length}` : tally,
       `<ul class="items">${list.map((i) => itemRow(i, mixed)).join('')}</ul>`)
   }).join('')
 }
@@ -1059,7 +1457,10 @@ function listPage() {
   // two are kept apart because they run out for different reasons, and only one
   // of them is worth an empty page about.
   const pool = all.filter((i) => inKind(i, f.kind))
-  const items = pool.filter((i) => matchesFilter(i, f))
+  // And what is left before anything is typed, which is what the search box has
+  // to justify itself against — see listTools.
+  const found = pool.filter((i) => matchesFilter(i, { ...f, q: '' }))
+  const items = found.filter((i) => matchesQuery(i, f.q))
   const c = statsFor(all)
   const count = (key) => (key === 'own' ? [c.own - c.mine, true] : [c.open, false])
 
@@ -1091,9 +1492,15 @@ function listPage() {
   // No standing paragraph over the list: it cost the same few lines on every
   // tab, every visit, to say something you read once. The chips say what the
   // list is now, and the sheets say what each half means as you use them.
+  //
+  // Three narrowings, widest first: which day, then find-one-thing, then who is
+  // bringing it and what kind of thing it is. A list with nothing on it gets
+  // none of them — there is no day of the trip on which nothing is still
+  // nothing, and the empty card is the only thing worth reading.
   return `
     <main class="page">
-      ${pool.length ? listTools(pool) : ''}
+      ${all.length ? dayBar() : ''}
+      ${listTools(found)}
       ${filterBar(all, kinds, count)}
       ${body}
     </main>`
@@ -1109,6 +1516,10 @@ function mineRow(item) {
   const others = crew(item).filter((c) => c.member_id !== S.me)
   const from = [
     catOf(item),
+    // Your own page groups by the tab a thing came from, so the day heading that
+    // carried this on the Eat tab is not here to carry it. Saturday's dinner is
+    // a different armful of the car from Friday's.
+    item.day ? dayShort(item.day) : '',
     own ? 'personal kit' : '',
     // Whoever else is on it, because "am I the only one bringing the bacon" is
     // the question you are actually asking on the morning you leave.
@@ -1314,11 +1725,6 @@ async function loadWeather(key) {
   if (S.camp) render()
 }
 
-const wxDay = (iso) => {
-  const d = new Date(`${iso}T12:00:00`)
-  return Number.isNaN(+d) ? iso : d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric' })
-}
-
 // The first day the forecast will reach a trip that is still too far off, so the
 // card can say when to come back rather than just that it cannot help.
 function wxOpens(start) {
@@ -1351,7 +1757,7 @@ function wxRow(d) {
   // Nothing to open means nothing to press: a row with no numbers behind it
   // stays a row, rather than a button that answers a tap with nothing.
   const row = `
-    <span class="wx__when">${esc(wxDay(d.date))}</span>
+    <span class="wx__when">${esc(dayShort(d.date))}</span>
     <span class="wx__glyph" aria-hidden="true">${WX_ICONS[glyph]}</span>
     <span class="wx__word">${esc(word)}</span>
     <span class="wx__temp">${d.hi === null ? '' : `<b>${Math.round(d.hi)}°</b>`}${
@@ -1881,10 +2287,18 @@ function sheetItem(s) {
   // The two things you do to an item as a whole, rather than to your share of
   // it. Changing the words comes first and is the ordinary one, so it is the
   // plain button; removing keeps the quiet one it has always had.
+  //
+  // And, where a day means something, the way to it. A plan row carries its own
+  // chip for this, but a bag of sausages does not — the heading it sits under is
+  // where its day is said, and a heading is not something you can tap to change.
+  const when = takesDays(tabForList(item.list)) && tripDays(S.trip).length
+    ? `<button class="btn" data-act="when" data-id="${item.id}">When</button>`
+    : ''
   const acts = `
     <div class="sheet__acts">
+      ${when}
       <button class="btn" data-act="edit-item" data-id="${item.id}">Edit</button>
-      <button class="btn btn--quiet" data-act="kill" data-id="${item.id}">Remove from the list</button>
+      <button class="btn btn--quiet" data-act="kill" data-id="${item.id}">Remove</button>
     </div>`
 
   if (own) {
@@ -2016,6 +2430,144 @@ function sheetPlace(s) {
   })
 }
 
+// One choice out of a set, as a row of pills that wraps.
+//
+// Deliberately not the two-way switch: that is a sunken track with a slider in
+// it, and a track says "one of these two". A trip is as often one night as it is
+// a fortnight, so this control has to look right at two options and at thirty —
+// which rules out anything that divides the width up between them. A day at one
+// end of a week would be a sliver, and the last row of a wrapped grid stretches
+// its two survivors to double the width of the ones above.
+//
+// Pills are the same size whatever there are of them: as wide as the words on
+// them, packed from the left, wrapping when they run out of room. Nothing is
+// hidden behind a swipe, nothing changes shape as the trip gets longer.
+const pill = (label, pressed, attrs) => `
+  <button type="button" class="days__chip" aria-pressed="${pressed}" ${attrs}>${esc(label)}</button>`
+
+const pillRow = (label, pills) =>
+  `<div class="days" role="group" aria-label="${esc(label)}">${pills}</div>`
+
+// The days the pills are holding down, in the order the trip has them. One field
+// carrying a list rather than a field per day: it is still the answer to "which
+// day", and the sheet has one place to put it.
+const daysPicked = (v) => String(v ?? '').split(',').filter(Boolean)
+
+// And what that turns into: one row per day rather than one row that spans them.
+// Everything this app counts hangs off a row — who has put their name to it,
+// whether their share is in the car, whether the day is covered. A single row
+// standing for three dinners would have Sunday covered the moment somebody
+// agreed to bring Friday's, and blaze means one thing here: nobody has this yet.
+// So three nights of noodles is three things to pick up, which is what it is.
+const perDay = (one, days) => (days.length ? days : ['']).map((day) => ({ ...one, day }))
+
+// Every row that is the same thing as this one. Bacon and eggs on Thursday and
+// bacon and eggs on Friday are two rows, because a claim and a packed tick are
+// per row — but they are one thing, and this sheet asks about the thing.
+//
+// The group counts, so noodles at lunch and noodles at dinner stay two separate
+// questions rather than one Saturday that cannot say which of them it means.
+const sameThing = (a, b) => a.list === b.list && a.kind === b.kind && catOf(a) === catOf(b)
+  && String(a.title).trim().toLowerCase() === String(b.title).trim().toLowerCase()
+const kinOf = (item) => S.items.filter((i) => sameThing(i, item))
+
+// The same thing on another day: everything that describes it, and none of what
+// happened to it. Claims and packed ticks stay behind, because agreeing to bring
+// Friday's is not agreeing to bring Sunday's.
+const copyTo = (item, day) => ({
+  list: item.list, title: item.title, category: item.category, qty: item.qty, note: item.note,
+  kind: item.kind, place: item.place, lat: item.lat, lon: item.lon, time: item.time, day,
+})
+
+// Who has put their name to it, for the one question worth asking out loud.
+const namesOn = (item) => {
+  const who = claimsOn(item).map((c) => memberById(c.member_id)?.name).filter(Boolean)
+  if (!who.length) return 'Somebody has'
+  return who.length === 1 ? `${who[0]} has` : `${who.slice(0, -1).join(', ')} and ${who.at(-1)} have`
+}
+
+// The days of the trip, plus the answer that is always available: no day at all.
+// Taps land straight away and the sheet stays put — there is nothing to type, so
+// there is nothing to save, and seeing the pill fill in is the confirmation.
+//
+// A multiple choice, because instant noodles three nights running is a normal
+// thing to want. Pressed means there is a row of this thing on that day, so
+// pressing an empty day puts one there and pressing a full one takes it away —
+// and the one you cannot take away is the last, because a thing with no rows
+// left is a thing removed, which is what Remove is for.
+function dayPills(item) {
+  const kin = kinOf(item)
+  const on = new Set(kin.map((i) => i.day ?? ''))
+  const one = (day, label) =>
+    pill(label, on.has(day), `data-act="on-day" data-id="${item.id}" data-day="${esc(day)}"`)
+  return pillRow('Which days',
+    one(anyDayMeans(isPlan(item)), ANY_DAY) + tripDays(S.trip).map((d) => one(d, dayShort(d))).join(''))
+}
+
+// Which meal, for the tab where a day on its own is only half the slot. It
+// writes the category, because the category is already the meal — Breakfast,
+// Lunch, Dinner are what the Eat tab has always been filed under, and a second
+// column saying the same thing is a second answer to disagree with the first.
+// Whatever it is filed under now is offered too, so opening this on the crisps
+// does not silently propose making them breakfast.
+function mealPills(item) {
+  const here = catOf(item)
+  const meals = MEALS.includes(here) ? MEALS : [...MEALS, here]
+  return pillRow('Which meal', meals.map((m) =>
+    pill(m, here === m, `data-act="set-meal" data-id="${item.id}" data-cat="${esc(m)}"`)).join(''))
+}
+
+// When a thing happens, on its own because it is a different question from who
+// is bringing it — and on the Eat tab it is the question that turns a list of
+// food into a list of meals.
+//
+// A trip with no dates has nothing to offer here, and says so rather than
+// showing an empty row of chips: the fix is two fields away on the Camp tab.
+function sheetWhen(s) {
+  const item = S.items.find((i) => i.id === s.id)
+  if (!item) return ''
+  const plan = isPlan(item)
+
+  // "When is Sausages?" is not a sentence. A plan is a thing that happens and
+  // takes the plain question; food is for a meal, and asking it that way keeps
+  // the grammar upright whatever somebody called the thing.
+  const asking = plan ? `When is ${item.title}?` : `Which days is ${item.title} for?`
+
+  if (!tripDays(S.trip).length) {
+    return sheetShell({
+      title: asking,
+      blurb: 'This trip has no dates on it yet, so there are no days to put things on.',
+      body: `
+        <div class="empty">
+          <h3>No dates yet</h3>
+          <p>Add when you arrive and when you leave, and every day of the trip shows up here to file things under.</p>
+          <button class="btn btn--blaze" data-act="camp">Go to the trip page</button>
+        </div>`,
+    })
+  }
+
+  return sheetShell({
+    title: asking,
+    blurb: plan
+      ? 'Optional, both of them. A plan with no day is still a plan — it just sits at the end, waiting for somebody to say when.'
+      : 'The day and the meal make a slot between them, so "have we got Sunday lunch covered?" is a question the list can answer.',
+    body: `
+      <span class="eyebrow">Which days?</span>
+      ${dayPills(item)}
+      <p class="field__hint">${kinOf(item).length > 1
+        ? 'One of these on each day you have picked, each with its own name to put to it. Press a day again to drop that one.'
+        : 'Pick more than one and you get one on each day, each with its own name to put to it.'}${plan ? ''
+        : ' “Any day” is for what the whole trip shares — the teabags, the oil — and shows up under every day.'}</p>
+      ${plan ? '' : `<span class="eyebrow">Which meal?</span>${mealPills(item)}`}
+      ${!plan ? '' : `
+        <form data-act="save-time" data-id="${item.id}">
+          <label class="field"><span>Time <span style="font-weight:400">(optional)</span></span>
+            <input type="time" name="time" value="${esc(item.time ?? '')}"></label>
+          <button class="btn btn--primary btn--wide" type="submit">Save the time</button>
+        </form>`}`,
+  })
+}
+
 // One line per person, and it is everybody's to fill in: the person who knows
 // about the nut allergy is as often whoever booked the pitch as whoever has it.
 // So the sheet is the same either way and only the wording moves.
@@ -2058,6 +2610,44 @@ function sheetAdd(s) {
       <input type="hidden" name="list" value="${esc(s.list)}">
     </div>`
 
+  // Which days this is for, where a day means anything: a plan on the itinerary,
+  // or the meal a bag of sausages is for. "Any day" keeps the front, because most
+  // of what goes on a list is not any particular day's and the sheet should not
+  // make you say so. An empty heading that offered to fill itself arrives with
+  // its own answer already in.
+  //
+  // On a plan it is pressed by default and means no day. On food it means all of
+  // them, and nothing is pressed by default — because a bag of sausages nobody
+  // has spoken for yet is neither Sunday's nor the whole week's, and saying so
+  // out loud is what makes "No day" worth pressing.
+  //
+  // More than one, because instant noodles three nights running is a normal
+  // thing to want and typing it out three times is not. What comes back is three
+  // rows rather than one row that says three days, and the note says so, because
+  // it is the difference between one person having agreed to bring the noodles
+  // and three people each having agreed to bring a night's worth.
+  const days = tripDays(S.trip)
+  const plan = isPlanTab(tab)
+  const on = String(s.day ?? '').split(',').filter(Boolean)
+  const lead = anyDayMeans(plan)
+  const dayPick = !days.length || !takesDays(tab) ? '' : `
+    <div class="field">
+      <span>Which days? <span style="font-weight:400">(optional)</span></span>
+      ${pillRow('Which days',
+        pill(ANY_DAY, plan ? !on.length : on.includes(ALL_WEEK), `data-act="pick-day" data-value="${esc(lead)}"`)
+        + days.map((d) => pill(dayShort(d), on.includes(d), `data-act="pick-day" data-value="${esc(d)}"`)).join(''))}
+      <input type="hidden" name="day" value="${esc(on.join(','))}">
+      <p class="field__hint">${plan
+        ? 'Pick more than one and you get one on each day, each with its own name to put to it.'
+        : 'Pick more than one and you get one on each day, each with its own name to put to it. “Any day” is for what the whole trip shares — the teabags, the oil — and shows up under every day.'}</p>
+    </div>`
+
+  // And the hour, for the one kind of thing that has one. A meal is a slot, not
+  // a time: nobody serves breakfast at 08:15 on a campsite.
+  const timePick = !days.length || !isPlanTab(tab) ? '' : `
+    <label class="field"><span>Time <span style="font-weight:400">(optional)</span></span>
+      <input type="time" name="time"></label>`
+
   return sheetShell({
     title: `Add to ${tab.title.toLowerCase()}`,
     body: `
@@ -2067,13 +2657,16 @@ function sheetAdd(s) {
         ${listPick}
         <div class="field--split">
           <label class="field"><span>Group</span>
-            <input name="category" list="cs-cats" maxlength="60" placeholder="${esc(cats[0] ?? 'Other')}"></label>
+            <input name="category" list="cs-cats" maxlength="60" value="${esc(s.category ?? '')}"
+                   placeholder="${esc(cats[0] ?? 'Other')}"></label>
           <label class="field"><span>How much <span style="font-weight:400">(optional)</span></span>
             <input name="qty" maxlength="40" placeholder="x2"></label>
         </div>
         <datalist id="cs-cats">${cats.map((c) => `<option value="${esc(c)}">`).join('')}</datalist>
         <label class="field"><span>Note <span style="font-weight:400">(optional)</span></span>
           <input name="note" maxlength="500" placeholder="Anything the others need to know"></label>
+        ${dayPick}
+        ${timePick}
         ${!isPlanTab(tab) ? '' : `
           <label class="field places"><span>Where <span style="font-weight:400">(optional)</span></span>
             <input name="place" maxlength="200" placeholder="Wast Water shoreline"
@@ -2146,9 +2739,45 @@ function sheetSuggest(s) {
 // name onto the bacon changes the second and not the first.
 let sheetSig = null
 
+// The one thing a sheet is holding that its own HTML does not say: what somebody
+// has typed into it and not saved yet. `defaultValue` is the value the template
+// wrote, so a field that differs from it is theirs and not the item's.
+//
+// This matters because the sheet redraws while you are standing in it. The day
+// pills save on the tap, and the redraw that followed rebuilt the time field
+// from an item that had no time on it — so typing 09:30, pressing Tuesday and
+// then Save the time saved nothing and said "Time removed", which was true of
+// the field it read and a lie about what had happened.
+function unsaved(sheet) {
+  const held = new Map()
+  for (const f of sheet.querySelectorAll('input[name], textarea[name]')) {
+    if (f.type !== 'checkbox' && f.type !== 'radio' && f.value !== f.defaultValue) held.set(f.name, f.value)
+  }
+  return held
+}
+
+// And where the cursor was, if it was in the sheet at all. A time or a number
+// input has no caret to ask about and throws when asked.
+function caretIn(sheet) {
+  const box = document.activeElement
+  if (!box?.name || !sheet.contains?.(box)) return null
+  try { return { name: box.name, start: box.selectionStart, end: box.selectionEnd } }
+  catch { return { name: box.name, start: null, end: null } }
+}
+
+function restore(sheet, typed, at) {
+  for (const f of sheet.querySelectorAll('input[name], textarea[name]')) {
+    if (typed.has(f.name)) f.value = typed.get(f.name)
+    if (at && f.name === at.name) {
+      f.focus()
+      if (at.start !== null) { try { f.setSelectionRange(at.start, at.end) } catch { /* no caret to put back */ } }
+    }
+  }
+}
+
 function renderSheet() {
   if (!S.sheet) { sheetRoot.innerHTML = ''; sheetSig = null; return }
-  const map = { item: sheetItem, edit: sheetEdit, add: sheetAdd, suggest: sheetSuggest, place: sheetPlace, diet: sheetDiet, diets: sheetDiets }
+  const map = { item: sheetItem, edit: sheetEdit, add: sheetAdd, suggest: sheetSuggest, place: sheetPlace, when: sheetWhen, diet: sheetDiet, diets: sheetDiets }
   const html = map[S.sheet.kind]?.(S.sheet) ?? ''
   const sig = `${S.sheet.kind}:${S.sheet.id ?? ''}`
   const open = sheetRoot.querySelector('.sheet')
@@ -2156,7 +2785,8 @@ function renderSheet() {
   // The same sheet, saying something new, keeps its own element: throwing it
   // away and building another replays the slide-in and the scrim fading up, so
   // putting your name to something made the whole sheet flinch. Only the
-  // contents change, and where you had scrolled to survives with them.
+  // contents change, and where you had scrolled to survives with them — and so
+  // does what you had typed, which is nowhere in the HTML being rebuilt.
   if (open && sig === sheetSig) {
     const next = document.createElement('div')
     next.innerHTML = html
@@ -2164,9 +2794,12 @@ function renderSheet() {
     if (fresh) {
       const body = open.querySelector('.sheet__body')
       const y = body?.scrollTop ?? 0
+      const typed = unsaved(open)
+      const at = caretIn(open)
       open.innerHTML = fresh.innerHTML
       const after = open.querySelector('.sheet__body')
       if (after) after.scrollTop = y
+      restore(open, typed, at)
       return
     }
   }
@@ -2177,17 +2810,40 @@ function renderSheet() {
 
 // ---- render -----------------------------------------------------------------
 
-// Two things the page is holding that its HTML does not say: how far along the
-// chip row you had scrolled, and where the cursor was in the search box. Both
-// are thrown away by rebuilding the page and both are missed at once — a chip
-// row that springs back to the start every time you press a chip means swiping
-// back to the same chip to press it again.
-let chipsAt = { where: '', x: 0 }
+// Two things the page is holding that its HTML does not say: how far along its
+// sideways rows you had scrolled, and where the cursor was in the search box.
+// Both are thrown away by rebuilding the page and both are missed at once — a
+// row that springs back to the start every time you press something in it means
+// swiping back to the same place to press the next thing.
+//
+// Two rows scroll sideways, and the days had this wrong until the chips were
+// generalised to cover them: on a fortnight away, pressing the twelfth day sent
+// the strip back to the first.
+const SIDEWAYS = ['.daybar__row', '.filters']
+const ROWS = SIDEWAYS.join(', ')
+let rowsAt = { where: '', x: {} }
+
+// Which way a sideways row can still go. Said by measuring rather than assumed,
+// because a fade that is always on fades the first day when there is nothing to
+// the left of it, and fades both ends of a weekend that fits on the screen —
+// which reads as a bug rather than as an invitation.
+function edges(row) {
+  const room = row.scrollWidth - row.clientWidth
+  // A pixel of slack at each end: scrollLeft is fractional on a zoomed page and
+  // on a trackpad, and an eighth of a pixel is not somewhere left to scroll.
+  const back = row.scrollLeft > 1
+  const on = row.scrollLeft < room - 1
+  row.dataset.more = back && on ? 'both' : back ? 'start' : on ? 'end' : ''
+}
+
+const markEdges = () => { for (const row of root.querySelectorAll?.(ROWS) ?? []) edges(row) }
 
 function render() {
   const y = window.scrollY
-  const was = root.querySelector('.filters')
-  if (was) chipsAt.x = was.scrollLeft
+  for (const sel of SIDEWAYS) {
+    const was = root.querySelector(sel)
+    if (was) rowsAt.x[sel] = was.scrollLeft
+  }
 
   const box = document.activeElement
   const caret = box?.id === 'cs-find' ? { start: box.selectionStart, end: box.selectionEnd } : null
@@ -2200,12 +2856,20 @@ function render() {
   renderSheet()
   if (S.view === 'trip') window.scrollTo(0, y)
 
-  // The row goes back where it was, unless this is a different page's row —
+  // Each row goes back where it was, unless this is a different page's row —
   // a new tab starts at the left, the same as it would if you had just arrived.
+  // Then each is asked which way it can still go, which is what the fade at its
+  // ends is drawn from.
   const here = `${S.view}:${S.camp ? 'camp' : S.tab}`
-  const row = root.querySelector('.filters')
-  if (row) row.scrollLeft = here === chipsAt.where ? chipsAt.x : 0
-  chipsAt = { where: here, x: row ? row.scrollLeft : 0 }
+  const kept = {}
+  for (const sel of SIDEWAYS) {
+    const row = root.querySelector(sel)
+    if (!row) continue
+    row.scrollLeft = here === rowsAt.where ? (rowsAt.x[sel] ?? 0) : 0
+    kept[sel] = row.scrollLeft
+    edges(row)
+  }
+  rowsAt = { where: here, x: kept }
 
   // The search box sits inside the list it filters, so every keystroke rebuilds
   // the box being typed in. The cursor is put back exactly where it was, which
@@ -2468,7 +3132,11 @@ document.addEventListener('click', async (ev) => {
       // A filter belongs to the list you set it on. Carrying "Shelter" onto the
       // food would be a list with most of the food missing and no reason on
       // screen for it. The same goes for whatever is in the search box.
-      S.filter = { kind: '', cat: '', hide: false, q: '' }
+      //
+      // The day goes with them. Eat and Plan both have the bar, so a Saturday
+      // set on one would silently follow you to the other — and the bar showing
+      // Saturday pressed is not the same as having asked for it there.
+      S.filter = { day: '', kind: '', cat: '', hide: false, q: '' }
       // Arriving is when the folds are allowed to move on their own.
       autoFold()
       render()
@@ -2485,6 +3153,15 @@ document.addEventListener('click', async (ev) => {
       window.scrollTo(0, 0)
       break
 
+    // Not a toggle: All is the way back out, and it is sitting at the left-hand
+    // end of the bar where the thumb already is. Pressing the day you are on to
+    // leave it would be the one control here that undoes itself.
+    case 'filter-day':
+      S.filter = { ...S.filter, day: el.dataset.value, cat: '' }
+      render()
+      window.scrollTo(0, 0)
+      break
+
     // Every chip is a toggle, so the way out of a filter is the chip that put
     // you in it.
     case 'filter-kind': {
@@ -2492,7 +3169,7 @@ document.addEventListener('click', async (ev) => {
       // The categories are a property of what is left after this chip, so one
       // that no longer applies lets go rather than emptying the page.
       const cats = new Set(pageParts().items.filter((i) => inKind(i, kind)).map(catOf))
-      S.filter = { kind, cat: cats.has(S.filter.cat) ? S.filter.cat : '' }
+      S.filter = { ...S.filter, kind, cat: cats.has(S.filter.cat) ? S.filter.cat : '' }
       render()
       window.scrollTo(0, 0)
       break
@@ -2557,6 +3234,64 @@ document.addEventListener('click', async (ev) => {
     case 'place':
       S.sheet = { kind: 'place', id: el.dataset.id }
       renderSheet()
+      break
+
+    case 'when':
+      S.sheet = { kind: 'when', id: el.dataset.id }
+      renderSheet()
+      break
+
+    // Both land straight away and leave the sheet open, the same as the
+    // shared/own switch: there is nothing to type, so seeing the chip come on is
+    // the whole of the confirmation.
+    //
+    // The days are a multiple choice over every row of the same thing, so one
+    // tap is one of four things depending on what is already true. Three of them
+    // are quiet; the fourth asks first, because it throws away somebody's word.
+    case 'on-day': {
+      const item = S.items.find((i) => i.id === el.dataset.id)
+      if (!item) break
+      const day = el.dataset.day
+      const kin = kinOf(item)
+      const there = kin.filter((i) => (i.day ?? '') === day)
+
+      if (!there.length) {
+        // Giving a thing its first day is a move, not a copy. Anybody who has
+        // already said they will bring it has said it about this, and starting
+        // a fresh unclaimed row would quietly drop their name.
+        const loose = kin.length === 1 && !(kin[0].day ?? '') ? kin[0] : null
+        if (loose) {
+          await mutate(() => api(`/items/${loose.id}`, { method: 'PATCH', body: { day } }))
+          break
+        }
+        // Otherwise a second row, standing on its own: nobody has agreed to
+        // bring Sunday's by having agreed to bring Friday's.
+        await mutate(() => api(`/trips/${S.trip.id}/items`, { method: 'POST', body: { items: [copyTo(item, day)] } }))
+        toast(day ? `Also on ${dayFull(day)}.` : 'Also on no particular day.')
+        break
+      }
+
+      // Taking the only day off does not remove the thing, it sets it loose —
+      // "we are having noodles, just not saying when" is an answer.
+      if (there.length === kin.length) {
+        await mutate(() => api(`/items/${there[0].id}`, { method: 'PATCH', body: { day: '' } }))
+        break
+      }
+
+      const spoken = there.filter(isClaimed)
+      if (spoken.length && !confirm(`${namesOn(spoken[0])} put their name to ${day ? dayFull(day) : 'the undated one'}. Take that day off anyway?`)) break
+      // The sheet is open on one of these rows, so if that is the one going, it
+      // is pointed at another before it goes and stays open on the same thing.
+      if (there.some((i) => i.id === S.sheet?.id)) {
+        const left = kin.find((i) => !there.includes(i))
+        if (left) S.sheet = { ...S.sheet, id: left.id }
+      }
+      for (const row of there) await mutate(() => api(`/items/${row.id}`, { method: 'DELETE' }))
+      break
+    }
+
+    case 'set-meal':
+      await mutate(() => api(`/items/${el.dataset.id}`, { method: 'PATCH', body: { category: el.dataset.cat } }))
       break
 
     case 'edit-notes':
@@ -2698,13 +3433,41 @@ document.addEventListener('click', async (ev) => {
         : 'On the group list now — everyone can see it.')
       break
 
-    // A segmented control inside a form is a hidden field with buttons on it.
-    // Poked in place rather than re-rendered, because a re-render would take
-    // whatever you had already typed into the boxes above it.
+    // A row of choices inside a form — the two-way switch, or the days — is a
+    // hidden field with buttons on it. Poked in place rather than re-rendered,
+    // because a re-render would take whatever you had already typed into the
+    // boxes above it.
     case 'pick': {
-      const box = el.closest('.segmented')
-      for (const b of box.querySelectorAll('.segmented__btn')) b.setAttribute('aria-pressed', b === el)
+      const box = el.closest('.segmented, .days')
+      for (const b of box.querySelectorAll('button')) b.setAttribute('aria-pressed', b === el)
       box.parentElement.querySelector(`input[name="${el.dataset.name}"]`).value = el.dataset.value
+      break
+    }
+
+    // The same row of pills, but you can hold down more than one of them. "Any
+    // day" is not a day, so it is the one that clears the rest — and it comes
+    // back on its own when you let go of the last day, because a row of pills
+    // with nothing pressed in it has stopped saying anything.
+    //
+    // The field is written from what is pressed rather than tracked alongside
+    // it, in the order the pills stand in, which is the order of the trip. So
+    // tapping Sunday and then Friday still adds Friday's first.
+    case 'pick-day': {
+      const box = el.closest('.days')
+      const any = box.querySelector('[data-value=""]')
+      if (el.dataset.value) {
+        el.setAttribute('aria-pressed', el.getAttribute('aria-pressed') !== 'true')
+      } else {
+        for (const b of box.querySelectorAll('button')) b.setAttribute('aria-pressed', b === any)
+      }
+      const picked = [...box.querySelectorAll('button[aria-pressed="true"]')]
+        .map((b) => b.dataset.value).filter(Boolean)
+      // Only where "Any day" means no day is it the state of having picked
+      // none. On food it means every day, which is a pick like any other, and
+      // having picked nothing is a pill row with nothing pressed: nobody has
+      // said yet, which is a thing the list can now show you.
+      if (any) any.setAttribute('aria-pressed', !picked.length)
+      box.parentElement.querySelector('input[name="day"]').value = picked.join(',')
       break
     }
 
@@ -2752,11 +3515,38 @@ document.addEventListener('click', async (ev) => {
       }))
       break
 
-    // Both open into whichever section you are looking at.
+    // Both open into whichever section you are looking at — and, if you are
+    // standing on one day of the trip, onto that day. Narrowing the list to
+    // Saturday is as clear a way of saying "this is Saturday's" as the picker
+    // in the sheet is.
+    // Standing on a day is as good as saying so, so the sheet arrives knowing —
+    // except on "No day", where standing there is saying the opposite, and the
+    // sheet should arrive with nothing picked rather than with a word in the
+    // field that is not a date.
     case 'add':
-      S.sheet = { kind: 'add', tab: S.tab, list: currentTab().lists[0], section: activeSection() }
+      S.sheet = {
+        kind: 'add', tab: S.tab, list: currentTab().lists[0],
+        section: activeSection(), day: seedDay(),
+      }
       renderSheet()
       break
+
+    // The same sheet, from something that names a day — an empty heading on the
+    // itinerary, or a day of the trip with nothing on it. It knows more than the
+    // plus at the foot of the page does, so it arrives with the answer already
+    // in rather than asking again for what you just pressed.
+    case 'add-to': {
+      const cat = el.dataset.cat
+      const tab = currentTab()
+      S.sheet = {
+        kind: 'add', tab: S.tab, section: activeSection(),
+        // Eat carries two lists, and a heading of drinks is not asking for food.
+        list: tab.lists.includes('drinks') && cat === 'Drinks' ? 'drinks' : tab.lists[0],
+        day: el.dataset.day, category: cat,
+      }
+      renderSheet()
+      break
+    }
 
     // The pool is worked out once, when the sheet opens, and kept: a list that
     // reshuffles under a finger mid-tap is how you add the wrong thing. Each
@@ -2871,13 +3661,15 @@ document.addEventListener('submit', async (ev) => {
     case 'add-item': {
       S.sheet = null
       renderSheet()
-      await mutate(() => api(`/trips/${S.trip.id}/items`, {
-        method: 'POST',
-        body: {
-          list: f.list, title: f.title, category: f.category || 'Other', qty: f.qty, note: f.note, kind: f.kind,
-          place: f.place, lat: f.lat, lon: f.lon,
-        },
-      }))
+      const one = {
+        list: f.list, title: f.title, category: f.category || 'Other', qty: f.qty, note: f.note, kind: f.kind,
+        place: f.place, lat: f.lat, lon: f.lon, time: f.time,
+      }
+      const days = daysPicked(f.day)
+      await mutate(() => api(`/trips/${S.trip.id}/items`, { method: 'POST', body: { items: perDay(one, days) } }))
+      // Standing on Saturday, two of those three landed somewhere you cannot
+      // see. Said once, rather than a sheet that stays open to prove it.
+      if (days.length > 1) toast(`Added on ${days.length} days.`)
       break
     }
 
@@ -2914,6 +3706,20 @@ document.addEventListener('submit', async (ev) => {
         body: { title: f.title, category: f.category || 'Other', qty: f.qty, note: f.note },
       }))
       toast('Saved.')
+      break
+    }
+
+    // The one thing on the when sheet you type rather than tap. The sheet stays
+    // open, because the day chips above it are where you were and where you may
+    // well be going next.
+    case 'save-time': {
+      const id = form.dataset.id
+      // What it says has to be true of the thing, not of the box: an empty field
+      // on a plan that never had a time has removed nothing.
+      const had = S.items.find((i) => i.id === id)?.time
+      const want = String(f.time ?? '').trim()
+      await mutate(() => api(`/items/${id}`, { method: 'PATCH', body: { time: want } }))
+      toast(want ? 'Saved.' : had ? 'Time removed.' : 'No time on it, then.')
       break
     }
 
@@ -3310,6 +4116,18 @@ document.addEventListener('focusin', (ev) => {
 // the box moves under it.
 document.addEventListener('scroll', () => { if (P.list.length) fitPlaces() }, { capture: true, passive: true })
 
+// The fade at the ends of a sideways row has to be told when the row moves, and
+// scroll does not bubble — hence the capture, which is how the line above hears
+// about it too. Passive: nothing here is going to cancel a swipe.
+document.addEventListener('scroll', (ev) => {
+  const row = ev.target
+  if (row?.matches?.(ROWS)) edges(row)
+}, { capture: true, passive: true })
+
+// And when the window changes shape, because a row that fitted in portrait is a
+// row that scrolls in landscape, and neither one has been touched.
+window.addEventListener('resize', markEdges)
+
 // The on-screen keyboard covers the foot of the page without the page ever being
 // told: the layout viewport keeps its full height, so a sheet pinned to the
 // bottom of it opens behind the keys. The visual viewport does know, so the gap
@@ -3351,7 +4169,15 @@ async function poll() {
 }
 
 setInterval(poll, 5000)
-document.addEventListener('visibilitychange', () => { if (!document.hidden) poll() })
+
+// Coming back to the tab asks both questions at once: what has changed on the
+// trip, and what has changed on the clock. A phone that was asleep at midnight
+// ran no timer, so this is where the day actually turns most of the time.
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) return
+  turnDay()
+  poll()
+})
 
 // A phone that walks back into signal should not wait out the rest of the tick.
 window.addEventListener('online', poll)
