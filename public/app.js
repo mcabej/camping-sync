@@ -6,14 +6,14 @@ const MEMBER_COLORS = ['#2F6B57', '#37698F', '#7A5AA6', '#8C6A2F', '#B23C6B', '#
 
 // Four places you do something, and no more. A tab bar is a promise that these
 // are the things the app is for, and it stops being one somewhere around five.
-// Camp rides alongside them in the bar but is not one of them — it is the trip
+// Trip rides alongside them in the bar but is not one of them — it is the trip
 // itself, not a fifth thing to keep on top of.
 //
 // Eat carries two lists. Food and drink are one shop, one cooler and one
 // question — "who is feeding us" — and keeping them apart cost a whole tab to
 // say something the categories already say.
 //
-// Mine is the one tab that cuts the other way: the lists answer "who is
+// My kit is the one tab that cuts the other way: the lists answer "who is
 // bringing what", and this answers "what am I carrying to the car", which is
 // the only question you have on the morning you leave.
 const TABS = [
@@ -24,14 +24,14 @@ const TABS = [
   // it is a board of ideas you vote for. "Plan" says that, and it keeps the
   // bar's rhythm — Pack, Eat, Plan — of naming the thing you came here to do.
   { id: 'do', lists: ['activities'], label: 'Plan', title: 'Plans' },
-  { id: 'mine', lists: [], label: 'Mine', title: 'Yours to pack' },
+  { id: 'mine', lists: [], label: 'My kit', title: 'Yours to pack' },
 ]
 
 // Where the trip is, who is coming, the invite link. It is a place you go, not
 // a panel you pull down over the list you were reading, so it sits in the bar
 // with the rest. It is kept out of TABS because it carries no list: everything
 // that counts, badges or filters a list would have to special-case it.
-const CAMP = { id: 'camp', lists: [], label: 'Camp', title: 'The trip' }
+const CAMP = { id: 'camp', lists: [], label: 'Trip', title: 'The trip' }
 
 const tabById = (id) => TABS.find((t) => t.id === id) ?? TABS[0]
 const currentTab = () => tabById(S.tab)
@@ -43,7 +43,7 @@ const isPlanTab = (tab) => tab.lists.includes('activities')
 const tabTitle = (tab) => (tab.id === 'mine' && goingHome() ? 'Yours to bring home' : tab.title)
 
 // An item belongs to a list, and the tab is whichever one shows that list. Not
-// the tab you are standing on: your own kit is edited from Mine, and Mine holds
+// the tab you are standing on: your own kit is edited from My kit, which holds
 // no list of its own to take the groups from.
 const tabForList = (list) => TABS.find((t) => t.lists.includes(list)) ?? TABS[0]
 
@@ -63,13 +63,14 @@ const SECTIONS = {
 }
 
 const ICONS = {
-  pack: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8h12l1 12H5L6 8Z"/><path d="M9 8V6a3 3 0 0 1 6 0v2"/></svg>',
+  // A rucksack, rather than the handled shopping bag that used to make Pack
+  // look like a second route into Eat.
+  pack: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 7V5.8a4 4 0 0 1 8 0V7"/><rect x="5" y="7" width="14" height="14" rx="3"/><path d="M8 13h8v5H8zM5 11H3.5v6H5M19 11h1.5v6H19"/></svg>',
   // A fork and a glass: the tab is one shop, and the icon has to say so.
   eat: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 3v7a2 2 0 0 0 4 0V3"/><path d="M6.5 10v11"/><path d="M13.2 4h7.6l-1.1 7.4a2.9 2.9 0 0 1-5.4 0L13.2 4Z"/><path d="M17 14.5V21"/><path d="M14.2 21h5.6"/></svg>',
-  // A compass, for the tab that asks "what are we doing with the day". The
-  // mountain that used to sit here now belongs to the tent next door, and two
-  // triangles in one bar told you nothing about either.
-  do: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m15.6 8.4-2.1 5.1-5.1 2.1 2.1-5.1 5.1-2.1Z"/></svg>',
+  // An itinerary: the page is where ideas become plans on particular days,
+  // not a compass that sends you somewhere else.
+  do: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5.5" width="17" height="15" rx="2.5"/><path d="M7.5 3.5v4M16.5 3.5v4M3.5 10h17M8 14h3M8 17h6"/></svg>',
   mine: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4h6v3H9V4Z"/><path d="M9 5.5H6.5A1.5 1.5 0 0 0 5 7v12.5A1.5 1.5 0 0 0 6.5 21h11a1.5 1.5 0 0 0 1.5-1.5V7a1.5 1.5 0 0 0-1.5-1.5H15"/><path d="m9 13.5 2 2 4.5-4.5"/></svg>',
   // A tent, not a globe. The button opens the trip — where it is, who is coming
   // — and a globe was the icon for "somewhere on Earth", which is nowhere.
@@ -242,7 +243,7 @@ const catOf = (it) => it.category || 'Other'
 const inKind = (it, kind) => !kind || (kind === 'own') === isOwn(it)
 
 // Which way the trip is facing. Off, the lists ask who is bringing what; on,
-// your own page asks what is back in the car. See the pack-down on the Camp tab.
+// your own page asks what is back in the car. See the pack-down on the Trip tab.
 const goingHome = () => !!S.trip?.going_home
 
 // The second set of ticks, for the way home. Kept apart from `packed` because
@@ -644,7 +645,7 @@ function ago(iso) {
 // ---- shared partials --------------------------------------------------------
 
 // The segments and the sentence for one list, in one place: the sticky header
-// draws them on dark canvas, the Camp tab draws all four of them on paper.
+// draws them on dark canvas, the Trip tab draws all four of them on paper.
 // `empty` is a caller's problem, because the two backgrounds want different ink.
 const seg = (flex, bg) => `<div class="coverage__seg" style="flex:${flex};background:${bg}"></div>`
 
@@ -771,11 +772,8 @@ function listTools(shown) {
 
 function filterBar(all, kinds, count) {
   const f = activeFilter()
-  // Nothing to narrow and no halves to choose between is nothing to say. An
-  // empty list that does have two halves keeps its chips, because a trip now
-  // starts with nothing on it and this is the way to the personal side of it —
-  // "What am I missing?" offers whichever half you are standing in.
-  if (!all.length && !kinds) return ''
+  // An empty page has nothing to narrow; let its empty state own the screen.
+  if (!all.length) return ''
 
   const kindChip = (key) => {
     const [n, yours] = count(key)
@@ -1313,7 +1311,7 @@ function dayBar() {
 }
 
 // One height, always: which trip you are on, and the two facts that identify
-// it. Nothing here is a control any more — the way to the trip page is the Camp
+// it. Nothing here is a control any more — the way to the trip page is the Trip
 // tab — so the header is purely a sign saying where you are standing.
 function topbar() {
   const tab = currentTab()
@@ -1592,7 +1590,7 @@ function minePage() {
 }
 
 // The dates are the only thing on the trip nobody has to be told twice, so the
-// Camp tab leads with the one number they add up to.
+// Trip tab leads with the one number they add up to.
 function countdown(trip) {
   const day = (s) => { const d = new Date(`${s}T12:00:00`); return Number.isNaN(+d) ? null : d }
   const start = trip.start_date ? day(trip.start_date) : null
@@ -1659,7 +1657,7 @@ const itemHref = (item) => mapsLink(item.lat, item.lon, item.place)
 
 // ---- weather ----------------------------------------------------------------
 
-// A forecast is the one thing on the Camp tab nobody has to fill in: the trip
+// A forecast is the one thing on the Trip tab nobody has to fill in: the trip
 // already knows where it is and when it is. What it is worth is not the numbers
 // but what they change — a wet Saturday is the reason a tarp exists — so the
 // card ends in things you can put on the list in one tap.
@@ -1699,7 +1697,7 @@ const wxKey = (t) => (t && t.lat != null && t.lon != null && t.start_date
   ? `${t.lat},${t.lon},${t.start_date},${t.end_date || t.start_date}`
   : '')
 
-// Only ever asked once per question, and never at all until the Camp tab is on
+// Only ever asked once per question, and never at all until the Trip tab is on
 // screen — see the tail of render(). The answer is thrown away when the question
 // changes, which is what stops last week's forecast sitting under a new pin.
 function wantWeather() {
@@ -1957,11 +1955,11 @@ function dietGroups() {
 // people: the moment it matters is the moment somebody says they will do Saturday
 // dinner. Drawn only when there is something to say — a heading over an empty
 // list would be on every Eat tab forever, and the way to fill it in is on the
-// Camp tab beside the person it is about.
+// Trip tab beside the person it is about.
 // Four rows is about the most this is worth where it sits over the claim
 // buttons: a trip where everybody has something to avoid would otherwise push
 // the names — the only reason that sheet is open — off the bottom of it. So the
-// rest fold away behind a count, the way the tips and the feed do on Camp.
+// rest fold away behind a count, the way the tips and the feed do on Trip.
 // Nothing is dropped quietly: the heading says how many there are first.
 const DIET_ROWS = 4
 
@@ -2027,7 +2025,7 @@ function dietChip() {
 function sheetDiets() {
   return sheetShell({
     title: 'Dietary needs',
-    blurb: 'What everybody has said they avoid. Add or change your own beside your name on the Camp tab.',
+    blurb: 'What everybody has said they avoid. Add or change your own beside your name on the Trip tab.',
     body: dietTable({ eyebrow: 'At the table', sheet: 'plain' }),
   })
 }
@@ -2219,7 +2217,7 @@ function tabFlag(tab) {
 
 function tabbar() {
   return `
-    <nav class="tabbar" aria-label="Sections">
+    <nav class="tabbar" aria-label="Trip sections">
       ${TABS.map((t) => {
         const here = !S.camp && S.tab === t.id
         // No badge on the tab you are standing on — the page behind it is
@@ -2230,15 +2228,19 @@ function tabbar() {
         // colour instead, and the orange keeps saying only the one thing.
         const flag = n ? `<span class="tabbar__flag"${t.id === 'mine'
           ? ` style="background:${colorOf(meMember())}"` : ''}>${n > 9 ? '9+' : n}</span>` : ''
+        const flagLabel = n ? `<span class="sr-only">${n} ${t.id === 'mine'
+          ? (goingHome() ? 'items left to bring home' : 'items left to pack')
+          : `unclaimed item${n === 1 ? '' : 's'}`}</span>` : ''
         return `<button class="tabbar__btn" data-act="tab" data-tab="${t.id}"
                   ${here ? 'aria-current="page"' : ''}>
-                  <span class="tabbar__icon">${ICONS[t.id]}${flag}</span>
-                  <span>${t.label}</span>
+                  <span class="tabbar__icon" aria-hidden="true">${ICONS[t.id]}${flag}</span>
+                  <span class="tabbar__label">${t.label}</span>
+                  ${flagLabel}
                 </button>`
       }).join('')}
       <button class="tabbar__btn" data-act="camp" ${S.camp ? 'aria-current="page"' : ''}>
-        <span class="tabbar__icon">${ICONS.camp}</span>
-        <span>${CAMP.label}</span>
+        <span class="tabbar__icon" aria-hidden="true">${ICONS.camp}</span>
+        <span class="tabbar__label">${CAMP.label}</span>
       </button>
     </nav>`
 }
@@ -2308,7 +2310,7 @@ function sheetItem(s) {
       body: `${kindSwitch}
         <button class="pick" data-act="own" data-id="${item.id}" aria-pressed="${isMine(item)}">
           <span class="pick__swatch" style="background:${colorOf(me)}"></span>
-          <span class="pick__main"><span class="pick__title">Mine is packed</span>
+          <span class="pick__main"><span class="pick__title">My kit is packed</span>
             <span class="pick__note">${isMine(item) ? 'Ticked off.' : 'Not yet.'}</span></span>
           <span class="pick__tick">${ICONS.tickGreen}</span>
         </button>`,
@@ -2522,7 +2524,7 @@ function mealPills(item) {
 // food into a list of meals.
 //
 // A trip with no dates has nothing to offer here, and says so rather than
-// showing an empty row of chips: the fix is two fields away on the Camp tab.
+// showing an empty row of chips: the fix is two fields away on the Trip tab.
 function sheetWhen(s) {
   const item = S.items.find((i) => i.id === s.id)
   if (!item) return ''

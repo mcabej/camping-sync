@@ -20,7 +20,7 @@ until somebody fixes that.
   never an unlabelled checkbox sitting next to an unanswered question.
 - **What am I missing?** — a catalogue of ~90 things people usually bring, each
   with a note explaining why, filtered to hide what you already have.
-- **The Camp tab** — the whole trip on one screen: days to go, all four lists
+- **The Trip tab** — the whole trip on one screen: days to go, all four lists
   reporting their coverage at once (tap one to go there), the notes everyone
   needs (gate code, meeting point) shown as text rather than buried in a form,
   and who has packed what of what they claimed.
@@ -44,7 +44,7 @@ until somebody fixes that.
   group by day, which turns that tab into an itinerary. Optional everywhere, and
   invisible until the trip has dates.
 - **Weather** — the trip already knows where and when it is, so the forecast
-  needs nothing from anybody. Days on the Camp tab, and what they mean for the
+  needs nothing from anybody. Days on the Trip tab, and what they mean for the
   list offered as one-tap adds: a wet Saturday is the reason a tarp exists.
 - **Dietary needs** — one line per person, shown at the top of the food list and
   again at the moment somebody takes on Saturday dinner, rather than buried on a
@@ -182,7 +182,7 @@ nothing to offer, so that is checked at boot and warned about rather than
 discovered by somebody wondering where the tarp button went.
 
 The client asks once per question — the pin and the dates — and only while the
-Camp tab is on screen; move the trip and the old answer is dropped rather than
+Trip tab is on screen; move the trip and the old answer is dropped rather than
 left sitting under a new pin. Anything already on the list is not offered again.
 
 ### Days
@@ -425,7 +425,7 @@ Saturday — and none of it is drawn at all until the trip has a `start_date`,
 since a strip with no days in it is worse than no strip.
 
 Since no heading says the day, the row does: a dated row carries a chip reading
-"Fri 14 · 08:15", and the Mine tab flattens the lists so its rows carry it too —
+"Fri 14 · 08:15", and the My kit tab flattens the lists so its rows carry it too —
 Saturday's dinner is a different armful of the car from Friday's. Press a day and
 the chip drops back to the hour, because the pressed tab has already said the
 rest. Eat's headings sort Breakfast, Lunch, Dinner rather than by whatever was
@@ -443,7 +443,7 @@ nut allergy is as often whoever booked the pitch as whoever has it — so the fe
 names the author when the line is not their own. It shows in the two places the
 question is live: at the head of the Eat list, and inside the sheet for a food or
 drink item, where somebody is deciding whether to take Saturday dinner on. The
-way to fill it in sits beside the person it is about, on the Camp tab, and the
+way to fill it in sits beside the person it is about, on the Trip tab, and the
 prompt is on every row whether or not it has been answered — otherwise the field
 is only findable by the people who need it least.
 
@@ -464,10 +464,10 @@ who brought what. A group thing is back once *everybody* who carried a piece of
 it says so; a personal item's stows are cut to the viewer exactly as its packing
 ticks are, for the same reason.
 
-On the way home the Mine tab keeps its shape and changes its question — the tick
+On the way home the My kit tab keeps its shape and changes its question — the tick
 stays in the same place with the same tap, and only the answer it records moves.
 There is no claiming step left: by Sunday, whoever brought a thing is whoever has
-to find it again. The Camp card counts what is still out there and who it is
+to find it again. The Trip card counts what is still out there and who it is
 waiting on. It says out loud that other people's personal kit is not in that
 number, rather than quietly reporting a figure that is only most of the answer.
 None of it reaches the activity feed: a pack-down is fifty ticks in ten minutes,

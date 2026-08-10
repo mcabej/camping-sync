@@ -1234,15 +1234,15 @@ button.wx__day:hover .wx__wet, .wx__row--open .wx__wet { color: var(--ink); }
 .tabbar__btn {
   flex: 1; min-width: 0; height: var(--tabbar-h);
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
-  font-size: 11px; font-weight: 600; color: var(--ink-faint);
+  font-size: 11px; font-weight: 600; color: var(--ink-soft);
   border-top: 2.5px solid transparent; margin-top: -1.5px;
   transition: color .12s ease;
 }
 /* A wrapped label would push its icon off centre and stagger the whole bar,
    which is worse than a label that runs close to the edge. Five buttons leave
-   ~64px each on the narrowest phone and no label here runs past four
-   characters, so this is a guard rather than a working constraint. */
-.tabbar__btn > span:last-child { white-space: nowrap; }
+   ~64px each on the narrowest phone; even “My kit” fits, so this is a guard
+   rather than a working constraint. */
+.tabbar__label { white-space: nowrap; }
 .tabbar__btn svg { width: 21px; height: 21px; }
 .tabbar__btn[aria-current="page"] { color: var(--forest-deep); border-top-color: var(--blaze); }
 
