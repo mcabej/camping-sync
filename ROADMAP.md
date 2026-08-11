@@ -27,7 +27,10 @@ item link keeps "add what it cost" beside a claim without making claims the
 money model. One explicit currency lives on the trip, and the Settle up page
 nets the exact minor-unit balances into payments while the Trip tab keeps a
 compact summary. Odd pennies are allocated in stable member order and called
-out wherever rounding was needed.
+out wherever rounding was needed. Those netted lines can then be settled:
+recording a repayment nets it in with the expenses rather than ticking the line
+off, because the line is a calculation the next expense will redraw, and a part
+payment has to outlive it.
 
 See the README's *Settle up* bullet and data-model section.
 

@@ -115,7 +115,7 @@ const S = {
   // and whatever you typed into the search box. All empty means everything,
   // which is where every tab starts — and where it goes back to when you leave.
   filter: { day: '', kind: '', cat: '', hide: false, q: '' },
-  trip: null, members: [], items: [], expenses: [], events: [],
+  trip: null, members: [], items: [], expenses: [], payments: [], events: [],
   // Google proves one user across devices; a member is still their place on one
   // particular trip. Unlinked local members remain usable while they migrate.
   auth: { loaded: false, clientId: '', devBypass: false, user: null, memberships: [] },
@@ -281,6 +281,7 @@ function absorb(state) {
   S.members = state.members
   S.items = state.items
   S.expenses = state.expenses ?? []
+  S.payments = state.payments ?? []
   S.events = state.events
   S.rev = state.trip.rev
   render()
@@ -289,13 +290,17 @@ function absorb(state) {
 // Says whether it got through, because a form that closes on the way out has to
 // stay open when the request does not: what you typed is in the DOM and nowhere
 // else, and nothing rebuilds the page on the failing path.
-async function mutate(fn) {
+// A refusal some callers have to read rather than just report — a spent
+// idempotency key says something about what to send next — arrives at `onError`
+// on the way to the toast.
+async function mutate(fn, onError) {
   if (S.busy) return false
   S.busy = true
   try {
     absorb(await fn())
     return true
   } catch (err) {
+    onError?.(err)
     toast(err.message)
     return false
   } finally {
@@ -546,10 +551,14 @@ function setChatConnection(state) {
 
 function showChatChanges() {
   if (S.camp !== 'room') return
-  if (document.activeElement?.id === 'chat-text') {
-    // Keep the textarea itself in place while an IME owns it, but refresh its
-    // sibling thread immediately. Replacing the focused textarea can lose a
-    // composing word or dismiss the phone keyboard.
+  // Keep the textarea itself in place while an IME owns it, or while the message
+  // it just sent is still in flight, and refresh its sibling thread instead.
+  // Replacing the composer can lose a composing word or dismiss the phone
+  // keyboard — and mid-send it also strands the send that is still running on a
+  // form the room has already thrown away, leaving the visible one holding the
+  // text with its button stuck on the ellipsis. Your own message comes back down
+  // the socket before the POST answers, so this is the ordinary case, not a race.
+  if (S.chat.busy || document.activeElement?.id === 'chat-text') {
     chatNeedsRender = true
     drawChatThread()
     return
@@ -587,13 +596,29 @@ function drawChatThread() {
 // and re-enabled by hand, and the thread beside it is redrawn the same way an
 // incoming message redraws it. Everything else the room owes a redraw is left to
 // the one that comes on blur.
-function clearComposer(form) {
-  const box = form?.querySelector?.('#chat-text')
-  if (!box) return false
-  box.value = ''
+// It asks the room for the composer rather than being handed the form that was
+// submitted: a redraw between the tap and the answer leaves that node detached,
+// and emptying one the reader cannot see is worse than not emptying anything.
+//
+// And it empties it only if what is in there is still the message that was sent.
+// Keeping the keyboard up through a send means the next sentence can be started
+// before the last one lands — which is the point — so a slow answer coming back
+// to an empty box is the ordinary case, and coming back to a started one must
+// not be a sentence deleted.
+function clearComposer(sent = null) {
+  const box = root.querySelector?.('#chat-text')
+  // No composer on screen to read, so the message that has just landed is the
+  // only thing the draft could still be holding, and it is spent.
+  if (!box) { S.chat.draft = ''; return false }
+  if (sent === null || box.value === sent) {
+    box.value = ''
+    S.chat.draft = ''
+  } else {
+    S.chat.draft = box.value
+  }
   fitChatBox(box)
   setCampMentionOpen(box, false)
-  const send = form.querySelector('button[type="submit"]')
+  const send = box.form?.querySelector('button[type="submit"]')
   if (send) {
     send.disabled = false
     send.setAttribute('aria-label', 'Send message')
@@ -818,8 +843,14 @@ const expenseForClaim = (itemId, memberId) => S.expenses.find((expense) => (
 // Each expense says who shared it. A custom split carries exact shares; an
 // equal one divides integer minor units and gives leftover pennies to the
 // first names in the trip's stable order. The card says so.
-function settlement(expenses = S.expenses, members = S.members) {
-  if (!members.length) return { expenses: 0, total: 0, rounded: false, transfers: [] }
+//
+// Payments are the other half of the ledger: money already handed over, moving
+// one balance towards zero and the other back down. They net in with the
+// expenses rather than crossing a transfer off, because the transfers are only
+// ever a suggestion of the fewest payments that would square the trip — the
+// next expense redraws them, and a repayment made yesterday still counts.
+function settlement(expenses = S.expenses, members = S.members, payments = S.payments) {
+  if (!members.length) return { expenses: 0, total: 0, rounded: false, transfers: [], settled: 0 }
   const known = new Map(members.map((m) => [m.id, m]))
   const balances = new Map(members.map((m) => [m.id, 0]))
   let count = 0, total = 0, rounded = false
@@ -852,6 +883,17 @@ function settlement(expenses = S.expenses, members = S.members) {
     })
   }
 
+  let settledSum = 0
+  for (const payment of payments ?? []) {
+    const amount = Number(payment.amount)
+    if (!Number.isSafeInteger(amount) || amount <= 0) continue
+    if (!known.has(payment.from_member) || !known.has(payment.to_member)) continue
+    if (payment.from_member === payment.to_member) continue
+    settledSum += amount
+    balances.set(payment.from_member, balances.get(payment.from_member) + amount)
+    balances.set(payment.to_member, balances.get(payment.to_member) - amount)
+  }
+
   const debtors = members.map((member) => ({ member, amount: -(balances.get(member.id) ?? 0) }))
     .filter((x) => x.amount > 0)
   const creditors = members.map((member) => ({ member, amount: balances.get(member.id) ?? 0 }))
@@ -866,7 +908,7 @@ function settlement(expenses = S.expenses, members = S.members) {
     if (!debtors[owing].amount) owing++
     if (!creditors[owed].amount) owed++
   }
-  return { expenses: count, total, rounded, transfers }
+  return { expenses: count, total, rounded, transfers, settled: settledSum }
 }
 
 // The same list with the people filled in, and anyone who has left the trip
@@ -1152,9 +1194,16 @@ function tillMidnight() {
 // Somebody typing is left alone, the same as the poll leaves them alone. The day
 // has still turned by then — it is written down before the page is asked to
 // redraw — so the next thing they do shows the new one.
+// Whether somebody is in the middle of answering something. A dropdown counts:
+// it is held open over the page it is part of, and rebuilding that page shuts it
+// under the finger on its way to an answer. The sheet keeps what has already
+// been picked either way — see unsaved() — but this is the difference between
+// keeping an answer and not interrupting one.
+const isEditing = () => !!document.activeElement?.matches?.('input, textarea, select')
+
 function turnDay(now) {
   if (!dayTurned(now)) return
-  if (document.activeElement?.matches('input, textarea')) return
+  if (isEditing()) return
   render()
 }
 
@@ -2995,7 +3044,7 @@ function settleDoor() {
 
 function settlePage() {
   const settled = settlement()
-  if (!settled.expenses) {
+  if (!settled.expenses && !S.payments.length) {
     return `
       <main class="page settle-page" aria-labelledby="settle-up-title">
         <section class="settle-empty">
@@ -3009,7 +3058,8 @@ function settlePage() {
   return `
     <main class="page settle-page" aria-labelledby="settle-up-title">
       <div class="settle-page__intro">
-        <p><b>${moneyText(settled.total)}</b> recorded across ${settled.expenses} ${settled.expenses === 1 ? 'expense' : 'expenses'}.</p>
+        <p><b>${moneyText(settled.total)}</b> recorded across ${settled.expenses} ${settled.expenses === 1 ? 'expense' : 'expenses'}.${
+          settled.settled ? ` <b>${moneyText(settled.settled)}</b> has been paid back.` : ''}</p>
         <button class="btn btn--primary" data-act="new-expense">${ICONS.plus} Add expense</button>
       </div>
 
@@ -3024,11 +3074,37 @@ function settlePage() {
               <li class="settle__row">
                 <span><b>${esc(move.from.name)}</b> owes <b>${esc(move.to.name)}</b></span>
                 <strong class="mono">${moneyText(move.amount)}</strong>
+                <button class="btn btn--sm" data-act="settle-transfer" data-from="${move.from.id}" data-to="${move.to.id}" data-amount="${move.amount}">Mark paid</button>
               </li>`).join('')}
-          </ul>` : '<p class="settle__square">Everyone is square.</p>'}
+          </ul>` : `<p class="settle__square">Everyone is square.</p>`}
+        ${S.members.length > 1 ? `
+          <div class="settle__acts">
+            <button class="btn btn--quiet btn--sm" data-act="settle-transfer">Record a payment</button>
+          </div>` : ''}
         ${settled.rounded ? '<p class="settle__round">Rounding is to the penny. Any extra penny shares go to the first names shown under Who’s coming.</p>' : ''}
       </section>
 
+      ${S.payments.length ? `
+        <section class="settle-section" aria-labelledby="settle-paid-title">
+          <div class="settle-section__head">
+            <h2 id="settle-paid-title">Paid back</h2>
+            <span>${moneyText(settled.settled)}</span>
+          </div>
+          <ul class="settle">
+            ${S.payments.map((payment) => {
+              const from = memberById(payment.from_member), to = memberById(payment.to_member)
+              return `<li class="settle__row">
+                <span><b>${esc(from?.name || 'someone')}</b> paid <b>${esc(to?.name || 'someone')}</b>${
+                  payment.note ? ` · ${esc(payment.note)}` : ''}</span>
+                <strong class="mono">${moneyText(payment.amount)}</strong>
+                <button class="btn btn--sm btn--quiet" data-act="delete-payment" data-payment="${payment.id}">
+                  Undo</button>
+              </li>`
+            }).join('')}
+          </ul>
+        </section>` : ''}
+
+      ${S.expenses.length ? `
       <section class="settle-section" aria-labelledby="settle-expenses-title">
         <div class="settle-section__head">
           <h2 id="settle-expenses-title">Expenses</h2>
@@ -3047,7 +3123,7 @@ function settlePage() {
             </li>`
           }).join('')}
         </ul>
-      </section>
+      </section>` : ''}
     </main>`
 }
 
@@ -3720,7 +3796,7 @@ function sheetExpense(s) {
       ? `${carrier.name} is bringing this. Choose who paid and who shares the cost.`
       : 'Choose only the people who share this cost — for petrol, that may be one car rather than the whole trip.',
     body: `
-      <form class="expense-form" data-act="save-expense" data-split="${split}"${expense ? ` data-expense="${expense.id}"` : ''}${item ? ` data-id="${item.id}"` : ''}${carrier ? ` data-member="${carrier.id}"` : ''}>
+      <form class="expense-form" id="expense-form" data-act="save-expense" data-split="${split}"${expense ? ` data-expense="${expense.id}"` : ''}${item ? ` data-id="${item.id}"` : ''}${carrier ? ` data-member="${carrier.id}"` : ''}>
         <label class="field"><span>What was it for?</span>
           <input name="description" value="${esc(description)}" maxlength="120" required
                  ${description ? '' : 'autofocus '}placeholder="Petrol"></label>
@@ -3766,11 +3842,50 @@ function sheetExpense(s) {
           <p class="expense-split__total" data-share-total aria-live="polite">${split === 'custom'
             ? `Shares add up to ${moneyText(expense.amount)}.` : ''}</p>
         </fieldset>
-        <button class="btn btn--primary btn--wide" type="submit">Save expense</button>
       </form>`,
+    // Saving is the thing you came to do, so it sits in the foot where the sheet
+    // cannot scroll it out of reach — and on an expense that already exists it
+    // shares that row with removing it, rather than hiding a screen further up.
     foot: expense
-      ? `<button class="btn btn--quiet btn--wide" data-act="delete-expense" data-expense="${expense.id}">Remove expense</button>`
-      : '',
+      ? `<div class="sheet__acts">
+          <button class="btn btn--primary" type="submit" form="expense-form">Save</button>
+          <button class="btn btn--quiet" data-act="delete-expense" data-expense="${expense.id}">Remove</button>
+        </div>`
+      : `<button class="btn btn--primary btn--wide" type="submit" form="expense-form">Save expense</button>`,
+  })
+}
+
+// Handing the money over. The page can suggest the payment — press Mark paid on
+// a line and it arrives filled in — but the amount stays editable, because half
+// of these get settled with a round number and a "we'll call it even", and a
+// part payment has to be sayable.
+function sheetPayment(s) {
+  if (S.members.length < 2) return ''
+  const suggested = memberById(s.from)
+  const payee = memberById(s.to)
+  const from = suggested?.id || S.me || S.members[0].id
+  const to = payee?.id || S.members.find((member) => member.id !== from)?.id || ''
+  const amount = Number(s.amount) > 0 ? minorInput(Number(s.amount)) : ''
+  const people = (chosen) => S.members
+    .map((member) => `<option value="${member.id}"${member.id === chosen ? ' selected' : ''}>${
+      esc(member.name)}${member.id === S.me ? ' (you)' : ''}</option>`).join('')
+
+  return sheetShell({
+    title: 'Record a payment',
+    blurb: 'Money that has already changed hands — cash, a bank transfer, a round at the pub. It comes off what is still owed.',
+    body: `
+      <form class="payment-form" id="payment-form" data-act="save-payment">
+        <label class="field"><span>Who paid?</span>
+          <select name="from">${people(from)}</select></label>
+        <label class="field"><span>Who did they pay?</span>
+          <select name="to">${people(to)}</select></label>
+        <label class="field"><span>How much (${esc(tripCurrency())})</span>
+          <input name="amount" value="${esc(amount)}" inputmode="decimal" required autofocus
+                 placeholder="0.00" pattern="[0-9]+([.][0-9]{1,2})?"></label>
+        <label class="field"><span>Note (optional)</span>
+          <input name="note" maxlength="120" placeholder="Bank transfer"></label>
+      </form>`,
+    foot: `<button class="btn btn--primary btn--wide" type="submit" form="payment-form">Record payment</button>`,
   })
 }
 
@@ -4036,6 +4151,13 @@ function unsaved(sheet) {
   for (const f of sheet.querySelectorAll('input[name], textarea[name]')) {
     if (f.type !== 'checkbox' && f.type !== 'radio' && f.value !== f.defaultValue) held.set(f.name, f.value)
   }
+  // A dropdown is answered as deliberately as a box is typed in, and picking one
+  // is not a keystroke that a redraw five seconds later gets to take back. Its
+  // "as rendered" value is whichever option carried the selected attribute.
+  for (const f of sheet.querySelectorAll('select[name]')) {
+    const asDrawn = [...f.options].find((option) => option.defaultSelected)?.value ?? f.options[0]?.value
+    if (f.value !== asDrawn) held.set(f.name, f.value)
+  }
   return held
 }
 
@@ -4049,7 +4171,7 @@ function caretIn(sheet) {
 }
 
 function restore(sheet, typed, at) {
-  for (const f of sheet.querySelectorAll('input[name], textarea[name]')) {
+  for (const f of sheet.querySelectorAll('input[name], textarea[name], select[name]')) {
     if (typed.has(f.name)) f.value = typed.get(f.name)
     if (at && f.name === at.name) {
       f.focus()
@@ -4063,7 +4185,7 @@ function renderSheet() {
   const map = {
     item: sheetItem, edit: sheetEdit, add: sheetAdd, suggest: sheetSuggest,
     place: sheetPlace, when: sheetWhen, diet: sheetDiet, diets: sheetDiets,
-    expense: sheetExpense, currency: sheetCurrency,
+    expense: sheetExpense, payment: sheetPayment, currency: sheetCurrency,
   }
   const html = map[S.sheet.kind]?.(S.sheet) ?? ''
   const sig = `${S.sheet.kind}:${S.sheet.expenseId ?? S.sheet.id ?? ''}:${S.sheet.member ?? ''}`
@@ -4719,6 +4841,34 @@ document.addEventListener('click', async (ev) => {
       renderSheet()
       break
 
+    // Straight off a "Sam owes Alex £12" line it arrives filled in; from the
+    // button under the list it arrives blank, for the payment nobody suggested.
+    //
+    // The retry key is made here, with the sheet, and lives as long as it does.
+    // A field with no signal in it cannot tell a lost answer from a refused
+    // write, so pressing Record payment again has to be able to mean "the one I
+    // already sent" rather than a second handover of the same money.
+    case 'settle-transfer':
+      S.sheet = {
+        kind: 'payment', clientId: newMessageId(),
+        from: el.dataset.from || '', to: el.dataset.to || '',
+        amount: el.dataset.amount || '',
+      }
+      renderSheet()
+      break
+
+    case 'delete-payment': {
+      const payment = S.payments.find((row) => row.id === el.dataset.payment)
+      if (!payment) break
+      const from = memberById(payment.from_member)?.name || 'someone'
+      const to = memberById(payment.to_member)?.name || 'someone'
+      if (confirm(`Undo ${from} paying ${to} ${moneyText(payment.amount)}?`)
+          && await mutate(() => api(`/payments/${payment.id}`, { method: 'DELETE' }))) {
+        toast('Payment removed.')
+      }
+      break
+    }
+
     case 'delete-expense': {
       const expense = S.expenses.find((row) => row.id === el.dataset.expense)
       if (expense && confirm(`Remove "${expense.description}" from Settle up?`)
@@ -5182,7 +5332,11 @@ document.addEventListener('submit', async (ev) => {
     }
 
     case 'send-message': {
-      const text = String(f.text ?? '').trim()
+      // Both, because they are answers to different questions: the trimmed one
+      // is the message, and the raw one is what the box will still be holding
+      // afterwards if nobody has typed over it.
+      const typed = String(f.text ?? '')
+      const text = typed.trim()
       if (!text || S.chat.busy || S.chat.tripId !== S.trip.id) break
       const tripId = S.trip.id
       const pending = S.chat.pending?.text === text
@@ -5215,11 +5369,15 @@ document.addEventListener('submit', async (ev) => {
           toast('Camp already has a few requests queued. Try again shortly.')
         }
         S.chat.pending = null
-        S.chat.draft = ''
         S.chat.busy = false
+        // Emptied first, so that whatever the draft is left holding — nothing,
+        // or the sentence started while this was in flight — is what a redraw
+        // would put back in the box.
+        //
         // Whether Camp is there changes the composer itself — its label, its
         // placeholder, the mention list beside it — so that one needs the redraw.
-        if (S.chat.assistantAvailable !== wasAvailable || !clearComposer(form)) {
+        const emptied = clearComposer(typed)
+        if (S.chat.assistantAvailable !== wasAvailable || !emptied) {
           render({ chatBottom: true })
         }
         root.querySelector('#chat-text')?.focus()
@@ -5350,6 +5508,27 @@ document.addEventListener('submit', async (ev) => {
       S.sheet = null
       renderSheet()
       toast('Expense saved.')
+      break
+    }
+
+    case 'save-payment': {
+      if (f.from === f.to) { toast('A payment needs two different people.'); break }
+      const sheet = S.sheet
+      if (sheet?.kind !== 'payment') break
+      sheet.clientId ||= newMessageId()
+      const sent = await mutate(
+        () => api(`/trips/${S.trip.id}/payments`, {
+          method: 'POST',
+          body: { clientId: sheet.clientId, from: f.from, to: f.to, amount: f.amount, note: f.note },
+        }),
+        // The key named one exact handover and this is a different one, so it
+        // needs a key of its own. The next press is then an ordinary send.
+        (err) => { if (err.payload?.conflict === 'payment-retry') sheet.clientId = newMessageId() },
+      )
+      if (!sent) break
+      S.sheet = null
+      renderSheet()
+      toast('Payment recorded.')
       break
     }
 
@@ -5725,6 +5904,15 @@ document.addEventListener('keydown', (ev) => {
   }
 })
 
+// Tapping send hands focus to the button, and the phone takes the keyboard away
+// with it — the room grows by a few hundred pixels and shrinks again when focus
+// comes back after the send, which is the flinch you see. Refusing the focus
+// leaves the caret in the textarea and the keyboard where it was; the click
+// behind this still submits the form.
+document.addEventListener('mousedown', (ev) => {
+  if (ev.target.closest?.('.chat__send')) ev.preventDefault()
+})
+
 // mousedown rather than click: the box must not lose focus (and close the menu)
 // before the tap has had a chance to say which place it landed on.
 document.addEventListener('mousedown', (ev) => {
@@ -5826,7 +6014,7 @@ window.addEventListener('popstate', boot)
 
 async function pollMessages() {
   if (S.camp !== 'room' || S.chat.tripId !== S.trip.id || S.chat.loading
-      || S.chat.busy || S.chat.error || document.activeElement?.matches('input, textarea')) return
+      || S.chat.busy || S.chat.error || isEditing()) return
   const tripId = S.trip.id
   try {
     if (await syncNewMessages(tripId)) showChatChanges()
@@ -5840,7 +6028,7 @@ async function poll() {
     const { rev } = await api(`/trips/${S.trip.id}/rev`)
     if (rev !== S.rev) {
       // Don't yank the page out from under someone mid-edit.
-      if (document.activeElement?.matches('input, textarea')) return
+      if (isEditing()) return
       absorb(await api(`/trips/${S.trip.id}`))
     }
   } catch { /* offline; try again next tick */ }

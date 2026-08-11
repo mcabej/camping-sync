@@ -45,6 +45,36 @@ try {
   )), [{ description: 'Firewood', amount: 1001, paid_by: 'legacy', participants: ['legacy'] }])
   assert.equal(state.expenses[0].shares, null)
 
+  // Repayments ride along with the expenses, and only to somebody the trip
+  // recognises. A payment to yourself is not a payment.
+  db.prepare(`INSERT INTO members (id, trip_id, name, created_at) VALUES ('other', 'trip', 'Ali', ?)`).run(ts)
+  db.prepare(`INSERT INTO payments (id, trip_id, from_member, to_member, amount, note, created_at)
+              VALUES ('paid', 'trip', 'other', 'legacy', 500, 'Cash', ?)`).run(ts)
+  assert.throws(() => db.prepare(`INSERT INTO payments (id, trip_id, from_member, to_member, amount, created_at)
+                                  VALUES ('self', 'trip', 'legacy', 'legacy', 500, ?)`).run(ts))
+  assert.throws(() => db.prepare(`INSERT INTO payments (id, trip_id, from_member, to_member, amount, created_at)
+                                  VALUES ('free', 'trip', 'other', 'legacy', 0, ?)`).run(ts))
+  assert.deepEqual(getTripState('trip', 'legacy').payments.map(({ from_member, to_member, amount, note }) => (
+    { from_member, to_member, amount, note }
+  )), [{ from_member: 'other', to_member: 'legacy', amount: 500, note: 'Cash' }])
+  // A link opened by somebody who has not joined does not come with the ledger.
+  assert.deepEqual(getTripState('trip', null).payments, [])
+
+  // The retry key, in the exact shape the route writes it: sending the same
+  // payment twice records it once. The conflict target has to name the index's
+  // WHERE clause too, or a partial index refuses the clause outright — which is
+  // the whole statement failing, not a missed de-duplication.
+  const record = (id, clientId) => db.prepare(`INSERT INTO payments
+      (id, trip_id, client_id, from_member, to_member, amount, created_at)
+      VALUES (?, 'trip', ?, 'other', 'legacy', 500, ?)
+      ON CONFLICT (trip_id, client_id) WHERE client_id != '' DO NOTHING`).run(id, clientId, ts)
+  assert.equal(record('first', 'key').changes, 1)
+  assert.equal(record('retry', 'key').changes, 0)
+  assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM payments WHERE client_id = 'key'`).get().n, 1)
+  // Rows with no key are not all the same payment as each other, which is what
+  // keeps the index partial: 'paid' above already has none.
+  assert.equal(record('keyless', '').changes, 1)
+
   db.prepare(`INSERT INTO sessions (token_hash, user_id, expires_at, created_at)
               VALUES ('hash', 'user', ?, ?)`).run(new Date(Date.now() + 60000).toISOString(), ts)
   db.prepare('DELETE FROM users WHERE id = ?').run('user')

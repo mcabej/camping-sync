@@ -57,7 +57,11 @@ lost in a separate group chat.
   trip. Its own page nets everything into a short, deterministic list of "Sam
   owes Alex £12" payments; the Trip tab keeps only the total and the next move.
   Each trip has one explicit currency, and odd pennies are assigned visibly in
-  the trip's member order.
+  the trip's member order. Press **Mark paid** on one of those lines to record
+  the money actually changing hands — full or part, and editable, because half
+  of these end in a round number. Repayments net in with the expenses and keep
+  their own **Paid back** list, so a mistake is one Undo rather than a fake
+  expense.
 - **Going home** — flip the trip round on the last morning and every list starts
   asking the other question: not *who is bringing this* but *is it back in the
   car*. Whatever nobody ticks back in is what gets left in the grass.
@@ -145,6 +149,26 @@ every expense. Settlement splits each one only across its participants without
 floating-point arithmetic; indivisible pennies go to those participants in the
 same stable member order used everywhere else, and the UI says when that rule
 was needed.
+
+A `payments` row is the other half of that ledger: one member, another member,
+an amount and an optional note. It is deliberately not a flag on the netted "Sam
+owes Alex £12" line, because that line is a calculation — the next expense
+redraws it, and a part payment has to survive that. Settlement folds payments
+into the same balances as the expenses, so a repayment simply makes the debts it
+covers smaller. Both people must still be on the trip, which is why removing a
+member with payments asks you to clear them first, exactly as expenses do.
+
+Any member can record a payment between any two people, and any member can undo
+one. That is deliberate, and the same authority they already have over an
+expense or somebody else's place on the trip: the person handing over the cash
+is often not the person holding the phone, and a ledger only one member can
+correct is a ledger that stays wrong. Both directions are named in the activity
+feed. Each payment also carries a `client_id` made by the browser before
+sending, unique per trip: a field with no signal in it cannot tell a lost answer
+from a refused write, so pressing *Record payment* again is answered with the
+payment that already landed rather than a second one. The same key arriving with
+different money is refused as a conflict instead of quietly rewriting what the
+group has already been shown.
 
 Items carry the same trio as a trip — `place`, `lat`, `lon` — filled in by the
 same search. Only plans offer it in the UI, since a place on a bag of sausages

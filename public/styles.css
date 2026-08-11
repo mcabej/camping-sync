@@ -1554,8 +1554,12 @@ button.wx__day:hover .wx__wet, .wx__row--open .wx__wet { color: var(--ink); }
   display: flex; align-items: baseline; justify-content: space-between; gap: 14px;
   padding: 9px 0; border-bottom: 1px solid var(--line); font-size: 14px;
 }
-.settle__row > span { min-width: 0; overflow-wrap: anywhere; }
+.settle__row > span { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
 .settle__row > strong { flex: none; color: var(--forest-deep); white-space: nowrap; }
+/* The button that closes the line off. It sits after the amount rather than
+   under it, so a list of debts still reads down the page as debts. */
+.settle__row > .btn { flex: none; align-self: center; }
+.settle__acts { display: flex; justify-content: flex-end; margin-top: 12px; }
 .settle__square {
   margin: 0; padding: 11px 13px; border-radius: var(--r-md);
   background: #E4EEE5; color: var(--forest-deep); font-size: 14px; font-weight: 600;
@@ -1799,6 +1803,8 @@ button.wx__day:hover .wx__wet, .wx__row--open .wx__wet { color: var(--ink); }
   color: var(--ink-soft); font-size: 12.5px; line-height: 1.4;
 }
 .expense-form[data-split="custom"] .expense-split__total { display: block; }
+/* The save button lives in the foot now, so the last fieldset ends the scroll. */
+.expense-form > :last-child { margin-bottom: 0; }
 
 .sheet__group { margin-bottom: 20px; }
 .sheet__group > .eyebrow { display: block; margin-bottom: 9px; }

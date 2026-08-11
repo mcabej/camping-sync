@@ -44,7 +44,7 @@ const hooks = ['S', 'render', 'viewTrip', 'renderSheet', 'CAMP', 'TABS',
   'ensureChatSocket', 'stopChatSocket', 'showChatChanges', 'fitChatBox',
   'clearComposer', 'watchKeyboard',
   'campMentionRange', 'completeCampMention',
-  'settlement', 'customExpenseShares', 'googleSignIn', 'tripRoute']
+  'settlement', 'customExpenseShares', 'googleSignIn', 'tripRoute', 'isEditing', 'unsaved', 'restore']
 new Function(`${src}\n;Object.assign(globalThis, {${hooks.map((h) => `__${h}: ${h}`).join(',')}})`)()
 
 const { __S: S, __render: render, __viewTrip: viewTrip, __renderSheet: renderSheet, __TABS: TABS,
@@ -56,7 +56,8 @@ const { __S: S, __render: render, __viewTrip: viewTrip, __renderSheet: renderShe
   __fitChatBox: fitChatBox, __clearComposer: clearComposer, __watchKeyboard: watchKeyboard,
   __campMentionRange: campMentionRange, __completeCampMention: completeCampMention,
   __settlement: settlement, __customExpenseShares: customExpenseShares,
-  __googleSignIn: googleSignIn, __tripRoute: tripRoute } = globalThis
+  __googleSignIn: googleSignIn, __tripRoute: tripRoute, __isEditing: isEditing,
+  __unsaved: unsaved, __restore: restore } = globalThis
 const { CATALOG } = await import('../lib/catalog.js')
 
 // A trip with a bit of everything: claimed by one, claimed by three, unclaimed,
@@ -403,6 +404,31 @@ check('settlement makes the odd-penny rule visible', settled.rounded
   && find(settlePageHtml, 'Rounding is to the penny') && find(settlePageHtml, '£70.01'))
 check('the Settle up page says who owes whom', find(settlePageHtml, '<b>Ali Khan</b> owes <b>Josh</b>')
   && find(settlePageHtml, '£27.49'))
+check('every debt carries the way to settle it',
+  find(settlePageHtml, 'data-act="settle-transfer" data-from="m3" data-to="m1" data-amount="2749"')
+  && find(settlePageHtml, '>Record a payment<'))
+
+// Money handed over comes off what is owed, and the line it settles goes away.
+S.payments = [{ id: 'p1', from_member: 'm3', to_member: 'm1', amount: 2749, note: 'Bank transfer',
+  created_at: new Date().toISOString() }]
+const afterPaying = settlement()
+check('a recorded payment nets off the debt it settles', afterPaying.settled === 2749
+  && afterPaying.total === 7001
+  && !afterPaying.transfers.some((move) => move.from.id === 'm3' && move.to.id === 'm1'))
+const paidPageHtml = viewTrip()
+check('the Settle up page keeps a record of what has been paid back',
+  find(paidPageHtml, '<b>Ali Khan</b> paid <b>Josh</b> · Bank transfer')
+  && find(paidPageHtml, 'data-act="delete-payment" data-payment="p1"')
+  && find(paidPageHtml, '<b>£27.49</b> has been paid back.')
+  && !find(paidPageHtml, '<b>Ali Khan</b> owes <b>Josh</b>'))
+S.payments = [
+  { id: 'p1', from_member: 'm3', to_member: 'm1', amount: 2749, note: '', created_at: new Date().toISOString() },
+  { id: 'p2', from_member: 'm3', to_member: 'm2', amount: 501, note: '', created_at: new Date().toISOString() },
+  { id: 'p3', from_member: 'm4', to_member: 'm2', amount: 250, note: '', created_at: new Date().toISOString() },
+]
+check('paying every line off leaves the trip square', !settlement().transfers.length
+  && find(viewTrip(), 'Everyone is square.'))
+S.payments = []
 const recordedExpenses = S.expenses
 S.expenses = []
 const emptySettlePage = viewTrip()
@@ -536,22 +562,71 @@ check('the durable assistant row replaces its transient stream',
 // survive it: emptying it by hand and repainting the thread beside it keeps the
 // keyboard from dropping and climbing back, which is what made the room flinch
 // and left the newest message under the fold.
-const sentBox = { id: 'chat-text', value: 'Yes — meet at mine.', scrollHeight: 40, style: {},
-  setAttribute() {}, removeAttribute() {}, focus() {} }
-const sentSend = { disabled: true, innerHTML: '…', attrs: {}, setAttribute(k, v) { this.attrs[k] = v } }
-const sentForm = { querySelector: (sel) => (sel === '#chat-text' ? sentBox : sel === 'button[type="submit"]' ? sentSend : null) }
+const composer = (text) => {
+  const send = { disabled: true, innerHTML: '…', attrs: {}, setAttribute(k, v) { this.attrs[k] = v } }
+  const box = { id: 'chat-text', value: text, scrollHeight: 40, style: {},
+    setAttribute() {}, removeAttribute() {}, focus() {} }
+  box.form = { querySelector: (sel) => (sel === 'button[type="submit"]' ? send : null) }
+  return { box, send }
+}
+const sent = composer('Yes — meet at mine.')
 visibleChat.scrollTop = 0
 roots.root.innerHTML = 'the room as it stands'
-roots.root.querySelector = (selector) => selector === '.chat__body' ? visibleChat : null
+roots.root.querySelector = (selector) => selector === '.chat__body' ? visibleChat
+  : selector === '#chat-text' ? sent.box : null
 check('a sent message empties the composer without rebuilding the room',
-  clearComposer(sentForm) === true && sentBox.value === ''
+  clearComposer() === true && sent.box.value === ''
   && roots.root.innerHTML === 'the room as it stands')
 check('and puts the send button back on its feet',
-  sentSend.disabled === false && sentSend.attrs['aria-label'] === 'Send message'
-  && !find(sentSend.innerHTML, 'chat__sending'))
+  sent.send.disabled === false && sent.send.attrs['aria-label'] === 'Send message'
+  && !find(sent.send.innerHTML, 'chat__sending'))
 check('and the thread lands on what was just said',
   find(visibleThread.innerHTML, 'Add a tarp for Saturday rain.')
   && visibleChat.scrollTop === visibleChat.scrollHeight)
+
+// Your own message arrives back down the socket before the POST answers. If that
+// echo redrew the room, the send still running would empty a composer that had
+// already been thrown away — and the one on screen would keep the text with its
+// button stuck on the ellipsis, refusing the next message.
+S.chat.busy = true
+document.activeElement = null
+roots.root.innerHTML = 'the room mid-send'
+socket.fire('message', { data: JSON.stringify({
+  type: 'message.created',
+  message: { id: 5, client_id: 'five', member_id: 'm2', author_name: 'Sam', body: 'On my way.', created_at: new Date().toISOString() },
+}) })
+check('a message landing mid-send paints the thread and leaves the room standing',
+  find(visibleThread.innerHTML, 'On my way.') && roots.root.innerHTML === 'the room mid-send')
+const live = composer('Yes — meet at mine.')
+roots.root.querySelector = (selector) => selector === '.chat__body' ? visibleChat
+  : selector === '#chat-text' ? live.box : null
+check('and the composer the sender is holding is the one that gets emptied',
+  clearComposer() === true && live.box.value === '' && live.send.disabled === false)
+
+// Keeping the keyboard up through a send is what lets the next sentence be
+// started before the last one lands. Coming back to it and deleting it would
+// make that a trap rather than a feature.
+const started = composer('And bring the tarp')
+roots.root.querySelector = (selector) => selector === '.chat__body' ? visibleChat
+  : selector === '#chat-text' ? started.box : null
+S.chat.draft = 'Yes — meet at mine.'
+check('a sentence started mid-send survives the answer to the last one',
+  clearComposer('Yes — meet at mine.') === true
+  && started.box.value === 'And bring the tarp' && S.chat.draft === 'And bring the tarp')
+const untouched = composer('Yes — meet at mine.')
+roots.root.querySelector = (selector) => selector === '.chat__body' ? visibleChat
+  : selector === '#chat-text' ? untouched.box : null
+check('and a composer nobody has typed into is still emptied',
+  clearComposer('Yes — meet at mine.') === true
+  && untouched.box.value === '' && S.chat.draft === '')
+// No composer to read means the draft cannot be holding anything but the
+// message that has just landed, so a redraw must not put it back.
+S.chat.draft = 'Yes — meet at mine.'
+roots.root.querySelector = () => null
+check('a room redrawn out from under the send does not refill from the draft',
+  clearComposer('Yes — meet at mine.') === false && S.chat.draft === '')
+roots.root.querySelector = (selector) => selector === '.chat__body' ? visibleChat : null
+S.chat.busy = false
 
 // The room is a screenful less the keyboard, so raising the keys takes a few
 // hundred pixels off the thread. A scroller left where it was is no longer at
@@ -623,6 +698,56 @@ check('a custom expense reopens with its exact shares',
   && find(customExpenseSheet, 'Custom amounts')
   && find(customExpenseSheet, 'Shares add up to £20.00.'))
 S.expenses.pop()
+S.sheet = { kind: 'payment', from: 'm3', to: 'm1', amount: '2749' }; renderSheet()
+const paymentSheet = roots['sheet-root'].innerHTML
+check('marking a debt paid opens with that payment already filled in',
+  find(paymentSheet, 'Record a payment')
+  && find(paymentSheet, '<option value="m3" selected>Ali Khan</option>')
+  && find(paymentSheet, '<option value="m1" selected>Josh (you)</option>')
+  && find(paymentSheet, 'name="amount" value="27.49"')
+  && find(paymentSheet, 'save-payment'))
+// What a redraw is not allowed to take back. A dropdown somebody has answered
+// is as deliberate as a box they have typed in, and on the payment sheet those
+// dropdowns are the two people the money moved between.
+const option = (value, defaultSelected) => ({ value, defaultSelected })
+const picked = { name: 'from', value: 'm3', options: [option('m1', true), option('m3', false)] }
+const asDrawn = { name: 'to', value: 'm1', options: [option('m1', true), option('m3', false)] }
+const typedIn = { name: 'amount', type: 'text', value: '25.00', defaultValue: '27.49' }
+const fakeSheet = {
+  querySelectorAll: (selector) => [
+    ...(selector.includes('input[name]') ? [typedIn] : []),
+    ...(selector.includes('select[name]') ? [picked, asDrawn] : []),
+  ],
+}
+const kept = unsaved(fakeSheet)
+check('an answered dropdown survives a redraw under it',
+  kept.get('from') === 'm3' && kept.get('amount') === '25.00')
+check('and one left as it was drawn takes whatever the trip now says',
+  !kept.has('to'))
+picked.value = 'm1'; typedIn.value = '27.49'
+restore(fakeSheet, kept, null)
+check('and both go back where the person left them',
+  picked.value === 'm3' && typedIn.value === '25.00')
+
+// The five-second poll rebuilds the page under an open sheet. A dropdown being
+// answered is as much "mid-edit" as a box being typed in — more so, since it is
+// held open over the page the redraw would replace.
+const focused = (tag) => ({ matches: (sel) => sel.split(', ').includes(tag) })
+document.activeElement = focused('select')
+check('a dropdown being answered counts as mid-edit', isEditing() === true)
+document.activeElement = focused('input')
+check('and so does a box being typed in', isEditing() === true)
+document.activeElement = focused('button')
+check('while a page nobody is answering is free to redraw', isEditing() === false)
+document.activeElement = null
+check('as is one with nothing focused at all', isEditing() === false)
+
+S.sheet = { kind: 'payment' }; renderSheet()
+const blankPayment = roots['sheet-root'].innerHTML
+check('a payment nobody suggested still knows two different people',
+  find(blankPayment, '<option value="m1" selected>Josh (you)</option>')
+  && find(blankPayment, '<option value="m2" selected>Sam</option>')
+  && find(blankPayment, 'name="amount" value=""'))
 S.sheet = { kind: 'item', id: 'Crisps' }; renderSheet()
 const unclaimed = roots['sheet-root'].innerHTML
 // Your name is a row like everybody else's, and that row is the only way in.

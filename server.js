@@ -1511,6 +1511,117 @@ app.delete('/api/expenses/:id', (req, res) => {
   res.json(getTripState(expense.trip_id, viewerId(req, expense.trip_id)))
 })
 
+// ---- payments ---------------------------------------------------------------
+
+// The activity feed is plain text, so an amount in it says which currency it is
+// in rather than leaving the reader to guess the trip's.
+const said = (currency, amount) => [currency, (amount / 100).toFixed(2)].filter(Boolean).join(' ')
+
+// A change to the ledger, the note about it and the revision every other phone
+// is watching are one fact, so they are one commit. Half of them landing leaves
+// money recorded that nobody else is told to come and look at.
+function ledgerWrite(run) {
+  db.exec('BEGIN')
+  try {
+    const result = run()
+    db.exec('COMMIT')
+    return result
+  } catch (err) {
+    db.exec('ROLLBACK')
+    throw err
+  }
+}
+
+// Somebody has actually paid somebody back. The netted "Sam owes Alex £12" line
+// is a calculation over every expense, so it cannot be ticked off — this records
+// the transfer that makes it smaller, and the same arithmetic takes it from
+// there. Any amount is allowed, because a part payment is a real thing and
+// because the balance it is settling can move between opening the page and
+// handing over the cash.
+//
+// Any member may record a payment between any two people, and any member may
+// undo one — the same authority they already have over an expense, a claim or
+// somebody else's place on the trip. The group is the unit of trust here: the
+// person who hands over the cash is often not the person holding the phone, and
+// a ledger only one member can correct is a ledger that stays wrong. Everything
+// either way is named in the activity feed.
+app.post('/api/trips/:id/payments', (req, res) => {
+  const trip = requireTrip(req, res)
+  if (!trip) return
+  if (!requireMember(req, res, trip.id)) return
+
+  const fromMember = clean(req.body?.from, 64)
+  const toMember = clean(req.body?.to, 64)
+  const amount = money(req.body?.amount)
+  const note = clean(req.body?.note, 120)
+  const clientId = clean(req.body?.clientId, 100)
+  if (!clientId) {
+    return res.status(400).json({ error: 'That payment could not be identified. Try again.' })
+  }
+  if (!amount) {
+    return res.status(400).json({ error: amount === null
+      ? 'Enter an amount with no more than two decimal places.'
+      : 'Enter an amount greater than zero.' })
+  }
+  const people = db.prepare('SELECT id, name FROM members WHERE trip_id = ?').all(trip.id)
+  const known = new Map(people.map((member) => [member.id, member.name]))
+  if (!known.has(fromMember) || !known.has(toMember)) {
+    return res.status(400).json({ error: 'Both people must be on this trip.' })
+  }
+  if (fromMember === toMember) {
+    return res.status(400).json({ error: 'A payment needs two different people.' })
+  }
+
+  const actor = actorName(trip.id, req)
+  const inserted = ledgerWrite(() => {
+    const changed = db.prepare(`INSERT INTO payments
+        (id, trip_id, client_id, from_member, to_member, amount, note, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (trip_id, client_id) WHERE client_id != '' DO NOTHING`)
+      .run(uid(), trip.id, clientId, fromMember, toMember, amount, note, now()).changes
+    if (changed) {
+      logEvent(trip.id, actor,
+        `recorded ${known.get(fromMember)} paying ${known.get(toMember)} ${said(trip.currency, amount)}`)
+      bumpRev(trip.id)
+    }
+    return changed
+  })
+
+  // Nothing written means this key has already been spent. A retry of the same
+  // handover is answered with the state it produced — that is the whole point.
+  // The same key carrying different money is a client error, not permission to
+  // quietly rewrite what somebody has already been told is settled.
+  if (!inserted) {
+    const existing = db.prepare('SELECT * FROM payments WHERE trip_id = ? AND client_id = ?')
+      .get(trip.id, clientId)
+    if (!existing) return res.status(500).json({ error: 'That payment could not be saved. Try again.' })
+    if (existing.from_member !== fromMember || existing.to_member !== toMember
+        || existing.amount !== amount) {
+      return res.status(409).json({
+        error: 'That payment was already recorded, saying something else. Try again.',
+        conflict: 'payment-retry',
+      })
+    }
+  }
+  res.status(201).json(getTripState(trip.id, viewerId(req, trip.id)))
+})
+
+app.delete('/api/payments/:id', (req, res) => {
+  const payment = db.prepare('SELECT * FROM payments WHERE id = ?').get(req.params.id)
+  if (!payment) return res.status(404).json({ error: 'That payment is already gone.' })
+  if (!requireMember(req, res, payment.trip_id)) return
+  const name = (id) => db.prepare('SELECT name FROM members WHERE id = ?').get(id)?.name ?? 'someone'
+  const currency = db.prepare('SELECT currency FROM trips WHERE id = ?').get(payment.trip_id)?.currency ?? ''
+  const actor = actorName(payment.trip_id, req)
+  ledgerWrite(() => {
+    db.prepare('DELETE FROM payments WHERE id = ?').run(payment.id)
+    logEvent(payment.trip_id, actor,
+      `undid ${name(payment.from_member)} paying ${name(payment.to_member)} ${said(currency, payment.amount)}`)
+    bumpRev(payment.trip_id)
+  })
+  res.json(getTripState(payment.trip_id, viewerId(req, payment.trip_id)))
+})
+
 // ---- members ----------------------------------------------------------------
 
 const memberNamed = db.prepare('SELECT * FROM members WHERE trip_id = ? AND lower(name) = lower(?)')
@@ -1617,7 +1728,11 @@ app.delete('/api/trips/:id/members/:mid', (req, res) => {
       LEFT JOIN expense_participants p ON p.expense_id = e.id
       WHERE e.trip_id = ? AND (e.paid_by = ? OR p.member_id = ?)`)
       .get(trip.id, m.id, m.id).n
-    if (costs) {
+    // Payments count as recorded costs for this purpose: a repayment with one
+    // half of it missing is not a record of anything.
+    const paid = db.prepare(`SELECT COUNT(*) AS n FROM payments
+      WHERE trip_id = ? AND (from_member = ? OR to_member = ?)`).get(trip.id, m.id, m.id).n
+    if (costs || paid) {
       return res.status(400).json({ error: `Clear or move ${m.name}'s recorded costs before removing them.` })
     }
     // What they had put their name to goes back to nobody — claims cascade with
