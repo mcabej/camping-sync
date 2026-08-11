@@ -41,7 +41,8 @@ const src = readFileSync('public/app.js', 'utf8')
 const hooks = ['S', 'render', 'viewTrip', 'renderSheet', 'CAMP', 'TABS',
   'loadFolds', 'saveFolds', 'autoFold', 'pageGroups', 'tripDays',
   'dayTurned', 'turnDay', 'tillMidnight', 'edges', 'perDay', 'daysPicked',
-  'ensureChatSocket', 'stopChatSocket', 'fitChatBox', 'campMentionRange', 'completeCampMention']
+  'ensureChatSocket', 'stopChatSocket', 'showChatChanges', 'fitChatBox',
+  'campMentionRange', 'completeCampMention']
 new Function(`${src}\n;Object.assign(globalThis, {${hooks.map((h) => `__${h}: ${h}`).join(',')}})`)()
 
 const { __S: S, __render: render, __viewTrip: viewTrip, __renderSheet: renderSheet, __TABS: TABS,
@@ -49,7 +50,8 @@ const { __S: S, __render: render, __viewTrip: viewTrip, __renderSheet: renderShe
   __tripDays: tripDays, __dayTurned: dayTurned, __turnDay: turnDay,
   __tillMidnight: tillMidnight, __edges: edges, __perDay: perDay,
   __daysPicked: daysPicked, __ensureChatSocket: ensureChatSocket,
-  __stopChatSocket: stopChatSocket, __fitChatBox: fitChatBox,
+  __stopChatSocket: stopChatSocket, __showChatChanges: showChatChanges,
+  __fitChatBox: fitChatBox,
   __campMentionRange: campMentionRange, __completeCampMention: completeCampMention } = globalThis
 const { CATALOG } = await import('../lib/catalog.js')
 
@@ -360,6 +362,8 @@ check('planning room attributes the current member',
   find(roomPageHtml, 'thread__message--mine') && find(roomPageHtml, 'Josh'))
 check('planning room has paged history and a labelled composer',
   find(roomPageHtml, 'data-act="chat-older"') && find(roomPageHtml, 'class="sr-only" for="chat-text">Message the group'))
+check('planning room scrolls messages separately from its composer',
+  find(roomPageHtml, 'class="chat__body"') && find(roomPageHtml, 'class="chat__composer"'))
 check('planning room exposes its quiet delivery state',
   find(roomPageHtml, 'data-chat-connection') && find(roomPageHtml, '>Connecting</span>'))
 const quietNotify = S.notify
@@ -434,12 +438,21 @@ check('an open socket tells the server the room is being viewed',
   socket.sent.some((value) => JSON.parse(value).type === 'room.presence'
     && JSON.parse(value).active === true))
 document.activeElement = { id: 'chat-text' }
+const oldRootQuery = roots.root.querySelector
+const visibleThread = { innerHTML: '', querySelector: () => null }
+const visibleChat = {
+  scrollTop: 0, scrollHeight: 640,
+  querySelector: (selector) => selector === '.thread' ? visibleThread : null,
+}
+roots.root.querySelector = (selector) => selector === '.chat__body' ? visibleChat : null
 socket.fire('message', { data: JSON.stringify({
   type: 'message.created',
   message: { id: 3, client_id: 'three', member_id: 'm2', author_name: 'Sam', body: 'I can drive.', created_at: new Date().toISOString() },
 }) })
 check('a socket delivery merges the durable message once',
   S.chat.messages.filter((m) => m.id === 3).length === 1 && S.chat.messages.at(-1).body === 'I can drive.')
+check('a focused planning room paints and follows the latest message',
+  find(visibleThread.innerHTML, 'I can drive.') && visibleChat.scrollTop === visibleChat.scrollHeight)
 socket.fire('message', { data: JSON.stringify({ type: 'assistant.started', runId: 'run-1' }) })
 socket.fire('message', { data: JSON.stringify({
   type: 'assistant.delta', runId: 'run-1', delta: 'Add a tarp for Saturday rain.',
@@ -457,6 +470,7 @@ socket.fire('message', { data: JSON.stringify({
 check('the durable assistant row replaces its transient stream',
   !S.chat.streams['run-1'] && S.chat.messages.at(-1).role === 'assistant'
   && find(viewTrip(), 'thread__message--assistant'))
+roots.root.querySelector = oldRootQuery
 socket.readyState = 3
 socket.fire('close')
 check('a dropped socket enters reconnecting state', S.chat.connection === 'reconnecting')

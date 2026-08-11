@@ -1220,7 +1220,7 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 /* Unlike the trip screens, the room owns the viewport: messages scroll between
    one compact header and the composer standing in for the normal tab bar. */
 .app--room {
-  height: 100dvh; min-height: 0; padding-bottom: 0;
+  height: 100dvh; min-height: 0; padding-bottom: var(--kb);
   display: flex; flex-direction: column; overflow: hidden;
   background: #DEE5DA;
 }
@@ -1231,13 +1231,16 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 
 .chat-card--page {
   --chat-pad-x: 18px;
-  width: 100%; min-height: 0; margin: 0; padding: 16px var(--chat-pad-x) 0;
-  display: flex; flex-direction: column; overflow-y: auto;
+  width: 100%; min-height: 0; margin: 0; padding: 0;
+  display: flex; flex-direction: column; overflow: hidden;
   background-color: #DEE5DA;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='140' viewBox='0 0 180 140'%3E%3Cg fill='none' stroke='%231B382E' stroke-opacity='.055' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M14 34h34M19 34 31 14l12 20M25 34l6-10 6 10'/%3E%3Cpath d='M91 12v27M78 28l13-16 13 16M82 34l9-13 9 13'/%3E%3Cpath d='M137 82h20v13a8 8 0 0 1-8 8h-4a8 8 0 0 1-8-8V82Zm20 4h4a5 5 0 0 1 0 10h-4'/%3E%3Cpath d='M42 94c8-9 18-8 24 0-8 9-18 9-24 0Zm12-6v13'/%3E%3Cpath d='m97 104 7-12 7 12-7 4-7-4Zm7 4v15'/%3E%3Ccircle cx='155' cy='31' r='5'/%3E%3Cpath d='m151 27-4-4m12 4 4-4m-8 13v6'/%3E%3C/g%3E%3C/svg%3E");
-  overscroll-behavior-y: contain;
 }
-.chat-card--page .thread { flex: 1; }
+.chat__body {
+  flex: 1; min-height: 0; padding: 16px var(--chat-pad-x) 0;
+  overflow-y: auto; overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch;
+}
 
 .chat__connection { display: inline-flex; align-items: center; gap: 6px; }
 .chat__connection::before {
@@ -1347,17 +1350,12 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 
 .chat__composer { margin-top: 16px; padding-top: 15px; border-top: 1px solid var(--line); }
 .chat-card--page .chat__composer {
-  position: sticky; z-index: 2;
-  bottom: 0;
-  margin: auto calc(var(--chat-pad-x) * -1) 0;
+  position: relative; z-index: 2; flex: none; margin: 0;
   padding: 12px var(--chat-pad-x) calc(12px + env(safe-area-inset-bottom));
   background: rgba(222, 229, 218, .94);
   box-shadow: 0 -1px 0 rgba(27, 56, 46, .14), 0 -8px 18px rgba(27, 56, 46, .04);
   backdrop-filter: blur(8px);
   border-top: 0;
-}
-.is-kb .chat-card--page .chat__composer {
-  bottom: var(--kb); padding-bottom: 12px;
 }
 .chat__mention {
   position: absolute; left: var(--chat-pad-x); right: var(--chat-pad-x);
@@ -1768,7 +1766,8 @@ button.wx__day:hover .wx__wet, .wx__row--open .wx__wet { color: var(--ink); }
      three short columns rather than one long one down the side of it. */
   .trip-smarts .tips { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px 28px; }
   .trip-smarts .tip { border-bottom: 0; }
-  .chat-card--page { --chat-pad-x: 24px; padding: 20px 24px 0; }
+  .chat-card--page { --chat-pad-x: 24px; }
+  .chat__body { padding-top: 20px; }
   .sheet-scrim { align-items: center; }
   .sheet { border-radius: var(--r-lg); max-height: min(82dvh, 100%); }
   .sheet__foot { padding-bottom: 14px; }
