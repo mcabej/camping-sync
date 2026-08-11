@@ -607,6 +607,21 @@ rather than after a delivery, because "delivered" is not something a push
 service reports; a phone that was off gets the nudge when it next reaches its
 push service, which is what the six-hour TTL is for.
 
+Between deciding and sending there is a window, and two scans that overlap would
+both walk through it. So the row is written first in a `sending` state, by an
+insert that only wins if nobody else holds it — the loser skips that reminder
+rather than sending a second copy, and an attempt that fails deletes its own
+claim so the next scan can try again. A claim is a *lease*: held for more than
+thirty minutes it is assumed dead and taken back, or a process killed mid-send
+would silence the nudge for the rest of the day.
+
+Which is why every push request has a timeout. Node leaves an outgoing request
+without one, so a push service that accepts a connection and then says nothing
+holds it open indefinitely — past the lease, until a second scan reclaims the
+reminder and sends it while the first attempt is still able to deliver. Thirty
+seconds is longer than any push service that is going to answer takes and far
+inside the lease, and `server.js` refuses to start if that stops being true.
+
 Nothing here stores anything new about a device. A reminder goes out over the
 push subscription the Planning Room already needed, so the durable handle a
 no-accounts app keeps on a phone is the same one, created by the same explicit
@@ -762,13 +777,25 @@ answer for the one that could.
 Turning a device on subscribes it to every trip on the account at once, and
 those writes go together rather than one behind the other. If some of them fail
 the browser is genuinely subscribed to the rest, so the page re-reads
-`GET /api/notifications` instead of settling the switch back to off — an off
-switch on a device that is about to be notified is the one state worth going out
-of the way to avoid. The trips are still read for that reason alone: nothing
-draws them, but the device switch has to know what it is subscribing to. A read
-that fails outright says so and offers *Try again*, rather than drawing an
-unsubscribed device with both reminders off, which is a real answer this app is
-capable of giving and would be the wrong one told calmly.
+`GET /api/notifications` rather than inferring anything from which call threw,
+and says how many trips it managed.
+
+**The switch reads as on only when every trip has this endpoint on file.** What
+it promises is the whole account, so anything short of that is off — and off is
+the honest answer as well as the useful one, because throwing it again writes
+exactly the trips that are missing. The trips are read for that reason alone:
+nothing draws them, but the device switch has to know what it is subscribing
+to. A read that fails outright says so and offers *Try again*, rather than
+drawing an unsubscribed device with both reminders off, which is a real answer
+this app is capable of giving and would be the wrong one told calmly.
+
+The gap that would otherwise open is a trip that did not exist when the switch
+was thrown. Starting or joining one adds a membership, and a membership with no
+endpoint against it is silent — no Planning Room alert and no reminder, on a
+device whose settings page used to say it was on. So a browser that already has
+a subscription and a granted permission sends it along with the join, and a trip
+that arrives some other way — joined on your phone, while the laptop was shut —
+is the case the switch reading off is for.
 
 There is nothing here for editing your name. Google rewrites it at every
 sign-in, so a field to change it would be a field that silently reverts. The

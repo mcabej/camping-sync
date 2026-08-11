@@ -629,13 +629,17 @@ async function wantAlerts() {
     const query = subscription ? `?endpoint=${encodeURIComponent(subscription.endpoint)}` : ''
     const data = await api(`/notifications${query}`)
     if (S.view !== 'settings') { S.alerts = null; return }
+    const trips = data.trips ?? []
     S.alerts = noAlerts({
       permission: supported ? Notification.permission : 'unsupported',
       publicKey: String(data.publicKey ?? ''),
-      // This browser is set up for alerts if any trip has it on file: one
-      // subscription follows you across every trip on the account.
-      subscribed: supported && (data.trips ?? []).some((t) => t.subscribed),
-      trips: (data.trips ?? []).map((t) => ({
+      // What this switch promises is every trip on the account, so it only
+      // reads as on when every trip has this endpoint on file. A trip that
+      // slipped through — one joined on another device, or while this one was
+      // offline — turns it back off, which is both true and the way to fix it:
+      // switching it on again writes the trips that are missing.
+      subscribed: supported && !!subscription && trips.every((t) => t.subscribed),
+      trips: trips.map((t) => ({
         tripId: String(t.tripId), name: String(t.name ?? 'Trip'),
       })),
       reminders: {
@@ -654,6 +658,36 @@ async function wantAlerts() {
 async function reloadAlerts() {
   S.alerts = null
   await wantAlerts()
+}
+
+// A trip that has just appeared on this account. The device switch subscribes
+// every trip it knew about at the time it was thrown, so a trip started or
+// joined afterwards would have no endpoint against it and would go quiet — no
+// Planning Room alert and, worse, no reminder, on a device whose settings page
+// says it is switched on.
+//
+// So a membership that has just been made brings the browser's existing
+// subscription with it. Nothing is asked of anybody: no subscription, or a
+// permission that was never granted, means this device was not being notified
+// and this is not the moment to suggest it. The settings page is dropped
+// because its trip list is now a trip short either way.
+async function syncNotificationsForTrip(tripId) {
+  S.alerts = null
+  if (!pushSupported() || Notification.permission !== 'granted') return
+  try {
+    const subscription = await currentPushSubscription()
+    if (!subscription) return
+    await api(`/trips/${tripId}/notifications`, {
+      method: 'PUT', body: { subscription: subscription.toJSON() },
+    })
+    // The bell in the Planning Room reads the same rows, so it is sent back to
+    // ask rather than told what to think.
+    if (S.notify.tripId === tripId) S.notify = { ...S.notify, tripId: '' }
+  } catch {
+    // The trip is joined either way, and the settings page is the place that
+    // says which trips this device is on — where it now reads as off, with the
+    // switch that fixes it.
+  }
 }
 
 // The device switch on the settings page. On means: ask the browser, then put
@@ -5429,6 +5463,7 @@ async function joinAs(rawName, claim = '') {
     S.me = member.id
     S.joinClash = null
     S.view = 'trip'
+    await syncNotificationsForTrip(S.trip.id)
     arrive(await api(`/trips/${S.trip.id}`))
   } catch (err) {
     if (err.payload?.conflict === 'name') {
@@ -6237,6 +6272,7 @@ document.addEventListener('submit', async (ev) => {
         S.tab = 'pack'
         S.camp = false
         history.pushState({ tripView: false }, '', `/t/${trip.id}`)
+        if (memberId) await syncNotificationsForTrip(trip.id)
         arrive(await api(`/trips/${trip.id}`))
         toast('Trip created. Send the link to your friends.')
       } catch (err) { toast(err.message) }

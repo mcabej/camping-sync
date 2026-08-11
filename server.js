@@ -10,7 +10,7 @@ import { WebSocket, WebSocketServer } from 'ws'
 import {
   db, uid, now, newTripCode, bumpRev, logEvent, getTripState, nextPosition,
 } from './lib/db.js'
-import { runReminders } from './lib/reminders.js'
+import { REMINDER_LEASE_MS, runReminders } from './lib/reminders.js'
 import { CATALOG, TIPS, WEATHER_ADVICE, catalogEntry } from './lib/catalog.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -444,6 +444,19 @@ function activeRoomMembers(tripId) {
   return active
 }
 
+// Node leaves an outgoing request without any timeout of its own, so a push
+// service that accepts a connection and then says nothing holds this one open
+// for as long as it likes. That is the failure a reminder's lease cannot
+// survive: the lease exists so that a second scan may retry a send that died,
+// and half an hour later it will — while the first attempt is still sitting
+// there able to deliver. Thirty seconds is longer than any push service that is
+// going to answer takes, and far inside the lease, so the retry only ever
+// happens after the first attempt has genuinely given up.
+const PUSH_TIMEOUT_MS = 30 * 1000
+if (PUSH_TIMEOUT_MS >= REMINDER_LEASE_MS) {
+  throw new Error('A push attempt must not be able to outlive the reminder lease')
+}
+
 // One way out to the push services, for both the things this app sends. A
 // 404 or 410 means the browser has permanently retired this endpoint, which is
 // the one error worth acting on rather than logging.
@@ -452,7 +465,7 @@ async function sendPush(subscriptions, payload, { ttl = 3600, urgency = 'normal'
     webpush.sendNotification({
       endpoint: sub.endpoint,
       keys: { p256dh: sub.p256dh, auth: sub.auth },
-    }, payload, { TTL: ttl, urgency })
+    }, payload, { TTL: ttl, urgency, timeout: PUSH_TIMEOUT_MS })
   )))
   for (const [index, result] of results.entries()) {
     if (result.status === 'fulfilled') continue

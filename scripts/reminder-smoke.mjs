@@ -9,7 +9,9 @@ process.env.DB_PATH = path
 
 try {
   const { db, now } = await import('../lib/db.js')
-  const { dueReminders, markReminderSent, runReminders } = await import('../lib/reminders.js')
+  const {
+    REMINDER_LEASE_MS, dueReminders, markReminderSent, runReminders,
+  } = await import('../lib/reminders.js')
   const ts = now()
 
   // Local time throughout, because a nine o'clock nudge is nine o'clock where
@@ -87,6 +89,28 @@ try {
   finishSending()
   await Promise.all([firstScan, secondScan])
   assert.equal(sends, 1, 'overlapping scans claim a reminder before sending it')
+  db.prepare('DELETE FROM reminders_sent').run()
+
+  // The other half of the lease. A claim held longer than the lease is one the
+  // next scan takes back, because a process killed mid-send must not silence
+  // the nudge for the rest of the day. The attempt reclaimed here never
+  // answers, which is exactly why the server gives its push requests a timeout
+  // far inside the lease: by the time this happens for real the first attempt
+  // has given up, rather than being about to deliver a second copy.
+  let abandoned = 0
+  void runReminders(at(20, 9, 30), () => {
+    abandoned += 1
+    return new Promise(() => {})
+  })
+  assert.equal(abandoned, 1, 'the first scan claims and starts sending')
+  const stale = new Date(Date.now() - REMINDER_LEASE_MS - 1000).toISOString()
+  db.prepare(`UPDATE reminders_sent SET sent_at = ? WHERE delivery_state = 'sending'`).run(stale)
+
+  let reclaimed = 0
+  await runReminders(at(20, 9, 30), async () => { reclaimed += 1; return true })
+  assert.equal(reclaimed, 1, 'an expired lease is reclaimed and tried again')
+  assert.equal(db.prepare(`SELECT delivery_state FROM reminders_sent
+                           WHERE member_id = 'sam'`).get().delivery_state, 'sent')
   db.prepare('DELETE FROM reminders_sent').run()
 
   let attempts = 0
