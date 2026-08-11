@@ -578,6 +578,31 @@ function drawChatThread() {
   followChat(body)
 }
 
+// Sending is the one moment the composer is certainly the thing you are holding,
+// and on a phone the keyboard is standing under it. A full redraw takes the
+// textarea with it, so the keyboard drops and climbs back as focus is restored —
+// the room changes height twice, which is the flinch, and the thread ends up
+// pinned to a bottom that was measured while the keyboard was down, which is why
+// the message you just sent sat below the fold. So the composer stays, emptied
+// and re-enabled by hand, and the thread beside it is redrawn the same way an
+// incoming message redraws it. Everything else the room owes a redraw is left to
+// the one that comes on blur.
+function clearComposer(form) {
+  const box = form?.querySelector?.('#chat-text')
+  if (!box) return false
+  box.value = ''
+  fitChatBox(box)
+  setCampMentionOpen(box, false)
+  const send = form.querySelector('button[type="submit"]')
+  if (send) {
+    send.disabled = false
+    send.setAttribute('aria-label', 'Send message')
+    send.innerHTML = ICONS.send
+  }
+  drawChatThread()
+  return true
+}
+
 function receiveAssistantEvent(data) {
   const runId = String(data.runId ?? '')
   if (!/^[a-z0-9-]{1,100}$/i.test(runId)) return
@@ -5172,6 +5197,7 @@ document.addEventListener('submit', async (ev) => {
         send.setAttribute('aria-label', 'Sending message')
         send.innerHTML = '<span class="chat__sending" aria-hidden="true">…</span>'
       }
+      const wasAvailable = S.chat.assistantAvailable
       try {
         const { message, assistant, assistantAvailable } = await api(`/trips/${tripId}/messages`, {
           method: 'POST', body: pending,
@@ -5191,7 +5217,11 @@ document.addEventListener('submit', async (ev) => {
         S.chat.pending = null
         S.chat.draft = ''
         S.chat.busy = false
-        render({ chatBottom: true })
+        // Whether Camp is there changes the composer itself — its label, its
+        // placeholder, the mention list beside it — so that one needs the redraw.
+        if (S.chat.assistantAvailable !== wasAvailable || !clearComposer(form)) {
+          render({ chatBottom: true })
+        }
         root.querySelector('#chat-text')?.focus()
       } catch (err) {
         if (S.chat.tripId !== tripId) break
@@ -5771,8 +5801,17 @@ function watchKeyboard() {
     // keyboard is never that small, and ignoring the small ones keeps the sheet
     // from twitching along with the browser chrome.
     const kb = gap > 120 ? Math.round(gap) : 0
+    // The room is as tall as the screen less the keyboard, so raising the keys
+    // takes a few hundred pixels off the thread — and a scroller that was at the
+    // bottom is suddenly some way short of it, with the newest message hidden
+    // behind the composer. Asked before the height changes, put back after.
+    const body = root.querySelector?.('.chat__body')
+    const following = body
+      ? body.scrollHeight - body.scrollTop - body.clientHeight < 96
+      : false
     document.documentElement.style.setProperty('--kb', `${kb}px`)
     document.documentElement.classList.toggle('is-kb', kb > 0)
+    if (following) followChat(body)
     if (P.list.length) fitPlaces()
   }
   vv.addEventListener('resize', apply)

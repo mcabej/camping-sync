@@ -42,6 +42,7 @@ const hooks = ['S', 'render', 'viewTrip', 'renderSheet', 'CAMP', 'TABS',
   'loadFolds', 'saveFolds', 'autoFold', 'pageGroups', 'tripDays',
   'dayTurned', 'turnDay', 'tillMidnight', 'edges', 'perDay', 'daysPicked',
   'ensureChatSocket', 'stopChatSocket', 'showChatChanges', 'fitChatBox',
+  'clearComposer', 'watchKeyboard',
   'campMentionRange', 'completeCampMention',
   'settlement', 'customExpenseShares', 'googleSignIn', 'tripRoute']
 new Function(`${src}\n;Object.assign(globalThis, {${hooks.map((h) => `__${h}: ${h}`).join(',')}})`)()
@@ -52,7 +53,7 @@ const { __S: S, __render: render, __viewTrip: viewTrip, __renderSheet: renderShe
   __tillMidnight: tillMidnight, __edges: edges, __perDay: perDay,
   __daysPicked: daysPicked, __ensureChatSocket: ensureChatSocket,
   __stopChatSocket: stopChatSocket, __showChatChanges: showChatChanges,
-  __fitChatBox: fitChatBox,
+  __fitChatBox: fitChatBox, __clearComposer: clearComposer, __watchKeyboard: watchKeyboard,
   __campMentionRange: campMentionRange, __completeCampMention: completeCampMention,
   __settlement: settlement, __customExpenseShares: customExpenseShares,
   __googleSignIn: googleSignIn, __tripRoute: tripRoute } = globalThis
@@ -530,6 +531,43 @@ socket.fire('message', { data: JSON.stringify({
 check('the durable assistant row replaces its transient stream',
   !S.chat.streams['run-1'] && S.chat.messages.at(-1).role === 'assistant'
   && find(viewTrip(), 'thread__message--assistant'))
+
+// Sending is the one moment the keyboard is certainly up, so the composer has to
+// survive it: emptying it by hand and repainting the thread beside it keeps the
+// keyboard from dropping and climbing back, which is what made the room flinch
+// and left the newest message under the fold.
+const sentBox = { id: 'chat-text', value: 'Yes — meet at mine.', scrollHeight: 40, style: {},
+  setAttribute() {}, removeAttribute() {}, focus() {} }
+const sentSend = { disabled: true, innerHTML: '…', attrs: {}, setAttribute(k, v) { this.attrs[k] = v } }
+const sentForm = { querySelector: (sel) => (sel === '#chat-text' ? sentBox : sel === 'button[type="submit"]' ? sentSend : null) }
+visibleChat.scrollTop = 0
+roots.root.innerHTML = 'the room as it stands'
+roots.root.querySelector = (selector) => selector === '.chat__body' ? visibleChat : null
+check('a sent message empties the composer without rebuilding the room',
+  clearComposer(sentForm) === true && sentBox.value === ''
+  && roots.root.innerHTML === 'the room as it stands')
+check('and puts the send button back on its feet',
+  sentSend.disabled === false && sentSend.attrs['aria-label'] === 'Send message'
+  && !find(sentSend.innerHTML, 'chat__sending'))
+check('and the thread lands on what was just said',
+  find(visibleThread.innerHTML, 'Add a tarp for Saturday rain.')
+  && visibleChat.scrollTop === visibleChat.scrollHeight)
+
+// The room is a screenful less the keyboard, so raising the keys takes a few
+// hundred pixels off the thread. A scroller left where it was is no longer at
+// the bottom, and the message you just sent is behind the composer.
+visibleChat.clientHeight = 400
+visibleChat.scrollTop = 240
+globalThis.window.visualViewport = { scale: 1, height: 480, offsetTop: 0, addEventListener() {} }
+watchKeyboard()
+check('raising the keyboard keeps the thread on the latest message',
+  visibleChat.scrollTop === visibleChat.scrollHeight)
+visibleChat.scrollTop = 60
+watchKeyboard()
+check('but a thread scrolled back to older messages is left where it was',
+  visibleChat.scrollTop === 60)
+globalThis.window.visualViewport = null
+
 roots.root.querySelector = oldRootQuery
 socket.readyState = 3
 socket.fire('close')
