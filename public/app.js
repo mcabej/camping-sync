@@ -145,7 +145,7 @@ const S = {
   busy: false,
   editNotes: false,  // the shared notes read as text until you ask to change them
   editWhere: false,  // same for where the trip is, which is read far more than written
-  expand: { tips: false, feed: false, diets: false },
+  expand: { tips: false, feed: false, diets: false, notes: false },
   // Which headings are folded shut, as "tab:heading" — a long list is read a
   // section at a time, and Shelter & sleep should stay shut on the packing list
   // without shutting Dinner on the food. `touched` is the ones you have folded
@@ -281,13 +281,18 @@ function absorb(state) {
   render()
 }
 
+// Says whether it got through, because a form that closes on the way out has to
+// stay open when the request does not: what you typed is in the DOM and nowhere
+// else, and nothing rebuilds the page on the failing path.
 async function mutate(fn) {
-  if (S.busy) return
+  if (S.busy) return false
   S.busy = true
   try {
     absorb(await fn())
+    return true
   } catch (err) {
     toast(err.message)
+    return false
   } finally {
     S.busy = false
   }
@@ -2484,11 +2489,15 @@ function weatherCard() {
   // A place typed by hand has no coordinates behind it, so there is nowhere to
   // ask about. Worth one line, because the fix is to pick the place from the
   // search — and the same pin is what turns the map button into a real one.
+  // Three of the ways this card has nothing to forecast are still the weather
+  // card, on quieter paper: a loose line of text between two cards reads as
+  // something that has gone wrong, and takes the heading out of the outline
+  // with it.
   if (t.lat == null || t.lon == null) {
     return `
-      <div class="card">
+      <div class="card card--quiet">
         <h3>Weather</h3>
-        <p class="card__body">Pick the site from the search under <b>Getting there</b> and the forecast comes with it. A place typed by hand has no coordinates to look one up from.</p>
+        <p class="card__body">Pick the site from the search under <b>When and where</b> and the forecast comes with it. A place typed by hand has no coordinates to look one up from.</p>
       </div>`
   }
 
@@ -2503,7 +2512,7 @@ function weatherCard() {
   if (wx.reason === 'far') {
     const opens = wxOpens(t.start_date)
     return `
-      <div class="card">
+      <div class="card card--quiet">
         <h3>Weather</h3>
         <p class="card__body">Too far off to forecast — nothing beyond about a fortnight is worth packing for.${
           opens ? ` Check back around <b>${esc(opens)}</b>.` : ''}</p>
@@ -2512,7 +2521,7 @@ function weatherCard() {
 
   if (wx.state === 'fail' || !wx.days.length) {
     return `
-      <div class="card">
+      <div class="card card--quiet">
         <h3>Weather</h3>
         <p class="card__body">Can't reach the forecast right now. It is somebody else's server, and nothing else on the trip depends on it.</p>
       </div>`
@@ -2534,21 +2543,40 @@ function weatherCard() {
     </div>`
 }
 
-// Where the trip is, in one place and one field. The card owns it because this
-// is what people come back for the night before they drive — the header only
-// ever shows the short version of the same thing.
-function whereCard() {
+// When the trip is and where it is, in one card and one form. They used to be
+// two — a "Getting there" card holding the address, and a "Trip details" form in
+// the other column holding the name and the dates — which put the answer to the
+// one question people come back for the night before they drive in two places,
+// and made changing it two saves to the same endpoint.
+//
+// `S.editWhere` carries which field asked for the form, so that pressing "No
+// dates yet" up in the status card lands on the date rather than on the address.
+function whenWhereCard() {
   const where = String(S.trip.location ?? '').trim()
+  const when = fmtDates(S.trip)
   const link = mapsHref(S.trip)
 
   if (S.editWhere || !where) {
+    const dates = S.editWhere === 'dates'
+    // Nothing is autofocused mid-save: the page redraws once while the request
+    // is in flight, and a field grabbing focus then would fetch the keyboard
+    // back for the frame before the form closes.
+    const focus = (mine) => (!S.busy && dates === mine ? 'autofocus' : '')
     return `
       <div class="card">
-        <h3>Getting there</h3>
+        <h3>When and where</h3>
         <p>Start typing and pick the place — that way everyone gets the pin, not just the name of it. Anything you type by hand is fine too.</p>
-        <form data-act="save-where">
+        <form data-act="save-trip">
+          <label class="field"><span>Trip name</span>
+            <input name="name" value="${esc(S.trip.name)}" maxlength="80"></label>
+          <div class="field field--split">
+            <label class="field"><span>Arrive</span>
+              <input type="date" name="start_date" value="${esc(S.trip.start_date)}" ${focus(true)}></label>
+            <label class="field"><span>Leave</span>
+              <input type="date" name="end_date" value="${esc(S.trip.end_date)}"></label>
+          </div>
           <label class="field places"><span>Where</span>
-            <input name="location" value="${esc(where)}" maxlength="200" autofocus
+            <input name="location" value="${esc(where)}" maxlength="200" ${focus(false)}
                    placeholder="Wasdale Head Campsite" data-places role="combobox"
                    aria-expanded="false" aria-autocomplete="list" aria-controls="cs-places"
                    autocomplete="off" spellcheck="false">
@@ -2565,9 +2593,11 @@ function whereCard() {
   return `
     <div class="card">
       <div class="card__head">
-        <h3>Getting there</h3>
+        <h3>When and where</h3>
         <button class="btn btn--sm" data-act="edit-where">Edit</button>
       </div>
+      <p class="when">${when ? esc(when)
+        : '<button class="when__ask" data-act="set-dates">Add the dates</button>'}</p>
       <p class="card__body notes">${esc(where)}</p>
       <div class="where__go">
         ${link ? `<a class="btn btn--primary" href="${esc(link)}" target="_blank" rel="noopener noreferrer">${ICONS.pin} Open in maps</a>` : ''}
@@ -2580,26 +2610,42 @@ function whereCard() {
 // textarea when somebody actually wants to change it.
 function notesCard() {
   const text = String(S.trip.notes ?? '').trim()
-  if (S.editNotes || !text) {
+
+  if (S.editNotes) {
     return `
       <div class="card">
         <h3>Notes for everyone</h3>
         <p>The gate code, who's driving, where you're meeting.</p>
         <form data-act="save-notes">
           <label class="field"><span class="sr-only">Notes for everyone</span>
-            <textarea name="notes" maxlength="4000" autofocus
+            <textarea name="notes" maxlength="4000" ${S.busy ? '' : 'autofocus'}
               placeholder="Gate code 1470. Meet at the Co-op car park at 9. Josh has the roof box.">${esc(S.trip.notes)}</textarea></label>
           <button class="btn btn--primary" type="submit">Save notes</button>
         </form>
       </div>`
   }
+
+  // An empty card that opens a textarea at you is a card demanding to be filled
+  // in. This one offers instead: most of the page is worth reading before the
+  // notes are worth writing.
+  if (!text) {
+    return `
+      <div class="card">
+        <h3>Notes for everyone</h3>
+        <p>The gate code, who's driving, where you're meeting — the things people ask twice.</p>
+        <button class="btn btn--wide" data-act="edit-notes">Write it down</button>
+      </div>`
+  }
+
   return `
     <div class="card">
       <div class="card__head">
         <h3>Notes for everyone</h3>
         <button class="btn btn--sm" data-act="edit-notes">Edit</button>
       </div>
-      <p class="card__body notes">${esc(text)}</p>
+      <p class="card__body notes clamp${S.expand.notes ? ' is-open' : ''}" data-clamp="notes">${esc(text)}</p>
+      <button class="btn btn--sm btn--wide more" data-act="expand" data-what="notes" hidden>
+        ${S.expand.notes ? 'Show less' : 'Show all'}</button>
     </div>`
 }
 
@@ -2957,23 +3003,12 @@ function campPage() {
 
       <div class="trip-columns">
         <div class="trip-stack">
-          ${weatherCard()}
-          ${whereCard()}
+          ${whenWhereCard()}
           ${notesCard()}
+          ${weatherCard()}
         </div>
         <div class="trip-stack">
           ${peopleCard()}
-          <div class="card">
-            <h3>Trip details</h3>
-            <form data-act="save-trip">
-              <label class="field"><span>Trip name</span><input name="name" value="${esc(S.trip.name)}" maxlength="80"></label>
-              <div class="field field--split">
-                <label class="field"><span>Arrive</span><input type="date" name="start_date" value="${esc(S.trip.start_date)}"></label>
-                <label class="field"><span>Leave</span><input type="date" name="end_date" value="${esc(S.trip.end_date)}"></label>
-              </div>
-              <button class="btn btn--primary" type="submit">Save details</button>
-            </form>
-          </div>
 
           <div class="card">
             <h3>Recent changes</h3>
@@ -3650,6 +3685,19 @@ function edges(row) {
 
 const markEdges = () => { for (const row of root.querySelectorAll?.(ROWS) ?? []) edges(row) }
 
+// A clamp is a height, and nothing in the text says whether it has hit one:
+// six lines of gate codes and six lines of anything else are nowhere near the
+// same number of characters. So the button that opens it is offered only after
+// the box has been laid out and found to be full — and it stays on once open,
+// because that is the way back.
+function markClamp() {
+  for (const box of root.querySelectorAll?.('[data-clamp]') ?? []) {
+    const btn = box.parentElement?.querySelector(`[data-act="expand"][data-what="${box.dataset.clamp}"]`)
+    if (!btn) continue
+    btn.hidden = !box.classList.contains('is-open') && box.scrollHeight <= box.clientHeight + 1
+  }
+}
+
 const CHAT_BOX_MAX = 180
 function fitChatBox(box) {
   if (!box) return
@@ -3760,6 +3808,9 @@ function render({ chatBottom = false } = {}) {
   // Google's button owns its inner markup, so it is mounted after our
   // string-rendered page is in the document and remounted after a redraw.
   renderGoogleButtons()
+
+  // Needs the page measured, so it comes after it is in the document.
+  markClamp()
 
   // Asked for after the page is on screen, and only where it is shown: the
   // forecast is the one thing here that comes from somewhere else, so nothing
@@ -4229,16 +4280,12 @@ document.addEventListener('click', async (ev) => {
       await mutate(() => api(`/items/${el.dataset.id}`, { method: 'PATCH', body: { category: el.dataset.cat } }))
       break
 
-    // The dates are already on this page, further down it. Nothing to open, then
-    // — just take somebody who has said they want them to the field that holds
-    // them, rather than making them hunt for the form they were promised.
-    case 'set-dates': {
-      const field = document.querySelector('form[data-act="save-trip"] [name="start_date"]')
-      if (!field) break
-      field.scrollIntoView({ block: 'center', behavior: 'smooth' })
-      field.focus({ preventScroll: true })
+    // Same form as Edit, opened on the date rather than on the address — the
+    // field that was asked for is the field the cursor lands in.
+    case 'set-dates':
+      S.editWhere = 'dates'
+      render()
       break
-    }
 
     case 'edit-notes':
       S.editNotes = true
@@ -4674,22 +4721,34 @@ document.addEventListener('submit', async (ev) => {
       break
     }
 
-    case 'save-trip':
-      await mutate(() => api(`/trips/${S.trip.id}`, { method: 'PATCH', body: f }))
-      toast('Saved.')
-      break
+    // One form for when and where, so one save. The server takes the two dates
+    // as independent strings and has no opinion about their order, so the one
+    // order that is not a trip is stopped here — a trip that ends before it
+    // starts empties the day strip, the countdown and the forecast at once.
+    case 'save-trip': {
+      const from = String(f.start_date ?? ''), to = String(f.end_date ?? '')
+      if (from && to && to < from) {
+        toast('That ends before it starts. Have another look at the dates.')
+        break
+      }
+      // Typing in the search box drops the pin behind it, so coordinates never
+      // outlive the address they were found for. A pasted map link does — it
+      // wins over the pin everywhere it is used, and whoever pasted it is the
+      // one who knows whether it still points at the right gate.
+      const moved = String(f.location ?? '').trim() !== String(S.trip.location ?? '').trim()
+      const sent = String(f.map_url ?? '').trim()
 
-    case 'save-where': {
+      if (!await mutate(() => api(`/trips/${S.trip.id}`, { method: 'PATCH', body: f }))) break
+      // Only now: a save that failed leaves the form on screen with what you
+      // typed still in it, which is the only copy of it there is.
       S.editWhere = false
-      await mutate(() => api(`/trips/${S.trip.id}`, {
-        method: 'PATCH',
-        body: { location: f.location, lat: f.lat, lon: f.lon, map_url: f.map_url },
-      }))
+      render()
+
       // The server keeps only ordinary web links, so a mistyped one comes back
       // empty. Better to say so than to leave a button that goes nowhere.
-      const sent = String(f.map_url ?? '').trim()
       toast(sent && !String(S.trip.map_url ?? '').trim()
         ? "Saved — that map link didn't look like a link, so it wasn't kept."
+        : moved && sent ? 'Saved. The map link still points where it did.'
         : 'Saved. Everyone can find it now.')
       break
     }
@@ -4737,8 +4796,9 @@ document.addEventListener('submit', async (ev) => {
     }
 
     case 'save-notes':
+      if (!await mutate(() => api(`/trips/${S.trip.id}`, { method: 'PATCH', body: { notes: f.notes } }))) break
       S.editNotes = false
-      await mutate(() => api(`/trips/${S.trip.id}`, { method: 'PATCH', body: { notes: f.notes } }))
+      render()
       toast('Everyone can see that now.')
       break
 
@@ -5165,8 +5225,9 @@ document.addEventListener('scroll', (ev) => {
 }, { capture: true, passive: true })
 
 // And when the window changes shape, because a row that fitted in portrait is a
-// row that scrolls in landscape, and neither one has been touched.
-window.addEventListener('resize', markEdges)
+// row that scrolls in landscape, and neither one has been touched. The same goes
+// for six lines of notes, which is a different amount of writing on each.
+window.addEventListener('resize', () => { markEdges(); markClamp() })
 
 // The on-screen keyboard covers the foot of the page without the page ever being
 // told: the layout viewport keeps its full height, so a sheet pinned to the

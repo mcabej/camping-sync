@@ -21,15 +21,17 @@ lost in a separate group chat.
   never an unlabelled checkbox sitting next to an unanswered question.
 - **What am I missing?** — a catalogue of ~90 things people usually bring, each
   with a note explaining why, filtered to hide what you already have.
-- **The Trip tab** — the whole trip on one screen: days to go, all four lists
-  reporting their coverage at once (tap one to go there), the notes everyone
-  needs (gate code, meeting point) shown as text rather than buried in a form,
-  and who has packed what of what they claimed.
-- **Getting there** — where the trip is, in **one** field, holding the real
-  place rather than a nickname for it. Headers and cards show what comes before
-  the first comma; the card shows the lot, with one tap to turn-by-turn. Paste a
-  map pin and that wins over everything, because a lot of campsites sit down an
-  unnamed track.
+- **The Trip tab** — the whole trip on one screen: days to go, what nobody has
+  picked up yet and which list to open about it, all four bars reporting at once
+  — including your own load — tap one to go there, the notes everyone needs
+  (gate code, meeting point) shown as text rather than buried in a form, and who
+  has packed what of what they claimed.
+- **When and where** — the dates and the place in one card and one form, because
+  that is the pair you check the night before somebody drives. The place is
+  **one** field holding the real name rather than a nickname for it: headers and
+  cards show what comes before the first comma, the card shows the lot, with one
+  tap to turn-by-turn. Paste a map pin and that wins over everything, because a
+  lot of campsites sit down an unnamed track.
 - **Place search** — the *Where* box looks places up as you type, finishes the
   name for you the way a browser's address bar does, and drops the rest under
   the cursor (see below). Take one and the coordinates come with it, so the map
