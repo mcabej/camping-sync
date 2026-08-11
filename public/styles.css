@@ -1211,8 +1211,7 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 .person__diet:hover { color: var(--forest); }
 .person__diet--set { color: var(--ink-soft); }
 
-.invite { margin-top: 18px; }
-.invite__note { margin: 8px 0 0; font-size: 12.5px; color: var(--ink-faint); }
+.invite__note { margin: 14px 0 0; font-size: 12.5px; color: var(--ink-faint); }
 
 .more { margin-top: 15px; }
 
@@ -1405,13 +1404,6 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
   padding: 13px 14px; border-radius: var(--r-md); background: var(--blaze-soft);
 }
 .chat__error p { margin: 0; color: var(--ink); font-size: 13.5px; }
-
-.code-box {
-  display: flex; align-items: center; gap: 12px;
-  padding: 13px 15px; border-radius: var(--r-md);
-  background: var(--paper-sunk); border: 1.5px dashed var(--line-strong);
-}
-.code-box__code { flex: 1; font-family: var(--mono); font-size: 15px; font-weight: 600; overflow-wrap: anywhere; }
 
 .tips { display: flex; flex-direction: column; gap: 0; }
 .tip { padding: 15px 0; border-bottom: 1px solid var(--line); display: flex; gap: 13px; }

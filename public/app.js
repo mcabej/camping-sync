@@ -2845,11 +2845,12 @@ function peopleCard() {
       if (c.packed) packed.set(c.member_id, (packed.get(c.member_id) ?? 0) + 1)
     }
   }
-  const link = `${location.origin}/t/${S.trip.id}`
-
   return `
     <div class="card">
-      <h3>Who's coming</h3>
+      <div class="card__head">
+        <h3>Who's coming</h3>
+        <button class="btn btn--sm" data-act="share">Invite</button>
+      </div>
       <p>Colours match the bar on every list. The count is what they're bringing for the group — personal kit stays private to each person.</p>
       <div class="people">
         ${S.members.map((m) => {
@@ -2873,13 +2874,7 @@ function peopleCard() {
             </div>`
         }).join('')}
       </div>
-      <div class="invite">
-        <div class="code-box">
-          <span class="code-box__code">${esc(link)}</span>
-          <button class="btn btn--sm" data-act="share">Copy</button>
-        </div>
-        <p class="invite__note">Anyone with this link can see the trip. Only members can read or write in the planning room.</p>
-      </div>
+      <p class="invite__note">Anyone with the trip's link can see it. Only members can read or write in the planning room.</p>
     </div>`
 }
 
