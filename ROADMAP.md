@@ -102,8 +102,11 @@ list nobody else can see is unfinished. A planner that nudges gets used; one
 that doesn't gets filled in once and forgotten, and one that nudges every day
 gets turned off — a notification switch is only ever turned off once.
 
-Asking for them is its own switch, per trip, off until somebody says otherwise.
-Muting the Planning Room deliberately does not answer for it: the room is other
+Each has its own switch on the account, both off until somebody says otherwise.
+The issue asked for the opt-in per trip and it was built that way first; a
+settings page that grows two rows per trip is a page ten trips bury, and "nudge
+me three days before a trip" was never a fact about one August weekend. Muting
+the Planning Room deliberately does not answer for either: the room is other
 people talking and a reminder is the app itself, and quietening a chat that ran
 all week is not a request to be let down about the tent. Neither is sent with
 nothing to say, and each is said once — `reminders_sent` keys on the day the

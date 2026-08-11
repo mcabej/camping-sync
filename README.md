@@ -78,10 +78,10 @@ lost in a separate group chat.
   messages, grouped per trip. Senders and members actively reading the room are
   skipped; each member can mute a trip, and unread counts remain visible in the
   app when push is unavailable or disabled.
-- **Reminders** — two per trip, and no more than two: three days out, how many
-  things nobody has claimed; the morning of, what is still unticked on your own
-  kit list. Off until somebody asks for them, per trip, and a separate answer
-  from muting the Planning Room.
+- **Reminders** — two, and no more than two: three days out, how many things
+  nobody has claimed; the morning of, what is still unticked on your own kit
+  list. Two switches on your account, off until you ask, applying to every trip
+  you are on — and nothing to do with muting a Planning Room.
 - **`@camp` assistant** — signed-in members can ask a trip-aware assistant about
   the details, lists, people and recent planning thread. Replies stream through
   the existing WebSocket and become durable messages when complete. Explicit
@@ -548,14 +548,14 @@ and a feed of them would bury the trip they belong to.
 
 ### Reminders
 
-Two per trip, and the number is the design. A planner that says something useful
-twice gets opened; one that says something every day gets turned off, and a
+Two, and the number is the design. A planner that says something useful twice
+per trip gets opened; one that says something every day gets turned off, and a
 notification switch is only ever turned off once.
 
-| When              | What it says                             | Who gets it            |
-| ----------------- | ---------------------------------------- | ---------------------- |
-| Three days out    | how many things nobody has claimed       | everyone who opted in  |
-| The morning of    | what is still unticked on your own kit   | the person it is about |
+| When           | Switch           | What it says                           | Who gets it            |
+| -------------- | ---------------- | -------------------------------------- | ---------------------- |
+| Three days out | `remind_lead`    | how many things nobody has claimed     | everyone who asked     |
+| The morning of | `remind_morning` | what is still unticked on your own kit | the person it is about |
 
 Both are questions the trip can already answer without asking anybody. Three
 days is the gap that still has a weekend in it — two days out, "nobody has
@@ -571,14 +571,23 @@ three-days-out nudge at all, rather than one reporting zero, and that is not
 recorded as said either: a list that fills up at four in the afternoon is still
 worth a word before the day is out.
 
-**Asking for them is its own switch.** The Planning Room's mute and this are two
-questions that read as one and are not — the room is other people talking, a
-reminder is the app itself. Somebody who has quietened a chat that ran all week
-has not asked to be let down about the tent, so neither switch answers for the
-other, and `reminders` on `notification_preferences` starts at `0`. It is off
-for every membership that already existed, because defaulting it on would read
-an answer to the Planning Room as an answer to a question nobody was asked, and
-the first they would hear of it is their phone going off at nine in the morning.
+**Each one is its own switch, and both are on your account.** `remind_lead` and
+`remind_morning` are columns on `users`, not on a membership: "nudge me three
+days before a trip" is a fact about a person, not about one August weekend, and
+asking it once per trip meant a settings page that grew two rows per trip until
+the answers were buried under a directory of somebody's summer. They are split
+from each other because they are different questions — three days out is about
+the group's list and the morning of is about your own, and the person who wants
+the second and not the first is not an edge case.
+
+Both start at `0`, for every account that already existed. Defaulting either on
+would read an answer about the Planning Room as an answer to a question nobody
+was asked, and the first they would hear of it is their phone going off at nine
+in the morning. Muting is not consulted at all: the room is other people talking
+and a reminder is the app itself, so somebody who has quietened a chat that ran
+all week has not asked to be let down about the tent. A member row with no
+account behind it — the pre-sign-in shape — is never reminded, because it has no
+way to have answered.
 
 Nine in the morning, in the server's timezone — set `TZ` to the one the group is
 camping in. The trip has coordinates, but a longitude is not a timezone, and a
@@ -603,9 +612,12 @@ push subscription the Planning Room already needed, so the durable handle a
 no-accounts app keeps on a phone is the same one, created by the same explicit
 opt-in and thrown away by the same switch.
 
-`lib/reminders.js` decides and sends nothing; `server.js` sends and stores
-nothing about what is due. Which is what makes the deciding testable —
-`scripts/reminder-smoke.mjs` hands it a particular Thursday in August.
+The delivery unit is still the membership, since a push subscription belongs to
+a member on a trip: the switch says whether you want to hear, and the
+subscriptions say where. `lib/reminders.js` decides and sends nothing;
+`server.js` sends and stores nothing about what is due. Which is what makes the
+deciding testable — `scripts/reminder-smoke.mjs` hands it a particular Thursday
+in August.
 
 ### Installing it
 
@@ -717,45 +729,46 @@ each thing is stored.
 | ---------------------- | ----------- | ------------------------------------ |
 | Theme                  | This device | `localStorage` (`cs.prefs`)          |
 | Feature switches       | This device | `localStorage` (`cs.prefs`)          |
-| Which trips may notify | You         | `notification_preferences`, server   |
-| Which trips may remind | You         | `notification_preferences`, server   |
+| The two reminders      | You         | `users`, server                      |
 | Push subscription      | This device | `push_subscriptions`, server         |
 | Name, picture, session | You         | `users` / `sessions`, server         |
 
 A theme is about the screen in your hand and the light it is in — a phone in a
 tent at night and a laptop at a desk want different answers, and the one thing a
-synced theme cannot do is have two. Muting is the opposite: it is a decision
-about a trip, and it would be a bad joke to have to repeat it on every device
-you own, so it stays on the member row the Planning Room's bell already writes.
-The settings page and that bell send the same `PATCH`; `GET /api/notifications`
-is the only addition, and it reads every membership the session already proves
-rather than taking a trip id.
+synced theme cannot do is have two. A reminder is the opposite: wanting to hear
+three days before a trip is a fact about you, not about the screen you happened
+to answer on, so it lives on your row in `users` and every device you own obeys
+it. `GET /api/notifications` reads it back along with the trips the session
+already proves, and `PATCH /api/notifications` writes it, taking either switch
+or both — a body naming neither is refused, since it means nothing rather than
+"leave them as they are".
 
-Each trip therefore asks two questions rather than one, and its name is a
-heading over the pair instead of the label on a switch: *Planning Room messages*
-and *Reminders*. That grouping is the order somebody arrives in — they came here
-about a particular trip — and it keeps the two from being read as one setting.
-The `PATCH` takes either field or both, and a body carrying neither is refused:
-a request that names no switch means nothing, rather than meaning "leave them
-as they are". Whichever one is pressed, both answers are read back off the
-response, because the row holds two and only one was asked about.
+**Which trips may notify you is deliberately not here.** It was a switch per
+trip, and per trip is how it grows: somebody with ten trips got ten rows, and a
+card whose job is to hold three decisions became a directory of their summer
+with the decisions buried under it. The question belongs to a trip, so it is
+asked where the trip is — the bell in its own Planning Room, writing the same
+`notification_preferences` row it always did. Nothing about muting changed
+except that this page stopped being a second place to do it.
 
-Which is why a browser that cannot show a notification still gets the trip
+Which is why a browser that cannot show a notification still gets the reminder
 switches — an iPhone that has not been added to the home screen, a laptop where
 the site is blocked in browser settings, this app over a LAN address rather than
-`https`. Only the device switch is that browser's to answer; muting is yours,
-and the phone in your pocket will obey it. Hiding the whole card because *this*
-screen cannot ring meant the one device you had to hand could not quieten the
-one that could.
+`https`. Only the device switch is that browser's to answer; what you want to be
+told is yours, and the phone in your pocket will obey it. Hiding the whole card
+because *this* screen cannot ring meant the one device you had to hand could not
+answer for the one that could.
 
 Turning a device on subscribes it to every trip on the account at once, and
 those writes go together rather than one behind the other. If some of them fail
 the browser is genuinely subscribed to the rest, so the page re-reads
 `GET /api/notifications` instead of settling the switch back to off — an off
 switch on a device that is about to be notified is the one state worth going out
-of the way to avoid. A read that fails outright says so and offers *Try again*,
-rather than drawing an unsubscribed device with no trips, which is a real answer
-this app is capable of giving and would be the wrong one told calmly.
+of the way to avoid. The trips are still read for that reason alone: nothing
+draws them, but the device switch has to know what it is subscribing to. A read
+that fails outright says so and offers *Try again*, rather than drawing an
+unsubscribed device with both reminders off, which is a real answer this app is
+capable of giving and would be the wrong one told calmly.
 
 There is nothing here for editing your name. Google rewrites it at every
 sign-in, so a field to change it would be a field that silently reverts. The

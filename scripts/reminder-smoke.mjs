@@ -18,23 +18,35 @@ try {
 
   db.prepare('INSERT INTO trips (id, name, start_date, end_date, created_at) VALUES (?, ?, ?, ?, ?)')
     .run('trip', 'Pine Camp', '2026-08-23', '2026-08-25', ts)
-  const addMember = db.prepare('INSERT INTO members (id, trip_id, name, created_at) VALUES (?, ?, ?, ?)')
-  addMember.run('sam', 'trip', 'Sam', ts)
-  addMember.run('alex', 'trip', 'Alex', ts)
+
+  // The switches are on the account, so the member rows need one behind them.
+  // Sam wants both; Alex is subscribed and unmuted but has never asked to be
+  // reminded, which is what everybody has after the migration.
+  const addUser = db.prepare(`INSERT INTO users
+    (id, name, remind_lead, remind_morning, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?)`)
+  addUser.run('u-sam', 'Sam', 1, 1, ts, ts)
+  addUser.run('u-alex', 'Alex', 0, 0, ts, ts)
+  const addMember = db.prepare(`INSERT INTO members (id, trip_id, user_id, name, created_at)
+                                VALUES (?, ?, ?, ?, ?)`)
+  addMember.run('sam', 'trip', 'u-sam', 'Sam', ts)
+  addMember.run('alex', 'trip', 'u-alex', 'Alex', ts)
+  // Nobody's account, the way a member row was before sign-in existed. It has
+  // no way to have answered either switch, so it is never reminded.
+  addMember.run('ghost', 'trip', null, 'Ghost', ts)
 
   const wants = db.prepare(`INSERT INTO notification_preferences
-    (member_id, trip_id, muted, reminders, last_read_message_id, updated_at)
-    VALUES (?, 'trip', ?, ?, 0, ?)`)
-  wants.run('sam', 0, 1, ts)
-  // Subscribed and unmuted, but never asked to be reminded. Quiet by default is
-  // the whole of the opt-in: this row is what everybody has after the migration.
-  wants.run('alex', 0, 0, ts)
+    (member_id, trip_id, muted, last_read_message_id, updated_at)
+    VALUES (?, 'trip', ?, 0, ?)`)
+  wants.run('sam', 0, ts)
+  wants.run('alex', 0, ts)
 
   const subscribe = db.prepare(`INSERT INTO push_subscriptions
     (endpoint, trip_id, member_id, p256dh, auth, created_at, updated_at)
     VALUES (?, 'trip', ?, 'public-key', 'auth-key', ?, ?)`)
   subscribe.run('https://push.example/sam', 'sam', ts, ts)
   subscribe.run('https://push.example/alex', 'alex', ts, ts)
+  subscribe.run('https://push.example/ghost', 'ghost', ts, ts)
 
   const addItem = db.prepare(`INSERT INTO items
     (id, trip_id, list, title, kind, owner_id, position, created_at, updated_at)
@@ -67,9 +79,11 @@ try {
 
   // Muting the Planning Room is not an answer about reminders. Somebody who has
   // quietened a chat that ran all week still wants telling about the tent.
-  db.prepare(`UPDATE notification_preferences SET muted = 1, reminders = 1 WHERE member_id = 'alex'`).run()
+  db.prepare(`UPDATE notification_preferences SET muted = 1 WHERE member_id = 'alex'`).run()
+  db.prepare(`UPDATE users SET remind_lead = 1 WHERE id = 'u-alex'`).run()
   const alsoAlex = dueReminders(at(20, 9, 50))
-  assert.deepEqual(alsoAlex.map((r) => r.memberId), ['alex'], 'a muted trip still reminds')
+  assert.deepEqual(alsoAlex.map((r) => r.memberId), ['alex'],
+    'a muted trip still reminds, and a member with no account never does')
 
   // A device that has gone: the reminder has nowhere to be, and is not recorded
   // as said, so it arrives whenever that browser comes back before the day is out.
@@ -97,6 +111,8 @@ try {
 
   // The morning of. Personal kit is private, so this one is counted per person:
   // Sam's two, Alex's none, and a legacy row belonging to nobody in particular.
+  // Alex has said yes to the three-day nudge and nothing else, which is the
+  // whole point of splitting them — that yes does not answer for this one.
   db.prepare(`UPDATE trips SET start_date = '2026-08-26' WHERE id = 'trip'`).run()
   addItem.run('bag', 'gear', 'Sleeping bag', 'own', 'sam', 5, ts, ts)
   addItem.run('torch', 'gear', 'Headtorch', 'own', 'sam', 6, ts, ts)
@@ -113,6 +129,13 @@ try {
   db.prepare('INSERT INTO own_checks (item_id, member_id) VALUES (?, ?)').run('torch', 'sam')
   const lastOne = dueReminders(at(26, 9, 20))
   assert.equal(lastOne[0].payload.body, 'Today\'s the day — you have not ticked Sleeping bag.')
+
+  // And the other way round: Sam keeps the three-day switch on and turns this
+  // one off, on a morning that would otherwise have gone out.
+  db.prepare(`UPDATE users SET remind_morning = 0 WHERE id = 'u-sam'`).run()
+  assert.deepEqual(dueReminders(at(26, 9, 30)), [],
+    'only the morning switch answers for the morning')
+  db.prepare(`UPDATE users SET remind_morning = 1 WHERE id = 'u-sam'`).run()
 
   db.prepare('INSERT INTO own_checks (item_id, member_id) VALUES (?, ?)').run('bag', 'sam')
   assert.deepEqual(dueReminders(at(26, 9, 40)), [], 'a ticked list is a quiet morning')

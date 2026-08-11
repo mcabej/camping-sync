@@ -1487,7 +1487,7 @@ check('the theme has three answers',
 check('and exactly one of them is pressed',
   (signedOut.match(/aria-pressed="true"\s+data-act="theme"/g) ?? []).length === 1)
 check('signed out, notifications say what signing in would buy',
-  find(signedOut, 'Sign in to see which trips can reach you'))
+  find(signedOut, 'Sign in to be reminded about your trips'))
 check('every feature has a switch', FEATURES.every((f) => find(signedOut, `data-act="feature" data-id="${f.id}"`)))
 check('a switch says what it is to a screen reader, not just in colour',
   find(signedOut, 'role="switch" aria-checked="true"'))
@@ -1509,54 +1509,59 @@ S.auth.user = wasUser
 S.alerts = {
   loading: false, busy: false, error: '', permission: 'granted',
   publicKey: 'k', subscribed: true,
-  trips: [{ tripId: 't1', name: 'Wasdale Weekend', muted: true, reminders: false, unread: 0 }],
+  reminders: { lead: false, morning: false },
+  trips: [{ tripId: 't1', name: 'Wasdale Weekend' }],
 }
 const withAlerts = viewSettings()
-check('this device and which trips are two questions, asked separately',
-  find(withAlerts, 'data-act="device-alerts"') && find(withAlerts, 'data-act="trip-alerts" data-id="t1"'))
-check('a muted trip reads as off', find(withAlerts, 'aria-checked="false"') && find(withAlerts, 'Muted'))
-// The room is other people talking and a reminder is the app talking, so the
-// trip's name is a heading over two switches rather than the label on one.
-check('a trip names itself over both of its answers',
-  find(withAlerts, 'Wasdale Weekend') && find(withAlerts, 'Planning Room messages')
-  && find(withAlerts, 'data-act="trip-reminders" data-id="t1"'))
-check('and reminders start off, because nobody has asked for them',
-  find(withAlerts, 'aria-checked="false" data-act="trip-reminders"'))
+check('this device and what you want told are two questions, asked separately',
+  find(withAlerts, 'data-act="device-alerts"') && find(withAlerts, 'data-act="reminder" data-id="lead"'))
+// Three days out is about the group's list and the morning of is about your
+// own, so wanting one is no reason to want the other.
+check('the two reminders are two switches',
+  find(withAlerts, 'data-act="reminder" data-id="lead"')
+  && find(withAlerts, 'data-act="reminder" data-id="morning"'))
+check('and both start off, because nobody has asked for them',
+  (withAlerts.match(/aria-checked="false" data-act="reminder"/g) ?? []).length === 2)
+// A card that grew a row per trip buried the two answers under ten trips, and
+// which trips may notify you is a question the trip's own bell already asks.
+check('the trips are no longer a list on this page',
+  !find(withAlerts, 'data-act="trip-alerts"') && !find(withAlerts, 'Wasdale Weekend'))
 
-S.alerts = { ...S.alerts, trips: [{ ...S.alerts.trips[0], muted: true, reminders: true }] }
-const remindingWhileMuted = viewSettings()
-check('muting the room does not answer for the reminders',
-  find(remindingWhileMuted, 'aria-checked="true" data-act="trip-reminders"')
-  && find(remindingWhileMuted, 'aria-checked="false" data-act="trip-alerts"'))
-S.alerts = { ...S.alerts, trips: [{ ...S.alerts.trips[0], muted: true, reminders: false }] }
+S.alerts = { ...S.alerts, reminders: { lead: true, morning: false } }
+const halfReminded = viewSettings()
+check('one on and one off is a state this page can draw',
+  find(halfReminded, 'aria-checked="true" data-act="reminder" data-id="lead"')
+  && find(halfReminded, 'aria-checked="false" data-act="reminder" data-id="morning"'))
+S.alerts = { ...S.alerts, reminders: { lead: false, morning: false } }
 
 S.alerts = { ...S.alerts, permission: 'denied' }
 const blocked = viewSettings()
 check('a browser-level block says so, and offers no switch that would lie',
   find(blocked, 'blocked for this site') && !find(blocked, 'data-act="device-alerts"'))
-// Which trips may reach you is an account setting your phone obeys, so it is
-// still yours to change from the laptop that has blocked notifications — and
-// from the iPhone that cannot show one until it is on the home screen.
-check('but which trips may reach you is still yours to set from here',
-  find(blocked, 'data-act="trip-alerts" data-id="t1"'))
+// The reminders are an account setting your phone obeys, so they are still
+// yours to change from the laptop that has blocked notifications — and from the
+// iPhone that cannot show one until it is on the home screen.
+check('but what you want told is still yours to set from here',
+  find(blocked, 'data-act="reminder" data-id="morning"'))
 
 S.alerts = { ...S.alerts, permission: 'unsupported', subscribed: false }
 const unsupported = viewSettings()
 check('a browser that cannot notify says why rather than offering a dead switch',
   find(unsupported, 'cannot show notifications') && !find(unsupported, 'data-act="device-alerts"'))
-check('and keeps the trip switches its other devices obey',
-  find(unsupported, 'data-act="trip-alerts" data-id="t1"'))
+check('and keeps the reminder switches its other devices obey',
+  find(unsupported, 'data-act="reminder" data-id="lead"'))
 
 // A request that never arrived is not the answer "off, and no trips". Drawn as
 // switches it would be the wrong settings in the voice of the right ones.
 S.alerts = {
   loading: false, busy: false, permission: '', publicKey: '', subscribed: false, trips: [],
+  reminders: { lead: false, morning: false },
   error: 'Your notification settings could not be loaded.',
 }
 const alertsFailed = viewSettings()
 check('a failed read says so rather than drawing settings nobody confirmed',
   find(alertsFailed, 'could not be loaded') && !find(alertsFailed, 'data-act="device-alerts"')
-  && !find(alertsFailed, 'No trips to be notified about yet'))
+  && !find(alertsFailed, 'data-act="reminder"'))
 check('and offers the one thing worth doing about it',
   find(alertsFailed, 'data-act="retry-alerts"'))
 

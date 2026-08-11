@@ -1103,9 +1103,9 @@ const latestMessageId = (tripId) => Number(db.prepare(
 
 function ensureNotificationPreference(tripId, memberId) {
   db.prepare(`INSERT OR IGNORE INTO notification_preferences
-    (member_id, trip_id, muted, reminders, last_read_message_id, updated_at)
-    VALUES (?, ?, 0, 0, ?, ?)`).run(memberId, tripId, latestMessageId(tripId), now())
-  return db.prepare(`SELECT muted, reminders, last_read_message_id FROM notification_preferences
+    (member_id, trip_id, muted, last_read_message_id, updated_at)
+    VALUES (?, ?, 0, ?, ?)`).run(memberId, tripId, latestMessageId(tripId), now())
+  return db.prepare(`SELECT muted, last_read_message_id FROM notification_preferences
                      WHERE member_id = ? AND trip_id = ?`).get(memberId, tripId)
 }
 
@@ -1143,8 +1143,7 @@ function notificationState(tripId, memberId, endpoint = '') {
     WHERE endpoint = ? AND trip_id = ? AND member_id = ?`).get(endpoint, tripId, memberId)
   return {
     available: true, publicKey: vapid.publicKey, subscribed: !!subscribed,
-    muted: !!pref.muted, reminders: !!pref.reminders,
-    unread: Number(unread), latest: latestMessage(tripId),
+    muted: !!pref.muted, unread: Number(unread), latest: latestMessage(tripId),
   }
 }
 
@@ -1173,12 +1172,22 @@ app.get('/api/trips/:id/notifications', (req, res) => {
   res.json(notificationState(trip.id, memberId, clean(req.query.endpoint, 2048)))
 })
 
-// Every trip's alerts in one answer, for the settings page. Muting and asking
-// to be reminded both belong to the member and the trip, so this is a read
-// across the memberships the session already proves — it takes no trip id and
-// grants no access to a trip the signed-in user is not on. Changing either one
-// still goes through the per-trip PATCH above rather than a second way to write
-// the same row.
+// What the settings page needs in one answer: the two reminder switches, and
+// every trip this session is on. Muting is not among the answers it draws any
+// more — a page that asked it once per trip was a page ten trips could bury —
+// but the trips themselves are still needed, because turning this device on
+// subscribes it to all of them at once.
+//
+// It takes no trip id and grants no access to a trip the signed-in user is not
+// on. Muting one still goes through the per-trip PATCH above, from the bell in
+// its own Planning Room.
+// Read from the row rather than from the session, which carries only the four
+// fields anything else needs to know about a person.
+function reminderState(userId) {
+  const row = db.prepare('SELECT remind_lead, remind_morning FROM users WHERE id = ?').get(userId)
+  return { lead: !!row?.remind_lead, morning: !!row?.remind_morning }
+}
+
 app.get('/api/notifications', (req, res) => {
   const user = requireUser(req, res)
   if (!user) return
@@ -1189,14 +1198,35 @@ app.get('/api/notifications', (req, res) => {
   res.json({
     available: true,
     publicKey: vapid.publicKey,
+    reminders: reminderState(user.id),
     trips: rows.map(({ memberId, tripId, name }) => {
       const state = notificationState(tripId, memberId, endpoint)
       return {
-        tripId, name, muted: state.muted, reminders: state.reminders,
+        tripId, name, muted: state.muted,
         unread: state.unread, subscribed: state.subscribed,
       }
     }),
   })
+})
+
+// The reminder switches belong to the account and to no particular trip, so
+// they are written here rather than under one. Either switch, or both; a body
+// carrying neither is a request that means nothing rather than one that means
+// "leave them as they are".
+const REMINDER_FIELDS = { lead: 'remind_lead', morning: 'remind_morning' }
+
+app.patch('/api/notifications', (req, res) => {
+  const user = requireUser(req, res)
+  if (!user) return
+  const wanted = Object.keys(REMINDER_FIELDS).filter((f) => req.body?.[f] !== undefined)
+  if (!wanted.length || wanted.some((f) => typeof req.body[f] !== 'boolean')) {
+    return res.status(400).json({ error: 'Choose which reminders you want.' })
+  }
+  db.prepare(`UPDATE users
+              SET ${wanted.map((f) => `${REMINDER_FIELDS[f]} = ?`).join(', ')}, updated_at = ?
+              WHERE id = ?`)
+    .run(...wanted.map((f) => (req.body[f] ? 1 : 0)), now(), user.id)
+  res.json({ reminders: reminderState(user.id) })
 })
 
 app.put('/api/trips/:id/notifications', (req, res) => {
@@ -1237,19 +1267,13 @@ app.patch('/api/trips/:id/notifications', (req, res) => {
   if (!trip) return
   const memberId = requireMember(req, res, trip.id)
   if (!memberId) return
-  // Two switches, written one at a time: the bell in the Planning Room sends
-  // `muted` and knows nothing about reminders, and the settings page sends
-  // whichever one was pressed. A body carrying neither is a request that means
-  // nothing rather than one that means "leave it as it is".
-  const wanted = ['muted', 'reminders'].filter((f) => req.body?.[f] !== undefined)
-  if (!wanted.length || wanted.some((f) => typeof req.body[f] !== 'boolean')) {
-    return res.status(400).json({ error: 'Choose what this trip may send you.' })
+  if (typeof req.body?.muted !== 'boolean') {
+    return res.status(400).json({ error: 'Choose whether this trip is muted.' })
   }
   ensureNotificationPreference(trip.id, memberId)
-  db.prepare(`UPDATE notification_preferences
-              SET ${wanted.map((f) => `${f} = ?`).join(', ')}, updated_at = ?
+  db.prepare(`UPDATE notification_preferences SET muted = ?, updated_at = ?
               WHERE member_id = ? AND trip_id = ?`)
-    .run(...wanted.map((f) => (req.body[f] ? 1 : 0)), now(), memberId, trip.id)
+    .run(req.body.muted ? 1 : 0, now(), memberId, trip.id)
   res.json(notificationState(trip.id, memberId, clean(req.body?.endpoint, 2048)))
 })
 
