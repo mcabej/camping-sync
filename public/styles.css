@@ -1036,23 +1036,17 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
    Camp / info page
    ========================================================================== */
 
-.trip-page { max-width: 1040px; padding-bottom: 48px; }
-.trip-page__head { margin-bottom: 24px; }
-.trip-page__head h2 { font-size: 28px; }
-.trip-page__head p {
-  max-width: 65ch; margin: 6px 0 0;
-  color: var(--ink-soft); font-size: 14.5px;
+/* The page is a stack of blocks, and the gap between them is what used to be a
+   row of section headings. Cards inside a block sit 16px apart; the blocks
+   themselves stand further back, so the eye can tell "another card" from
+   "another part of the page" without being told in words. */
+.trip-page {
+  max-width: 1040px; padding-bottom: 48px;
+  display: grid; gap: 32px; align-content: start;
 }
+.trip-page > .card, .trip-lead .card, .trip-stack .card { margin-bottom: 0; }
 
-.trip-lead { display: grid; gap: 16px; margin-bottom: 48px; }
-.trip-lead .card, .trip-urgent .card, .trip-stack .card, .trip-extras .card { margin-bottom: 0; }
-.trip-urgent { margin-bottom: 48px; }
-
-.trip-section + .trip-section { margin-top: 48px; }
-.trip-section__head { margin-bottom: 16px; }
-.trip-section__head h2 { font-size: 22px; }
-.trip-section__head p { margin: 4px 0 0; color: var(--ink-soft); font-size: 14px; }
-.trip-columns, .trip-extras, .trip-stack { display: grid; gap: 16px; }
+.trip-lead, .trip-columns, .trip-stack { display: grid; gap: 16px; }
 
 /* The planning room is a destination, not another summary card. Its dark
    surface makes the route obvious while keeping orange reserved for work that
@@ -1731,14 +1725,13 @@ button.wx__day:hover .wx__wet, .wx__row--open .wx__wet { color: var(--ink); }
   :root { --tabbar-h: 58px; }
   .page { padding: 28px 24px 40px; }
   .page__head h2 { font-size: 32px; }
-  .trip-page { padding-bottom: 64px; }
+  .trip-page { padding-bottom: 64px; gap: 48px; }
   .trip-lead { grid-template-columns: minmax(0, 1.7fr) minmax(260px, .8fr); }
   .trip-columns { grid-template-columns: minmax(0, 1.15fr) minmax(300px, .85fr); align-items: start; }
-  .trip-extras { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
-  .trip-section__head {
-    display: flex; align-items: baseline; justify-content: space-between; gap: 24px;
-  }
-  .trip-section__head p { margin-top: 0; text-align: right; }
+  /* Reading matter, not trip status: it runs along the bottom of the page as
+     three short columns rather than one long one down the side of it. */
+  .trip-smarts .tips { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px 28px; }
+  .trip-smarts .tip { border-bottom: 0; }
   .chat-card--page { --chat-pad-x: 24px; padding: 20px 24px 0; }
   .sheet-scrim { align-items: center; }
   .sheet { border-radius: var(--r-lg); max-height: min(82dvh, 100%); }

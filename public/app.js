@@ -2872,70 +2872,42 @@ function moreBtn(what, total, shown) {
             ${S.expand[what] ? 'Show fewer' : `Show all ${total}`}</button>`
 }
 
+// Every card here says what it is in its own heading, so the page needs no
+// titles over groups of them — "Essentials" and "Good to know" were labels for
+// the layout rather than for anything a person came to find. What is left is an
+// order: how the trip is looking, anything urgent, the details you drive to,
+// then the reading matter at the bottom.
 function campPage() {
   const tips = S.expand.tips ? S.tips : S.tips.slice(0, 3)
   const events = S.expand.feed ? S.events : S.events.slice(0, 8)
-  const home = homeCard()
 
   return `
     <main class="page trip-page">
-      <header class="trip-page__head">
-        <h2>Trip overview</h2>
-        <p>See what is covered, where you are going, and who is coming.</p>
-      </header>
-
       <div class="trip-lead">
         ${statusCard()}
         ${roomDoor()}
       </div>
 
-      ${home ? `<section class="trip-urgent" aria-label="Pack-down status">${home}</section>` : ''}
+      ${homeCard()}
 
-      <section class="trip-section" aria-labelledby="trip-essentials-title">
-        <div class="trip-section__head">
-          <h2 id="trip-essentials-title">Essentials</h2>
-          <p>The details everyone needs before setting off.</p>
+      <div class="trip-columns">
+        <div class="trip-stack">
+          ${weatherCard()}
+          ${whereCard()}
+          ${notesCard()}
         </div>
-        <div class="trip-columns">
-          <div class="trip-stack">
-            ${weatherCard()}
-            ${whereCard()}
-            ${notesCard()}
-          </div>
-          <div class="trip-stack">
-            ${peopleCard()}
-            <div class="card">
-              <h3>Trip details</h3>
-              <form data-act="save-trip">
-                <label class="field"><span>Trip name</span><input name="name" value="${esc(S.trip.name)}" maxlength="80"></label>
-                <div class="field field--split">
-                  <label class="field"><span>Arrive</span><input type="date" name="start_date" value="${esc(S.trip.start_date)}"></label>
-                  <label class="field"><span>Leave</span><input type="date" name="end_date" value="${esc(S.trip.end_date)}"></label>
-                </div>
-                <button class="btn btn--primary" type="submit">Save details</button>
-              </form>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section class="trip-section" aria-labelledby="trip-extra-title">
-        <div class="trip-section__head">
-          <h2 id="trip-extra-title">Good to know</h2>
-          <p>Recent changes and practical reminders for the weekend.</p>
-        </div>
-        <div class="trip-extras">
+        <div class="trip-stack">
+          ${peopleCard()}
           <div class="card">
-            <h3>Camp smarts</h3>
-            <p>The things people find out the hard way on their first trip.</p>
-            <div class="tips">
-              ${tips.map((t) => `
-                <div class="tip">
-                  <span class="tip__mark" aria-hidden="true">${ICONS.spark}</span>
-                  <div><h4>${esc(t.title)}</h4><p>${esc(t.body)}</p></div>
-                </div>`).join('')}
-            </div>
-            ${moreBtn('tips', S.tips.length, 3)}
+            <h3>Trip details</h3>
+            <form data-act="save-trip">
+              <label class="field"><span>Trip name</span><input name="name" value="${esc(S.trip.name)}" maxlength="80"></label>
+              <div class="field field--split">
+                <label class="field"><span>Arrive</span><input type="date" name="start_date" value="${esc(S.trip.start_date)}"></label>
+                <label class="field"><span>Leave</span><input type="date" name="end_date" value="${esc(S.trip.end_date)}"></label>
+              </div>
+              <button class="btn btn--primary" type="submit">Save details</button>
+            </form>
           </div>
 
           <div class="card">
@@ -2951,7 +2923,20 @@ function campPage() {
             ${moreBtn('feed', S.events.length, 8)}
           </div>
         </div>
-      </section>
+      </div>
+
+      <div class="card trip-smarts">
+        <h3>Camp smarts</h3>
+        <p>The things people find out the hard way on their first trip.</p>
+        <div class="tips">
+          ${tips.map((t) => `
+            <div class="tip">
+              <span class="tip__mark" aria-hidden="true">${ICONS.spark}</span>
+              <div><h4>${esc(t.title)}</h4><p>${esc(t.body)}</p></div>
+            </div>`).join('')}
+        </div>
+        ${moreBtn('tips', S.tips.length, 3)}
+      </div>
     </main>`
 }
 
