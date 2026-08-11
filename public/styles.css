@@ -108,12 +108,12 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
   display: block; margin-bottom: 6px;
   font-size: 13px; font-weight: 600; color: var(--ink-soft);
 }
-.field input, .field textarea {
+.field input, .field textarea, .field select {
   width: 100%; padding: 12px 14px; border-radius: var(--r-md);
   background: var(--paper); border: 1.5px solid var(--line-strong);
   transition: border-color .12s ease;
 }
-.field input:focus, .field textarea:focus { border-color: var(--forest); outline-offset: 1px; }
+.field input:focus, .field textarea:focus, .field select:focus { border-color: var(--forest); outline-offset: 1px; }
 .field textarea { min-height: 96px; resize: vertical; }
 /* Two fields side by side, until there is no room for two. A date input has a
    width it will not go under — the numbers and the picker button have to fit —
@@ -414,10 +414,9 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 .topbar--bare { padding-bottom: 12px; }
 .topbar--trip .topbar__trip { max-width: 1040px; }
 
-/* The planning room is a focused conversation screen, so its header navigates
-   back and names the room instead of repeating the trip summary. Equal side
-   columns keep the title centred even though only the left side has a button. */
-.topbar--room { flex: none; padding-left: 12px; padding-right: 12px; }
+/* Focused destinations navigate back and name the task instead of repeating
+   the trip summary. Equal side columns keep the title centred. */
+.topbar--focus { flex: none; padding-left: 12px; padding-right: 12px; }
 .roombar {
   width: 100%; max-width: 760px; margin: 0 auto;
   display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px;
@@ -442,6 +441,11 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
   background: #9BC6A6; box-shadow: 0 0 0 2px var(--forest-deep);
 }
 .roombar__notify[disabled] { opacity: .45; cursor: default; }
+.roombar__currency {
+  width: 44px; height: 44px; justify-self: end; border-radius: 50%;
+  color: rgba(244, 248, 240, .78); font-size: 11.5px; font-weight: 600;
+}
+.roombar__currency:hover { background: rgba(244, 248, 240, .1); color: #F4F8F0; }
 .roombar__title {
   min-width: 0; text-align: center; color: #F4F8F0;
   font-size: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -1491,6 +1495,75 @@ button.wx__day:hover .wx__wet, .wx__row--open .wx__wet { color: var(--ink); }
 }
 .strays__more { margin: 10px 0 0; font-size: 11.5px; color: var(--ink-faint); }
 
+/* ---- settling shared costs --------------------------------------------- */
+
+.settle-door {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto 22px;
+  align-items: center; gap: 14px; min-height: 96px; padding: 18px;
+  border-radius: var(--r-lg); background: var(--paper); color: inherit;
+  box-shadow: var(--shadow); text-decoration: none;
+  transition: background .16s ease, transform .12s ease;
+}
+.settle-door:hover { background: #fff; }
+.settle-door:active { transform: translateY(1px); }
+.settle-door__copy { min-width: 0; }
+.settle-door__copy strong { display: block; font-family: var(--display); font-size: 18px; }
+.settle-door__copy span {
+  display: block; margin-top: 4px; color: var(--ink-soft); font-size: 13.5px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.settle-door__total { color: var(--forest-deep); font-size: 15px; font-weight: 600; white-space: nowrap; }
+.settle-door__go { color: var(--forest); font-size: 18px; }
+
+.app--focus { padding-bottom: env(safe-area-inset-bottom); }
+.settle-page { max-width: 760px; display: grid; gap: 16px; padding-top: 20px; padding-bottom: 48px; }
+.settle-page__intro {
+  display: flex; align-items: center; justify-content: space-between;
+  flex-wrap: wrap; gap: 14px; padding: 0 2px 4px;
+}
+.settle-page__intro p { margin: 0; color: var(--ink-soft); font-size: 15px; }
+.settle-page__intro p b { color: var(--ink); }
+.settle-section {
+  padding: 20px 18px; border-radius: var(--r-lg); background: var(--paper); box-shadow: var(--shadow);
+}
+.settle-section__head {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 14px;
+  margin-bottom: 10px;
+}
+.settle-section__head h2 { font-family: var(--display); font-size: 20px; line-height: 1.15; }
+.settle-section__head span { color: var(--ink-faint); font-family: var(--mono); font-size: 11.5px; }
+.settle-empty {
+  padding: 44px 24px; border-radius: var(--r-lg); background: var(--paper-sunk); text-align: center;
+}
+.settle-empty h2 { margin: 0 0 7px; font-family: var(--display); font-size: 22px; }
+.settle-empty p { max-width: 45ch; margin: 0 auto 20px; color: var(--ink-soft); }
+
+.expenses { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
+.expenses li { border-bottom: 1px solid var(--line); }
+.expense-row {
+  width: 100%; display: flex; align-items: center; justify-content: space-between;
+  gap: 14px; padding: 10px 0; color: inherit; text-align: left;
+}
+.expense-row > span { min-width: 0; }
+.expense-row b, .expense-row small { display: block; overflow-wrap: anywhere; }
+.expense-row b { font-size: 14px; }
+.expense-row small { margin-top: 2px; color: var(--ink-soft); font-size: 12px; }
+.expense-row > strong { flex: none; color: var(--forest-deep); }
+.settle { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
+.settle__row {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 14px;
+  padding: 9px 0; border-bottom: 1px solid var(--line); font-size: 14px;
+}
+.settle__row > span { min-width: 0; overflow-wrap: anywhere; }
+.settle__row > strong { flex: none; color: var(--forest-deep); white-space: nowrap; }
+.settle__square {
+  margin: 0; padding: 11px 13px; border-radius: var(--r-md);
+  background: #E4EEE5; color: var(--forest-deep); font-size: 14px; font-weight: 600;
+}
+.settle__round {
+  margin: 11px 0 0; font-size: 12px; line-height: 1.45; color: var(--ink-faint);
+}
+
 /* The one line on your own page that says the question has changed. Standing at
    the top of the list rather than in the header, because the header is furniture
    and this is news. */
@@ -1677,6 +1750,55 @@ button.wx__day:hover .wx__wet, .wx__row--open .wx__wet { color: var(--ink); }
 .field__hint { margin: 7px 0 0; font-size: 12.5px; color: var(--ink-soft); line-height: 1.4; }
 .pick__tick { flex: none; width: 20px; height: 20px; color: var(--forest); opacity: 0; }
 .pick[aria-pressed="true"] .pick__tick { opacity: 1; }
+
+/* A cost belongs to one claim, so its route sits directly under that person's
+   picked row. It stays a quiet text target until there is money to report. */
+.claim-row { margin-bottom: 5px; }
+.claim-row .pick { margin-bottom: 0; }
+.claim-row__cost {
+  display: block; margin: 4px 12px 0 40px; padding: 3px 0;
+  font-size: 12.5px; font-weight: 600; color: var(--forest); text-align: left;
+}
+.claim-row__cost:hover { text-decoration: underline; text-underline-offset: 3px; }
+.expense-split {
+  margin: 2px 0 16px; padding: 0; border: 0;
+}
+.expense-split legend, .expense-people legend {
+  margin-bottom: 8px; font-size: 13px; font-weight: 600;
+}
+.expense-split__modes { margin-bottom: 0; }
+.expense-split .field__hint { margin-bottom: 0; }
+.expense-people {
+  margin: 0 0 16px; padding: 0; border: 0;
+}
+.expense-person {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center; gap: 12px; min-height: 52px;
+  border-bottom: 1px solid var(--line);
+}
+.expense-person__who {
+  min-width: 0; display: flex; align-items: center; gap: 9px;
+  padding: 8px 0; font-size: 14px;
+}
+.expense-person__name { min-width: 0; overflow-wrap: anywhere; }
+.expense-person__who > input {
+  flex: none; width: 18px; height: 18px; margin: 0; accent-color: var(--forest);
+}
+.expense-person__amount { display: none; }
+.expense-form[data-split="custom"] .expense-person__amount { display: block; }
+.expense-person__amount input {
+  width: 96px; min-height: 44px; padding: 8px 10px;
+  border: 1.5px solid var(--line-strong); border-radius: var(--r-md);
+  background: var(--paper); font-family: var(--mono); font-size: 14px; text-align: right;
+  transition: border-color .12s ease, opacity .12s ease;
+}
+.expense-person__amount input:focus { border-color: var(--forest); outline-offset: 1px; }
+.expense-person__amount input:disabled { opacity: .42; }
+.expense-split__total {
+  display: none; min-height: 20px; margin: 9px 0 0;
+  color: var(--ink-soft); font-size: 12.5px; line-height: 1.4;
+}
+.expense-form[data-split="custom"] .expense-split__total { display: block; }
 
 .sheet__group { margin-bottom: 20px; }
 .sheet__group > .eyebrow { display: block; margin-bottom: 9px; }

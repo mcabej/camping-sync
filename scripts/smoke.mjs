@@ -42,7 +42,8 @@ const hooks = ['S', 'render', 'viewTrip', 'renderSheet', 'CAMP', 'TABS',
   'loadFolds', 'saveFolds', 'autoFold', 'pageGroups', 'tripDays',
   'dayTurned', 'turnDay', 'tillMidnight', 'edges', 'perDay', 'daysPicked',
   'ensureChatSocket', 'stopChatSocket', 'showChatChanges', 'fitChatBox',
-  'campMentionRange', 'completeCampMention']
+  'campMentionRange', 'completeCampMention',
+  'settlement', 'customExpenseShares', 'googleSignIn', 'tripRoute']
 new Function(`${src}\n;Object.assign(globalThis, {${hooks.map((h) => `__${h}: ${h}`).join(',')}})`)()
 
 const { __S: S, __render: render, __viewTrip: viewTrip, __renderSheet: renderSheet, __TABS: TABS,
@@ -52,7 +53,9 @@ const { __S: S, __render: render, __viewTrip: viewTrip, __renderSheet: renderShe
   __daysPicked: daysPicked, __ensureChatSocket: ensureChatSocket,
   __stopChatSocket: stopChatSocket, __showChatChanges: showChatChanges,
   __fitChatBox: fitChatBox,
-  __campMentionRange: campMentionRange, __completeCampMention: completeCampMention } = globalThis
+  __campMentionRange: campMentionRange, __completeCampMention: completeCampMention,
+  __settlement: settlement, __customExpenseShares: customExpenseShares,
+  __googleSignIn: googleSignIn, __tripRoute: tripRoute } = globalThis
 const { CATALOG } = await import('../lib/catalog.js')
 
 // A trip with a bit of everything: claimed by one, claimed by three, unclaimed,
@@ -67,7 +70,7 @@ S.tips = [{ title: 'a', body: 'b' }]
 S.me = 'm1'
 S.view = 'trip'
 S.trip = { id: 't1', name: 'Wasdale Weekend', location: 'Wasdale Head, CA20 1EX', lat: 54, lon: -3,
-  map_url: '', start_date: '2026-09-04', end_date: '2026-09-06', notes: 'Gate code 1470', rev: 1 }
+  map_url: '', start_date: '2026-09-04', end_date: '2026-09-06', notes: 'Gate code 1470', currency: 'GBP', rev: 1 }
 S.members = [{ id: 'm1', name: 'Josh', hue: 0 }, { id: 'm2', name: 'Sam', hue: 1 },
   { id: 'm3', name: 'Ali Khan', hue: 2 }, { id: 'm4', name: 'Robin', hue: 3 }]
 S.events = [{ actor: 'Sam', text: 'added Tent', created_at: new Date().toISOString() }]
@@ -97,10 +100,26 @@ S.items = [
   item({ t: 'Drinking water', list: 'drinks', category: 'Drinks' }),
   item({ t: 'Hike', list: 'activities', category: 'Daytime', votes: ['m1'], claims: [claim('m2')] }),
 ]
+S.expenses = [
+  { id: 'beer-cost', item_id: 'Beer', claim_member_id: 'm1', description: 'Beer', amount: 1001,
+    paid_by: 'm2', participants: ['m1', 'm2', 'm3', 'm4'] },
+  // Petrol is not packing-list cargo, and only the people in this car share it.
+  { id: 'petrol', item_id: null, claim_member_id: null, description: 'Petrol', amount: 6000,
+    paid_by: 'm1', participants: ['m1', 'm3'] },
+]
 
 const find = (html, needle) => html.includes(needle)
 let bad = 0
 const check = (label, ok) => { if (!ok) { bad++; console.log(`  FAIL  ${label}`) } else console.log(`  ok    ${label}`) }
+
+const signedAuth = S.auth
+S.auth = { ...signedAuth, clientId: '', devBypass: true, user: null }
+check('development auth bypass replaces missing Google sign-in',
+  find(googleSignIn(), 'data-act="dev-sign-in"') && !find(googleSignIn(), 'not been configured'))
+S.auth = signedAuth
+check('the focused Settle up URL resolves back to the same trip',
+  tripRoute('/t/pine-camp-123/settle')?.code === 'pine-camp-123'
+  && tripRoute('/t/pine-camp-123/settle')?.view === 'settle')
 
 const growingBox = { scrollHeight: 92, style: {} }
 fitChatBox(growingBox)
@@ -348,6 +367,47 @@ check('the status card counts your own load too', find(campPageHtml, 'data-act="
 check('one place is current at a time', (campPageHtml.match(/aria-current="page"/g) ?? []).length === 1)
 check('the overview links to the planning room instead of embedding it',
   find(campPageHtml, 'href="/t/t1/room"') && !find(campPageHtml, 'id="chat-text"'))
+const settled = settlement()
+check('standalone petrol can be split only between its car occupants', settled.total === 7001
+  && String(settled.transfers.map((move) => move.amount)) === '2749,501,250')
+const customMeal = {
+  id: 'meal', description: 'Meal', amount: 2000, paid_by: 'm1',
+  participants: ['m1', 'm2'], shares: { m1: 800, m2: 1200 },
+}
+const customSettled = settlement([customMeal])
+check('a custom meal uses its exact £8 and £12 shares', customSettled.total === 2000
+  && customSettled.rounded === false && customSettled.transfers.length === 1
+  && customSettled.transfers[0].from.id === 'm2'
+  && customSettled.transfers[0].to.id === 'm1'
+  && customSettled.transfers[0].amount === 1200)
+const shareInputs = { 'share:m1': { value: '8.00' }, 'share:m2': { value: '' } }
+const customPayload = customExpenseShares({
+  elements: { namedItem: (name) => shareInputs[name] },
+}, ['m1', 'm2'], '20.00')
+check('one blank custom share takes the remainder', customPayload.shares.m1 === '8.00'
+  && customPayload.shares.m2 === '12.00' && shareInputs['share:m2'].value === '12.00')
+check('the Trip overview keeps only a compact route into Settle up',
+  find(campPageHtml, 'href="/t/t1/settle"') && find(campPageHtml, 'data-act="settle"')
+  && find(campPageHtml, '£70.01') && !find(campPageHtml, 'class="expenses"')
+  && !find(campPageHtml, 'data-act="new-expense"'))
+S.camp = 'settle'
+const settlePageHtml = viewTrip()
+check('Settle up has a focused page without the trip tab bar',
+  find(settlePageHtml, 'id="settle-up-title">Settle up</h1>')
+  && find(settlePageHtml, 'class="roombar__back"') && !find(settlePageHtml, 'class="tabbar"'))
+check('the Settle up page owns the ledger and add action',
+  find(settlePageHtml, '>Petrol<') && find(settlePageHtml, '>Beer<')
+  && find(settlePageHtml, 'data-act="new-expense"'))
+check('settlement makes the odd-penny rule visible', settled.rounded
+  && find(settlePageHtml, 'Rounding is to the penny') && find(settlePageHtml, '£70.01'))
+check('the Settle up page says who owes whom', find(settlePageHtml, '<b>Ali Khan</b> owes <b>Josh</b>')
+  && find(settlePageHtml, '£27.49'))
+const recordedExpenses = S.expenses
+S.expenses = []
+const emptySettlePage = viewTrip()
+check('an empty Settle up page teaches the first move',
+  find(emptySettlePage, 'No expenses yet') && find(emptySettlePage, 'Add the first expense'))
+S.expenses = recordedExpenses
 S.camp = 'room'
 const roomPageHtml = viewTrip()
 check('planning room renders durable messages',
@@ -507,6 +567,24 @@ check('item sheet ticks everyone who is on it', pressedFor(itemSheet, 'm1') && p
 check('item sheet leaves the rest unticked', !pressedFor(itemSheet, 'm4'))
 check('item sheet says who has packed theirs', find(itemSheet, 'Packed theirs.') && find(itemSheet, 'Not packed yet.'))
 check('item sheet carries the way to remove it', find(itemSheet, 'data-act="kill" data-id="Beer"'))
+check('a claimant can carry a cost paid by somebody else',
+  find(itemSheet, '£10.01 · paid by Sam') && find(itemSheet, 'data-act="expense" data-id="Beer" data-member="m1" data-expense="beer-cost"'))
+S.sheet = { kind: 'expense', expenseId: 'petrol' }; renderSheet()
+const expenseSheet = roots['sheet-root'].innerHTML
+check('the petrol sheet keeps its label, payer, amount and selected occupants together',
+  find(expenseSheet, 'value="Petrol"') && find(expenseSheet, 'value="60.00"')
+  && find(expenseSheet, 'value="m1" selected') && find(expenseSheet, 'value="m3" checked')
+  && !find(expenseSheet, 'value="m2" checked') && find(expenseSheet, 'save-expense'))
+S.expenses.push(customMeal)
+S.sheet = { kind: 'expense', expenseId: 'meal' }; renderSheet()
+const customExpenseSheet = roots['sheet-root'].innerHTML
+check('a custom expense reopens with its exact shares',
+  find(customExpenseSheet, 'data-split="custom"')
+  && find(customExpenseSheet, 'name="share:m1" value="8.00"')
+  && find(customExpenseSheet, 'name="share:m2" value="12.00"')
+  && find(customExpenseSheet, 'Custom amounts')
+  && find(customExpenseSheet, 'Shares add up to £20.00.'))
+S.expenses.pop()
 S.sheet = { kind: 'item', id: 'Crisps' }; renderSheet()
 const unclaimed = roots['sheet-root'].innerHTML
 // Your name is a row like everybody else's, and that row is the only way in.
