@@ -1033,6 +1033,31 @@ function ensureNotificationPreference(tripId, memberId) {
                      WHERE member_id = ? AND trip_id = ?`).get(memberId, tripId)
 }
 
+// One line for the door on the trip page. It comes from here rather than from
+// the client's own copy of the conversation, because that copy is only filled in
+// once you have opened the room — a preview drawn from it would be there or not
+// depending on what you happened to do earlier in the session, which is not a
+// difference anybody could see the reason for.
+//
+// Assistant messages count. The door says @camp lives in there, and the answer
+// it gave to somebody else's question is as much worth reading as the question.
+const PREVIEW_MAX = 200
+
+function latestMessage(tripId) {
+  const row = db.prepare(`SELECT role, author_name, body, created_at FROM messages
+                          WHERE trip_id = ? ORDER BY id DESC LIMIT 1`).get(tripId)
+  if (!row) return null
+  // One line: line breaks and runs of spaces collapse, the same as they do for
+  // a push notification, because a door has room for a sentence and not a poem.
+  const body = String(row.body ?? '').replace(/\s+/g, ' ').trim()
+  return {
+    author: row.author_name || 'Someone',
+    assistant: row.role === 'assistant',
+    body: body.length > PREVIEW_MAX ? `${body.slice(0, PREVIEW_MAX - 1)}…` : body,
+    at: row.created_at,
+  }
+}
+
 function notificationState(tripId, memberId, endpoint = '') {
   const pref = ensureNotificationPreference(tripId, memberId)
   const unread = db.prepare(`SELECT COUNT(*) AS n FROM messages
@@ -1042,7 +1067,7 @@ function notificationState(tripId, memberId, endpoint = '') {
     WHERE endpoint = ? AND trip_id = ? AND member_id = ?`).get(endpoint, tripId, memberId)
   return {
     available: true, publicKey: vapid.publicKey, subscribed: !!subscribed,
-    muted: !!pref.muted, unread: Number(unread),
+    muted: !!pref.muted, unread: Number(unread), latest: latestMessage(tripId),
   }
 }
 

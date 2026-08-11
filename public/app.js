@@ -129,6 +129,9 @@ const S = {
   notify: {
     tripId: '', loading: false, available: false, subscribed: false,
     muted: false, unread: 0, publicKey: '', busy: false,
+    // The last thing said in the room, for the door on the trip page:
+    // `{ author, assistant, body, at }` or null. See latestMessage on the server.
+    latest: null,
   },
   catalog: null, tips: [],
   // The forecast for where and when this trip is: `{ key, state, days, advice }`.
@@ -343,6 +346,7 @@ async function wantNotificationState() {
       tripId, loading: false, available: pushSupported() && !!state.available,
       subscribed: !!state.subscribed, muted: !!state.muted,
       unread: Number(state.unread) || 0, publicKey: String(state.publicKey ?? ''), busy: false,
+      latest: state.latest ?? null,
     }
   } catch {
     if (S.notify.tripId === tripId) S.notify = {
@@ -651,11 +655,17 @@ function connectChatSocket(tripId) {
       if (data.type === 'message.created' && data.message) {
         const viewing = S.camp === 'room' && !document.hidden
         if (S.chat.tripId === tripId) mergeMessages([data.message])
+        // The door's preview is fetched once with the rest of the notification
+        // state, so the socket keeps it current — otherwise it would say what
+        // was last said at the moment you arrived and nothing after.
+        if (S.notify.tripId === tripId) S.notify.latest = previewOf(data.message)
         if (viewing) {
           showChatChanges()
           markRoomRead()
-        } else if (data.message.member_id !== S.me) {
-          S.notify.unread = Math.max(0, Number(S.notify.unread) || 0) + 1
+        } else {
+          if (data.message.member_id !== S.me) {
+            S.notify.unread = Math.max(0, Number(S.notify.unread) || 0) + 1
+          }
           render()
         }
       } else if (data.type?.startsWith('assistant.')) {
@@ -2873,14 +2883,33 @@ function peopleCard() {
     </div>`
 }
 
+// The same one-liner the server makes for the door, for a message that has just
+// come down the socket rather than one that was already there when we asked.
+const previewOf = (m) => ({
+  author: m.author_name || 'Someone',
+  assistant: m.role === 'assistant',
+  body: String(m.body ?? '').replace(/\s+/g, ' ').trim(),
+  at: m.created_at,
+})
+
+// A door with a count on it says how much you have missed. A door with the last
+// thing said on it says whether it is worth opening, which is the question you
+// actually have — and it is one line, so it stays a door rather than becoming a
+// second, worse chat window.
 function roomDoor() {
-  const unread = S.notify.tripId === S.trip.id ? S.notify.unread : 0
+  const here = S.notify.tripId === S.trip.id
+  const unread = here ? S.notify.unread : 0
+  const last = here ? S.notify.latest : null
   return `
     <a class="room-door" href="/t/${encodeURIComponent(S.trip.id)}/room" data-act="room">
       <span class="room-door__icon" aria-hidden="true">${ICONS.room}</span>
       <span class="room-door__copy">
         <strong>Planning room</strong>
-        <span>Questions, decisions and <span class="mono">@camp</span> help live here.</span>
+        ${last?.body ? `
+          <span class="room-door__last">
+            <b${last.assistant ? ' class="mono"' : ''}>${esc(last.author)}</b>
+            ${esc(last.body)}</span>`
+        : '<span>Questions, decisions and <span class="mono">@camp</span> help live here.</span>'}
       </span>
       <span class="room-door__go">${unread
         ? `<span class="room-door__unread">${unread > 99 ? '99+' : unread} new</span>`

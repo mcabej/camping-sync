@@ -336,7 +336,13 @@ check('the bar carries Camp alongside the tabs', find(pack, 'data-act="camp" >')
 S.camp = 'overview'
 const campPageHtml = viewTrip()
 check('Camp is lit when you are on it', find(campPageHtml, 'data-act="camp" aria-current="page"'))
-check('trip page still renders its cards', find(campPageHtml, "Who's coming") && find(campPageHtml, 'Getting there'))
+check('trip page still renders its cards', find(campPageHtml, "Who's coming") && find(campPageHtml, 'When and where'))
+// The dates and the place are one card and one form; there is no second form
+// elsewhere on the page holding the other half of the same trip.
+check('when and where is one card', (campPageHtml.match(/data-act="save-trip"/g) ?? []).length <= 1
+  && !find(campPageHtml, 'Trip details'))
+// Every bar you are carrying something on, including the one that is not a list.
+check('the status card counts your own load too', find(campPageHtml, 'data-act="tab" data-tab="mine"'))
 check('one place is current at a time', (campPageHtml.match(/aria-current="page"/g) ?? []).length === 1)
 check('the overview links to the planning room instead of embedding it',
   find(campPageHtml, 'href="/t/t1/room"') && !find(campPageHtml, 'id="chat-text"'))

@@ -1070,6 +1070,11 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
   display: block; margin-top: 4px; color: rgba(244, 248, 240, .72);
   font-size: 13.5px; line-height: 1.4;
 }
+/* The last thing said, on one line: enough to tell whether the room is worth
+   opening, never enough for the door to start being the conversation. The
+   ellipsis is CSS so it falls where the door actually runs out of width. */
+.room-door__last { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.room-door__last b { color: #F4F8F0; font-weight: 600; }
 .room-door__go { font-size: 13px; font-weight: 600; white-space: nowrap; }
 .room-door__unread {
   display: inline-flex; min-height: 25px; padding: 2px 8px; align-items: center;
