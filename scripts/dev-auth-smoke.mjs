@@ -145,6 +145,33 @@ try {
   const otherAlerts = await (await request('/notifications', second.cookie)).json()
   assert.equal(otherAlerts.trips[0].muted, false)
 
+  // The reminders belong to the account and to no trip in particular, so they
+  // are written without one. Two switches, because three days out is about the
+  // group's list and the morning of is about your own: one answer must not be
+  // read as the other, and neither is touched by muting a room.
+  assert.deepEqual(alerts.reminders, { lead: false, morning: false })
+  const reminding = await (await request('/notifications', first.cookie, 'PATCH', { lead: true })).json()
+  assert.deepEqual(reminding.reminders, { lead: true, morning: false })
+  const remindingAlerts = await (await request('/notifications', first.cookie)).json()
+  assert.deepEqual(remindingAlerts.reminders, { lead: true, morning: false })
+  assert.equal(remindingAlerts.trips[0].muted, true)
+  // One person's answer is one person's: the other account is untouched.
+  assert.deepEqual((await (await request('/notifications', second.cookie)).json()).reminders,
+    { lead: false, morning: false })
+
+  const both = await (await request('/notifications', first.cookie, 'PATCH',
+    { lead: false, morning: true })).json()
+  assert.deepEqual(both.reminders, { lead: false, morning: true })
+
+  // A body carrying neither switch is a request that means nothing, rather than
+  // one that means "leave both as they are".
+  assert.equal((await request('/notifications', first.cookie, 'PATCH', { muted: true })).status, 400)
+  assert.equal((await request('/notifications', first.cookie, 'PATCH', { morning: 'yes' })).status, 400)
+  assert.equal((await fetch(`${origin}/api/notifications`, {
+    method: 'PATCH', headers: { origin, 'content-type': 'application/json' },
+    body: JSON.stringify({ lead: true }),
+  })).status, 401)
+
   // A face belongs to the people on the trip. The development sign-in has no
   // picture to hand — Google is where they come from — so one is written onto
   // the row directly: what is being tested is not where it came from but who it

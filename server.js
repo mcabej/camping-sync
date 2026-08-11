@@ -10,6 +10,7 @@ import { WebSocket, WebSocketServer } from 'ws'
 import {
   db, uid, now, newTripCode, bumpRev, logEvent, getTripState, nextPosition,
 } from './lib/db.js'
+import { REMINDER_LEASE_MS, runReminders } from './lib/reminders.js'
 import { CATALOG, TIPS, WEATHER_ADVICE, catalogEntry } from './lib/catalog.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -443,6 +444,43 @@ function activeRoomMembers(tripId) {
   return active
 }
 
+// Node leaves an outgoing request without any timeout of its own, so a push
+// service that accepts a connection and then says nothing holds this one open
+// for as long as it likes. That is the failure a reminder's lease cannot
+// survive: the lease exists so that a second scan may retry a send that died,
+// and half an hour later it will — while the first attempt is still sitting
+// there able to deliver. Thirty seconds is longer than any push service that is
+// going to answer takes, and far inside the lease, so the retry only ever
+// happens after the first attempt has genuinely given up.
+const PUSH_TIMEOUT_MS = 30 * 1000
+if (PUSH_TIMEOUT_MS >= REMINDER_LEASE_MS) {
+  throw new Error('A push attempt must not be able to outlive the reminder lease')
+}
+
+// One way out to the push services, for both the things this app sends. A
+// 404 or 410 means the browser has permanently retired this endpoint, which is
+// the one error worth acting on rather than logging.
+async function sendPush(subscriptions, payload, { ttl = 3600, urgency = 'normal' } = {}) {
+  const results = await Promise.allSettled(subscriptions.map(async (sub) => (
+    webpush.sendNotification({
+      endpoint: sub.endpoint,
+      keys: { p256dh: sub.p256dh, auth: sub.auth },
+    }, payload, { TTL: ttl, urgency, timeout: PUSH_TIMEOUT_MS })
+  )))
+  for (const [index, result] of results.entries()) {
+    if (result.status === 'fulfilled') continue
+    const err = result.reason
+    // One endpoint is one browser subscription, so every trip mapping on it
+    // is stale together.
+    if (err?.statusCode === 404 || err?.statusCode === 410) {
+      db.prepare('DELETE FROM push_subscriptions WHERE endpoint = ?').run(subscriptions[index].endpoint)
+    } else {
+      console.error('Push notification failed:', err?.message ?? 'unknown error')
+    }
+  }
+  return results.some((result) => result.status === 'fulfilled')
+}
+
 async function notifyMessage(tripId, message, { onlyMemberId = '' } = {}) {
   const trip = db.prepare('SELECT name FROM trips WHERE id = ?').get(tripId)
   if (!trip) return
@@ -467,23 +505,15 @@ async function notifyMessage(tripId, message, { onlyMemberId = '' } = {}) {
     messageId: message.id,
   })
 
-  await Promise.allSettled(subscriptions.map(async (sub) => {
-    try {
-      await webpush.sendNotification({
-        endpoint: sub.endpoint,
-        keys: { p256dh: sub.p256dh, auth: sub.auth },
-      }, payload, { TTL: 3600, urgency: 'normal' })
-    } catch (err) {
-      // 404/410 means the browser has permanently retired this endpoint. One
-      // endpoint is one browser subscription, so every trip mapping is stale.
-      if (err?.statusCode === 404 || err?.statusCode === 410) {
-        db.prepare('DELETE FROM push_subscriptions WHERE endpoint = ?').run(sub.endpoint)
-      } else {
-        console.error('Push notification failed:', err?.message ?? 'unknown error')
-      }
-    }
-  }))
+  await sendPush(subscriptions, payload)
 }
+
+// ---- reminders --------------------------------------------------------------
+
+// The quarter hour is about how late a nine o'clock nudge is allowed to be, not
+// about how often there is anything to say: the scan is two indexed reads on a
+// database with no trips starting today, which is most days.
+const REMINDER_SCAN_MS = 15 * 60 * 1000
 
 // ---- Camp assistant --------------------------------------------------------
 
@@ -1139,11 +1169,22 @@ app.get('/api/trips/:id/notifications', (req, res) => {
   res.json(notificationState(trip.id, memberId, clean(req.query.endpoint, 2048)))
 })
 
-// Every trip's alerts in one answer, for the settings page. Muting belongs to
-// the member and the trip, so this is a read across the memberships the session
-// already proves — it takes no trip id and grants no access to a trip the
-// signed-in user is not on. Changing one still goes through the per-trip PATCH
-// above rather than a second way to write the same row.
+// What the settings page needs in one answer: the two reminder switches, and
+// every trip this session is on. Muting is not among the answers it draws any
+// more — a page that asked it once per trip was a page ten trips could bury —
+// but the trips themselves are still needed, because turning this device on
+// subscribes it to all of them at once.
+//
+// It takes no trip id and grants no access to a trip the signed-in user is not
+// on. Muting one still goes through the per-trip PATCH above, from the bell in
+// its own Planning Room.
+// Read from the row rather than from the session, which carries only the four
+// fields anything else needs to know about a person.
+function reminderState(userId) {
+  const row = db.prepare('SELECT remind_lead, remind_morning FROM users WHERE id = ?').get(userId)
+  return { lead: !!row?.remind_lead, morning: !!row?.remind_morning }
+}
+
 app.get('/api/notifications', (req, res) => {
   const user = requireUser(req, res)
   if (!user) return
@@ -1154,13 +1195,35 @@ app.get('/api/notifications', (req, res) => {
   res.json({
     available: true,
     publicKey: vapid.publicKey,
+    reminders: reminderState(user.id),
     trips: rows.map(({ memberId, tripId, name }) => {
       const state = notificationState(tripId, memberId, endpoint)
       return {
-        tripId, name, muted: state.muted, unread: state.unread, subscribed: state.subscribed,
+        tripId, name, muted: state.muted,
+        unread: state.unread, subscribed: state.subscribed,
       }
     }),
   })
+})
+
+// The reminder switches belong to the account and to no particular trip, so
+// they are written here rather than under one. Either switch, or both; a body
+// carrying neither is a request that means nothing rather than one that means
+// "leave them as they are".
+const REMINDER_FIELDS = { lead: 'remind_lead', morning: 'remind_morning' }
+
+app.patch('/api/notifications', (req, res) => {
+  const user = requireUser(req, res)
+  if (!user) return
+  const wanted = Object.keys(REMINDER_FIELDS).filter((f) => req.body?.[f] !== undefined)
+  if (!wanted.length || wanted.some((f) => typeof req.body[f] !== 'boolean')) {
+    return res.status(400).json({ error: 'Choose which reminders you want.' })
+  }
+  db.prepare(`UPDATE users
+              SET ${wanted.map((f) => `${REMINDER_FIELDS[f]} = ?`).join(', ')}, updated_at = ?
+              WHERE id = ?`)
+    .run(...wanted.map((f) => (req.body[f] ? 1 : 0)), now(), user.id)
+  res.json({ reminders: reminderState(user.id) })
 })
 
 app.put('/api/trips/:id/notifications', (req, res) => {
@@ -2222,3 +2285,14 @@ const heartbeat = setInterval(() => {
 }, 30000)
 heartbeat.unref()
 server.on('close', () => clearInterval(heartbeat))
+
+// The reminder scan runs on the way up as well as on the clock, so a deploy at
+// five past nine still gets the morning out. Sending twice is what the sent
+// table is for; sending nothing until quarter past is not recoverable.
+const remind = () => void runReminders(new Date(), sendPush).catch(
+  (err) => console.error('Reminder scan failed:', err?.message ?? 'unknown error'),
+)
+const reminders = setInterval(remind, REMINDER_SCAN_MS)
+reminders.unref()
+server.on('close', () => clearInterval(reminders))
+remind()

@@ -78,6 +78,10 @@ lost in a separate group chat.
   messages, grouped per trip. Senders and members actively reading the room are
   skipped; each member can mute a trip, and unread counts remain visible in the
   app when push is unavailable or disabled.
+- **Reminders** — two, and no more than two: three days out, how many things
+  nobody has claimed; the morning of, what is still unticked on your own kit
+  list. Two switches on your account, off until you ask, applying to every trip
+  you are on — and nothing to do with muting a Planning Room.
 - **`@camp` assistant** — signed-in members can ask a trip-aware assistant about
   the details, lists, people and recent planning thread. Replies stream through
   the existing WebSocket and become durable messages when complete. Explicit
@@ -542,6 +546,94 @@ number, rather than quietly reporting a figure that is only most of the answer.
 None of it reaches the activity feed: a pack-down is fifty ticks in ten minutes,
 and a feed of them would bury the trip they belong to.
 
+### Reminders
+
+Two, and the number is the design. A planner that says something useful twice
+per trip gets opened; one that says something every day gets turned off, and a
+notification switch is only ever turned off once.
+
+| When           | Switch           | What it says                           | Who gets it            |
+| -------------- | ---------------- | -------------------------------------- | ---------------------- |
+| Three days out | `remind_lead`    | how many things nobody has claimed     | everyone who asked     |
+| The morning of | `remind_morning` | what is still unticked on your own kit | the person it is about |
+
+Both are questions the trip can already answer without asking anybody. Three
+days is the gap that still has a weekend in it — two days out, "nobody has
+claimed a stove" usually means nobody is going to. The unclaimed count is the
+same one the Trip tab reports as *still needs someone*: group items with no
+name on them, plans excluded, because nobody brings a hike. The morning-of
+count has to be per person, since personal kit is private — and legacy `own`
+rows with no `owner_id` are left out of it, as telling four people a sleeping
+bag is unticked would be telling three of them about somebody else's list.
+
+Neither is sent with nothing to say. A trip where everything is claimed gets no
+three-days-out nudge at all, rather than one reporting zero, and that is not
+recorded as said either: a list that fills up at four in the afternoon is still
+worth a word before the day is out.
+
+**Each one is its own switch, and both are on your account.** `remind_lead` and
+`remind_morning` are columns on `users`, not on a membership: "nudge me three
+days before a trip" is a fact about a person, not about one August weekend, and
+asking it once per trip meant a settings page that grew two rows per trip until
+the answers were buried under a directory of somebody's summer. They are split
+from each other because they are different questions — three days out is about
+the group's list and the morning of is about your own, and the person who wants
+the second and not the first is not an edge case.
+
+Both start at `0`, for every account that already existed. Defaulting either on
+would read an answer about the Planning Room as an answer to a question nobody
+was asked, and the first they would hear of it is their phone going off at nine
+in the morning. Muting is not consulted at all: the room is other people talking
+and a reminder is the app itself, so somebody who has quietened a chat that ran
+all week has not asked to be let down about the tent. A member row with no
+account behind it — the pre-sign-in shape — is never reminded, because it has no
+way to have answered.
+
+Nine in the morning, in the server's timezone — set `TZ` to the one the group is
+camping in. The trip has coordinates, but a longitude is not a timezone, and a
+nudge landing at 04:00 because a campsite sits west of a meridian is worse than
+one landing an hour off. `server.js` scans every fifteen minutes and once on the
+way up, so a deploy at five past nine still gets the morning out; a day that has
+been and gone is not caught up on, since a server that was down all Thursday
+should not spend Friday talking about Thursday.
+
+Each nudge is said once, and `reminders_sent` is what makes that true across a
+scan that runs four times an hour, a restart before lunch and a phone that was
+off all morning. Its key is the day the reminder is *about* — the trip's own
+start date — rather than the day it went out, so moving the dates makes both
+kinds due again, which is right: that is a different three days out, and the
+group deserves telling about the new one. The row is written after the attempt
+rather than after a delivery, because "delivered" is not something a push
+service reports; a phone that was off gets the nudge when it next reaches its
+push service, which is what the six-hour TTL is for.
+
+Between deciding and sending there is a window, and two scans that overlap would
+both walk through it. So the row is written first in a `sending` state, by an
+insert that only wins if nobody else holds it — the loser skips that reminder
+rather than sending a second copy, and an attempt that fails deletes its own
+claim so the next scan can try again. A claim is a *lease*: held for more than
+thirty minutes it is assumed dead and taken back, or a process killed mid-send
+would silence the nudge for the rest of the day.
+
+Which is why every push request has a timeout. Node leaves an outgoing request
+without one, so a push service that accepts a connection and then says nothing
+holds it open indefinitely — past the lease, until a second scan reclaims the
+reminder and sends it while the first attempt is still able to deliver. Thirty
+seconds is longer than any push service that is going to answer takes and far
+inside the lease, and `server.js` refuses to start if that stops being true.
+
+Nothing here stores anything new about a device. A reminder goes out over the
+push subscription the Planning Room already needed, so the durable handle a
+no-accounts app keeps on a phone is the same one, created by the same explicit
+opt-in and thrown away by the same switch.
+
+The delivery unit is still the membership, since a push subscription belongs to
+a member on a trip: the switch says whether you want to hear, and the
+subscriptions say where. `lib/reminders.js` decides and sends nothing;
+`server.js` sends and stores nothing about what is due. Which is what makes the
+deciding testable — `scripts/reminder-smoke.mjs` hands it a particular Thursday
+in August.
+
 ### Installing it
 
 `manifest.webmanifest` and `public/sw.js` are what make it an app you can add
@@ -652,35 +744,58 @@ each thing is stored.
 | ---------------------- | ----------- | ------------------------------------ |
 | Theme                  | This device | `localStorage` (`cs.prefs`)          |
 | Feature switches       | This device | `localStorage` (`cs.prefs`)          |
-| Which trips may notify | You         | `notification_preferences`, server   |
+| The two reminders      | You         | `users`, server                      |
 | Push subscription      | This device | `push_subscriptions`, server         |
 | Name, picture, session | You         | `users` / `sessions`, server         |
 
 A theme is about the screen in your hand and the light it is in — a phone in a
 tent at night and a laptop at a desk want different answers, and the one thing a
-synced theme cannot do is have two. Muting is the opposite: it is a decision
-about a trip, and it would be a bad joke to have to repeat it on every device
-you own, so it stays on the member row the Planning Room's bell already writes.
-The settings page and that bell send the same `PATCH`; `GET /api/notifications`
-is the only addition, and it reads every membership the session already proves
-rather than taking a trip id.
+synced theme cannot do is have two. A reminder is the opposite: wanting to hear
+three days before a trip is a fact about you, not about the screen you happened
+to answer on, so it lives on your row in `users` and every device you own obeys
+it. `GET /api/notifications` reads it back along with the trips the session
+already proves, and `PATCH /api/notifications` writes it, taking either switch
+or both — a body naming neither is refused, since it means nothing rather than
+"leave them as they are".
 
-Which is why a browser that cannot show a notification still gets the trip
+**Which trips may notify you is deliberately not here.** It was a switch per
+trip, and per trip is how it grows: somebody with ten trips got ten rows, and a
+card whose job is to hold three decisions became a directory of their summer
+with the decisions buried under it. The question belongs to a trip, so it is
+asked where the trip is — the bell in its own Planning Room, writing the same
+`notification_preferences` row it always did. Nothing about muting changed
+except that this page stopped being a second place to do it.
+
+Which is why a browser that cannot show a notification still gets the reminder
 switches — an iPhone that has not been added to the home screen, a laptop where
 the site is blocked in browser settings, this app over a LAN address rather than
-`https`. Only the device switch is that browser's to answer; muting is yours,
-and the phone in your pocket will obey it. Hiding the whole card because *this*
-screen cannot ring meant the one device you had to hand could not quieten the
-one that could.
+`https`. Only the device switch is that browser's to answer; what you want to be
+told is yours, and the phone in your pocket will obey it. Hiding the whole card
+because *this* screen cannot ring meant the one device you had to hand could not
+answer for the one that could.
 
 Turning a device on subscribes it to every trip on the account at once, and
 those writes go together rather than one behind the other. If some of them fail
 the browser is genuinely subscribed to the rest, so the page re-reads
-`GET /api/notifications` instead of settling the switch back to off — an off
-switch on a device that is about to be notified is the one state worth going out
-of the way to avoid. A read that fails outright says so and offers *Try again*,
-rather than drawing an unsubscribed device with no trips, which is a real answer
+`GET /api/notifications` rather than inferring anything from which call threw,
+and says how many trips it managed.
+
+**The switch reads as on only when every trip has this endpoint on file.** What
+it promises is the whole account, so anything short of that is off — and off is
+the honest answer as well as the useful one, because throwing it again writes
+exactly the trips that are missing. The trips are read for that reason alone:
+nothing draws them, but the device switch has to know what it is subscribing
+to. A read that fails outright says so and offers *Try again*, rather than
+drawing an unsubscribed device with both reminders off, which is a real answer
 this app is capable of giving and would be the wrong one told calmly.
+
+The gap that would otherwise open is a trip that did not exist when the switch
+was thrown. Starting or joining one adds a membership, and a membership with no
+endpoint against it is silent — no Planning Room alert and no reminder, on a
+device whose settings page used to say it was on. So a browser that already has
+a subscription and a granted permission sends it along with the join, and a trip
+that arrives some other way — joined on your phone, while the laptop was shut —
+is the case the switch reading off is for.
 
 There is nothing here for editing your name. Google rewrites it at every
 sign-in, so a field to change it would be a field that silently reverts. The
@@ -746,6 +861,7 @@ a door used to be.
 | `VAPID_PUBLIC_KEY` | generated in DB     | Optional fixed Web Push application key.    |
 | `VAPID_PRIVATE_KEY`| generated in DB     | Pair with `VAPID_PUBLIC_KEY`; keep secret.   |
 | `VAPID_SUBJECT`    | app notification email | Web Push contact URI (`mailto:` or URL).  |
+| `TZ`               | the host's zone     | The clock reminders go out on; see *Reminders*. |
 
 ## Deploying
 

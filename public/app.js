@@ -171,11 +171,12 @@ const S = {
   // optional parts of it are on. Deliberately not on the account — a phone in
   // a tent at night and a laptop at a desk want different answers to the same
   // question, and the one thing you cannot do with a synced theme is have two.
-  // What does belong to the account — who you are, which trips are muted — is
-  // on the server already, and the settings page reads it from there.
+  // What does belong to the account — who you are, which trips are muted, which
+  // reminders you want — is on the server already, and the settings page reads
+  // it from there.
   prefs: { theme: 'system', features: {} },
-  // Alerts across every trip, for the settings page: null until asked.
-  // `{ loading, error, publicKey, permission, subscribed, trips: [...] }`.
+  // What the settings page asks about alerts: null until asked.
+  // `{ loading, error, publicKey, permission, subscribed, reminders, trips }`.
   alerts: null,
   // Where the back arrow out of settings goes: wherever you opened it from.
   // `settingsPushed` is whether the history entry it is standing on is one this
@@ -604,40 +605,49 @@ async function enableNotifications() {
   }
 }
 
-// Every trip's alerts at once, for the settings page. Asked for on the way in
-// and once only: the answer is small, and the switches below keep it in step
-// themselves rather than re-reading the whole lot after each one.
+// What the settings page needs, at once and on the way in: the two reminder
+// switches, and the trips this device would be subscribed to. The trips are not
+// drawn — a list of them was a card that grew a row per trip and buried the two
+// answers underneath — but the device switch subscribes to every one of them,
+// so it still has to know what they are.
 //
 // Asked for even where this browser could not show a notification if it tried.
-// Which trips may reach you belongs to the account and is obeyed by every device
-// on it, so an iPhone that has not been added to the home screen should still be
-// able to mute a trip for the laptop that can.
+// The reminders belong to the account and are obeyed by every device on it, so
+// an iPhone that has not been added to the home screen should still be able to
+// answer them for the laptop that can.
+const noAlerts = (rest) => ({
+  loading: false, busy: false, error: '', permission: '', publicKey: '',
+  subscribed: false, trips: [], reminders: { lead: false, morning: false }, ...rest,
+})
+
 async function wantAlerts() {
   if (!S.auth.user || S.alerts) return
   const supported = pushSupported()
-  S.alerts = { loading: true, busy: false, error: '', trips: [], permission: '', publicKey: '', subscribed: false }
+  S.alerts = noAlerts({ loading: true })
   try {
     const subscription = supported ? await currentPushSubscription() : null
     const query = subscription ? `?endpoint=${encodeURIComponent(subscription.endpoint)}` : ''
     const data = await api(`/notifications${query}`)
     if (S.view !== 'settings') { S.alerts = null; return }
-    S.alerts = {
-      loading: false, busy: false, error: '',
+    const trips = data.trips ?? []
+    S.alerts = noAlerts({
       permission: supported ? Notification.permission : 'unsupported',
       publicKey: String(data.publicKey ?? ''),
-      // This browser is set up for alerts if any trip has it on file: one
-      // subscription follows you across every trip on the account.
-      subscribed: supported && (data.trips ?? []).some((t) => t.subscribed),
-      trips: (data.trips ?? []).map((t) => ({
+      // What this switch promises is every trip on the account, so it only
+      // reads as on when every trip has this endpoint on file. A trip that
+      // slipped through — one joined on another device, or while this one was
+      // offline — turns it back off, which is both true and the way to fix it:
+      // switching it on again writes the trips that are missing.
+      subscribed: supported && !!subscription && trips.every((t) => t.subscribed),
+      trips: trips.map((t) => ({
         tripId: String(t.tripId), name: String(t.name ?? 'Trip'),
-        muted: !!t.muted, unread: Number(t.unread) || 0,
       })),
-    }
+      reminders: {
+        lead: !!data.reminders?.lead, morning: !!data.reminders?.morning,
+      },
+    })
   } catch (err) {
-    S.alerts = {
-      loading: false, busy: false, trips: [], permission: '', publicKey: '', subscribed: false,
-      error: err.message || 'Your notification settings could not be loaded.',
-    }
+    S.alerts = noAlerts({ error: err.message || 'Your notification settings could not be loaded.' })
   }
   if (S.view === 'settings') render()
 }
@@ -648,6 +658,36 @@ async function wantAlerts() {
 async function reloadAlerts() {
   S.alerts = null
   await wantAlerts()
+}
+
+// A trip that has just appeared on this account. The device switch subscribes
+// every trip it knew about at the time it was thrown, so a trip started or
+// joined afterwards would have no endpoint against it and would go quiet — no
+// Planning Room alert and, worse, no reminder, on a device whose settings page
+// says it is switched on.
+//
+// So a membership that has just been made brings the browser's existing
+// subscription with it. Nothing is asked of anybody: no subscription, or a
+// permission that was never granted, means this device was not being notified
+// and this is not the moment to suggest it. The settings page is dropped
+// because its trip list is now a trip short either way.
+async function syncNotificationsForTrip(tripId) {
+  S.alerts = null
+  if (!pushSupported() || Notification.permission !== 'granted') return
+  try {
+    const subscription = await currentPushSubscription()
+    if (!subscription) return
+    await api(`/trips/${tripId}/notifications`, {
+      method: 'PUT', body: { subscription: subscription.toJSON() },
+    })
+    // The bell in the Planning Room reads the same rows, so it is sent back to
+    // ask rather than told what to think.
+    if (S.notify.tripId === tripId) S.notify = { ...S.notify, tripId: '' }
+  } catch {
+    // The trip is joined either way, and the settings page is the place that
+    // says which trips this device is on — where it now reads as off, with the
+    // switch that fixes it.
+  }
 }
 
 // The device switch on the settings page. On means: ask the browser, then put
@@ -717,27 +757,30 @@ async function toggleDeviceAlerts() {
   }
 }
 
-// Muting one trip from the settings page. The same PATCH the bell in its
-// Planning Room sends, so the two never drift apart.
-async function toggleAlertsFor(tripId) {
+// One of the two reminders, on or off for every trip you are on. It writes the
+// account rather than a membership, so there is no trip id in it and nothing on
+// the trip page to keep in step — the answer comes back whole and both switches
+// are drawn from it, because one write may as well tell us about both.
+const REMINDER_SAID = {
+  lead: { on: 'You will hear three days before a trip.', off: 'The three-day reminder is off.' },
+  morning: { on: 'You will hear on the morning of a trip.', off: 'The morning reminder is off.' },
+}
+
+async function toggleReminder(kind) {
   const a = S.alerts
-  if (!a || a.busy) return
-  const trip = a.trips.find((t) => t.tripId === tripId)
-  if (!trip) return
+  if (!a || a.busy || !REMINDER_SAID[kind]) return
   a.busy = true
   render()
   try {
-    const subscription = await currentPushSubscription()
-    const state = await api(`/trips/${tripId}/notifications`, {
-      method: 'PATCH', body: { muted: !trip.muted, endpoint: subscription?.endpoint ?? '' },
+    const { reminders } = await api('/notifications', {
+      method: 'PATCH', body: { [kind]: !a.reminders[kind] },
     })
-    trip.muted = !!state.muted
-    if (S.notify.tripId === tripId) S.notify = { ...S.notify, muted: trip.muted }
-    toast(trip.muted ? `${trip.name} is muted.` : `${trip.name} can notify you.`)
+    a.reminders = { lead: !!reminders?.lead, morning: !!reminders?.morning }
+    toast(a.reminders[kind] ? REMINDER_SAID[kind].on : REMINDER_SAID[kind].off)
   } catch (err) {
-    toast(err.message)
+    toast(err.message || 'That reminder could not be changed.')
   } finally {
-    a.busy = false
+    if (S.alerts === a) a.busy = false
     if (S.view === 'settings') render()
   }
 }
@@ -2543,16 +2586,20 @@ function settingsAppearance() {
     </section>`
 }
 
-// Two questions that read as one and are not: whether this browser is allowed to
-// show a notification at all, and which trips are allowed to send one. The first
-// belongs to the device, the second to you — mute a trip here and it is muted on
-// your laptop too.
+// Two questions that read as one and are not: whether this browser is allowed
+// to show a notification at all, and what is worth being told. The first belongs
+// to the device, the second to you — answer it here and your laptop obeys it too.
+//
+// Which trips may notify you is deliberately not here any more. It was a switch
+// per trip on a page that has to stay readable, and somebody with ten trips got
+// ten rows of it; the question belongs to a trip, and the bell in its own
+// Planning Room is where it is asked.
 function settingsNotifications() {
   if (!S.auth.user) {
     return `
       <section class="card set-card">
         <h2>Notifications</h2>
-        <p class="card__body">Sign in to see which trips can reach you. A trip can still be muted from its Planning Room in the meantime.</p>
+        <p class="card__body">Sign in to be reminded about your trips. A trip can still be muted from its Planning Room in the meantime.</p>
       </section>`
   }
 
@@ -2565,7 +2612,7 @@ function settingsNotifications() {
       </section>`
   }
 
-  // A request that never arrived is not the same answer as "off, and no trips".
+  // A request that never arrived is not the same answer as "off, and off".
   // Drawn as switches, the failure would read as settings — the wrong ones, in
   // the calm voice of the right ones — so it says what happened and offers the
   // one thing worth doing about it.
@@ -2578,9 +2625,9 @@ function settingsNotifications() {
       </section>`
   }
 
-  // Whether this browser can be notified, and which trips may notify you, are
-  // two answers, and only the first one is this browser's. A device that cannot
-  // ring keeps the trip switches: they are what your phone will obey.
+  // Whether this browser can be notified, and what you want to be told, are two
+  // answers, and only the first one is this browser's. A device that cannot ring
+  // keeps the reminder switches: they are what your phone will obey.
   const unsupported = a.permission === 'unsupported'
   const blocked = a.permission === 'denied'
   const device = unsupported
@@ -2591,30 +2638,42 @@ function settingsNotifications() {
         ? `${toggleRow({
             act: 'device-alerts', on: true, busy: a.busy,
             label: 'Notify me on this device',
-            note: 'Turning this off leaves your trips alone and stops this browser only.',
+            note: 'Turning this off leaves everything below alone and stops this browser only.',
           })}`
         : `${toggleRow({
             act: 'device-alerts', on: false, busy: a.busy,
             label: 'Notify me on this device',
-            note: 'Planning Room messages, while the app is closed.',
+            note: 'Planning Room messages and the reminders below, while the app is closed.',
           })}`
 
-  const trips = a.trips.length
-    ? a.trips.map((t) => toggleRow({
-        act: 'trip-alerts', id: t.tripId, on: !t.muted, busy: a.busy,
-        label: t.name, note: t.muted ? 'Muted' : 'Planning Room messages',
-      })).join('')
-    : '<p class="set-note">No trips to be notified about yet.</p>'
+  // Two nudges, two switches, because they are two questions: three days out is
+  // about the group's list and the morning of is about your own, and wanting one
+  // is no reason to want the other.
+  //
+  // Both are asked once rather than once per trip. Ten trips would have been
+  // twenty switches on a page whose whole job is to be readable, and "remind me
+  // three days before a trip" was never a fact about one August weekend anyway.
+  const reminders = `
+    <div class="switches">
+      ${toggleRow({
+        act: 'reminder', id: 'lead', on: a.reminders.lead, busy: a.busy,
+        label: 'Three days out',
+        note: 'How many things nobody has claimed, while there is still time to sort it.',
+      })}
+      ${toggleRow({
+        act: 'reminder', id: 'morning', on: a.reminders.morning, busy: a.busy,
+        label: 'The morning of',
+        note: 'What is still unticked on your own kit list.',
+      })}
+    </div>`
 
   return `
     <section class="card set-card">
       <h2>Notifications</h2>
       ${device}
-      <h3 class="set-sub">Trips that can notify you</h3>
-      ${a.trips.length
-        ? '<p class="set-note">Kept with your account rather than this browser: mute a trip here and it is muted on your other devices too.</p>'
-        : ''}
-      <div class="switches">${trips}</div>
+      <h3 class="set-sub">Remind me about my trips</h3>
+      <p class="set-note">Kept with your account rather than this browser, and answered for every trip you are on. A trip's Planning Room has its own bell for what people say in it.</p>
+      ${reminders}
     </section>`
 }
 
@@ -5404,6 +5463,7 @@ async function joinAs(rawName, claim = '') {
     S.me = member.id
     S.joinClash = null
     S.view = 'trip'
+    await syncNotificationsForTrip(S.trip.id)
     arrive(await api(`/trips/${S.trip.id}`))
   } catch (err) {
     if (err.payload?.conflict === 'name') {
@@ -5532,8 +5592,8 @@ document.addEventListener('click', async (ev) => {
       await toggleDeviceAlerts()
       break
 
-    case 'trip-alerts':
-      await toggleAlertsFor(el.dataset.id)
+    case 'reminder':
+      await toggleReminder(el.dataset.id)
       break
 
     // Leaving a trip is a push rather than a back(), because you can arrive on
@@ -6212,6 +6272,7 @@ document.addEventListener('submit', async (ev) => {
         S.tab = 'pack'
         S.camp = false
         history.pushState({ tripView: false }, '', `/t/${trip.id}`)
+        if (memberId) await syncNotificationsForTrip(trip.id)
         arrive(await api(`/trips/${trip.id}`))
         toast('Trip created. Send the link to your friends.')
       } catch (err) { toast(err.message) }
