@@ -120,7 +120,7 @@ const hooks = ['S', 'render', 'viewTrip', 'renderSheet', 'CAMP', 'TABS',
   'settlement', 'customExpenseShares', 'googleSignIn', 'tripRoute', 'isEditing', 'unsaved', 'restore',
   'ask', 'askCopy', 'closeAsk',
   'loadPrefs', 'savePrefs', 'applyTheme', 'viewSettings', 'showSettings', 'leaveSettings',
-  'isSettingsRoute', 'FEATURES', 'THEMES', 'PREFS_KEY']
+  'isSettingsRoute', 'FEATURES', 'THEMES', 'PREFS_KEY', 'FACES']
 new Function(`${src}\n;Object.assign(globalThis, {${hooks.map((h) => `__${h}: ${h}`).join(',')}})`)()
 
 const { __S: S, __render: render, __viewTrip: viewTrip, __renderSheet: renderSheet, __TABS: TABS,
@@ -138,7 +138,7 @@ const { __S: S, __render: render, __viewTrip: viewTrip, __renderSheet: renderShe
   __loadPrefs: loadPrefs, __savePrefs: savePrefs, __applyTheme: applyTheme,
   __viewSettings: viewSettings, __showSettings: showSettings, __leaveSettings: leaveSettings,
   __isSettingsRoute: isSettingsRoute, __FEATURES: FEATURES, __THEMES: THEMES,
-  __PREFS_KEY: PREFS_KEY } = globalThis
+  __PREFS_KEY: PREFS_KEY, __FACES: FACES } = globalThis
 const { CATALOG } = await import('../lib/catalog.js')
 
 // A trip with a bit of everything: claimed by one, claimed by three, unclaimed,
@@ -887,6 +887,87 @@ check('your own name is still there to tap',
   new RegExp('data-act="claim" data-id="Crisps" data-member="m1"').test(unclaimed))
 S.sheet = { kind: 'place', id: 'Hike' }; renderSheet()
 check('place sheet renders', find(roots['sheet-root'].innerHTML, 'Where is Hike?'))
+
+section('Who is up for it')
+
+// A count told you the kayaking was on without telling you whether it was on
+// with the people you would go with. The row answers that now, so these checks
+// are about the two shapes it takes and the line where it changes.
+const hike = S.items.find((i) => i.id === 'Hike')
+const votesWere = hike.votes
+const planRows = (votes) => { hike.votes = votes; S.sheet = null; S.tab = 'do'; S.camp = false; return viewTrip() }
+// The chip on its own. The whole page has other rows on it, and the button's
+// own accessible name repeats the words it shows — so a check that means "the
+// row says this" has to say which of the two it is reading.
+const chipOn = (html) => {
+  const at = html.indexOf('class="votes" data-act="open-item" data-id="Hike"')
+  return at < 0 ? '' : html.slice(at, html.indexOf('</button>', at))
+}
+const says = (html, words) => find(html, `<span class="votes__say">${words}</span>`)
+
+const oneVote = planRows(['m1'])
+check('your own vote is said as a name, not a number',
+  says(oneVote, 'You are up for it') && !find(oneVote, '1 up for it'))
+check('and it is a way into the sheet, not a label',
+  find(oneVote, 'class="votes" data-act="open-item" data-id="Hike"'))
+
+const twoVotes = planRows(['m2', 'm3'])
+check('two people still fit as words', says(twoVotes, 'Sam and Ali Khan are up for it'))
+
+// Four people, one row: three faces is all it holds, so the words go back to
+// the total — and you go first, so the face that gets cut is never yours.
+const fourVotes = planRows(['m2', 'm3', 'm4', 'm1'])
+check('past two, the row counts',
+  says(fourVotes, '4 up for it') && !says(fourVotes, 'You, Sam, Ali Khan and Robin are up for it'))
+check('three faces is the most a row holds',
+  (chipOn(fourVotes).match(/class="who__face"/g) ?? []).length === FACES)
+// Read as Robin, who is last on the trip and so the first face to be cut when
+// the faces go in the trip's order. Yours is the one face you already know the
+// answer for, and a row that has dropped it reads as though you never said.
+S.me = 'm4'
+const asRobin = chipOn(planRows(['m1', 'm2', 'm3', 'm4']))
+check('and you are on it, however late you voted',
+  find(asRobin, '>RO<') && (asRobin.match(/class="who__face"/g) ?? []).length === FACES)
+S.me = 'm1'
+// WCAG 2.5.3: what the button says has to be the start of what it is called,
+// or somebody driving this by voice cannot ask for the button they can see.
+check('the visible words open the accessible name',
+  find(fourVotes, 'aria-label="4 up for it — Hike: You, Sam, Ali Khan and Robin. Open to see who."'))
+
+check('nobody up for it leaves the row to ask rather than tell',
+  !find(planRows([]), 'class="votes"'))
+
+// The sheet is where the names the row could not fit are spelled out, and where
+// the two sets of people on a plan stop being one list.
+hike.votes = ['m2', 'm3', 'm4', 'm1']
+S.sheet = { kind: 'item', id: 'Hike' }; renderSheet()
+const planSheet = roots['sheet-root'].innerHTML
+check('the sheet names every voter',
+  (planSheet.match(/class="up__row"/g) ?? []).length === 4 && find(planSheet, 'Robin</span>'))
+check('and marks which one is you', find(planSheet, 'Josh (you)</span>'))
+check('the only vote you can change is your own',
+  (planSheet.match(/data-act="vote"/g) ?? []).length === 1 && find(planSheet, 'Actually, count me out'))
+check('who is up for it and who is organising it are told apart',
+  planSheet.indexOf('Up for it') < planSheet.indexOf('Organising it')
+  && find(planSheet, 'data-act="claim" data-id="Hike" data-member="m2"'))
+
+hike.votes = []
+S.sheet = { kind: 'item', id: 'Hike' }; renderSheet()
+const noVotes = roots['sheet-root'].innerHTML
+check('an unvoted plan says so and offers the vote',
+  find(noVotes, 'Nobody has said yet.') && find(noVotes, "I'm up for it"))
+
+// A name is typed by hand and goes onto the row and into the label unparsed.
+S.members = [...S.members, { id: 'mx', name: '<img src=x onerror=alert(1)>', hue: 4 }]
+hike.votes = ['mx']
+const injected = planRows(['mx'])
+check('a name that looks like markup is text on the row and in the label',
+  !find(injected, '<img src=x') && (injected.match(/&lt;img src=x/g) ?? []).length >= 2)
+S.members = S.members.filter((m) => m.id !== 'mx')
+
+hike.votes = votesWere
+S.sheet = null
+S.camp = false
 
 // Days: what turns the Plan tab into an itinerary and the Eat list into meals.
 // The trip runs Fri 4 – Sun 6 September 2026.

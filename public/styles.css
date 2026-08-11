@@ -936,7 +936,33 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 }
 .item__open:hover .item__title { color: var(--forest-ink-deep); }
 .item__row { display: flex; align-items: center; gap: 7px; margin-top: 8px; flex-wrap: wrap; }
-.item__votes { font-family: var(--mono); font-size: 11.5px; color: var(--ink-faint); letter-spacing: .03em; }
+
+/* Who is up for a plan, which used to be a number and is now the faces that
+   number was standing in for. It sits in the meta row with the day and the
+   place because it is the same kind of fact — something the plan says about
+   itself — and it wears the row's quiet mono rather than the claim faces'
+   weight, so a plan with five yeses does not shout down the one being read.
+   The faces are a size down for the same reason. */
+/* Names are typed by hand and can run to forty characters of them, two at a
+   time. The faces keep their size and the words give way: the chip goes no
+   wider than the row, and what will not fit ends in an ellipsis rather than
+   pushing the row off the side of the phone. The sheet behind it has the whole
+   name, which is the same bargain the place chip makes. */
+.votes {
+  display: inline-flex; align-items: center; gap: 7px;
+  min-height: 30px; padding: 0 9px 0 6px; border-radius: 999px;
+  max-width: 100%; min-width: 0;
+  transition: background .12s ease;
+}
+.votes:hover { background: var(--paper-sunk); }
+.votes .who__faces { flex: none; }
+.votes .who__face { width: 20px; height: 20px; font-size: 8.5px; }
+.votes .who__face + .who__face { margin-left: -7px; }
+.votes__say {
+  font-family: var(--mono); font-size: 11.5px; color: var(--ink-faint);
+  letter-spacing: .03em; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; min-width: 0; max-width: 30ch;
+}
 
 /* ---- the tick: your half of the row ------------------------------------- */
 
@@ -2163,6 +2189,25 @@ button.wx__day:hover .wx__wet, .wx__row--open .wx__wet { color: var(--ink); }
 
 .sheet__group { margin-bottom: 20px; }
 .sheet__group > .eyebrow { display: block; margin-bottom: 9px; }
+/* The sentence a group needs before it can be acted on, where the sheet's own
+   blurb would have been too far up to still be about this. */
+.sheet__note { margin: -2px 0 11px; color: var(--ink-soft); font-size: 12.5px; line-height: 1.45; }
+
+/* The full answer the row's three faces could only start. Names, not picks:
+   everyone here said this for themselves, and the only one you can change is
+   below the list, with your own name in it. */
+.up { display: flex; flex-wrap: wrap; gap: 7px 10px; margin: 0 0 12px; padding: 0; list-style: none; }
+.up__row {
+  display: inline-flex; align-items: center; gap: 7px;
+  min-height: 30px; padding: 3px 11px 3px 5px; border-radius: 14px;
+  background: var(--paper-sunk); font-size: 13.5px;
+  max-width: 100%; min-width: 0;
+}
+.up__row .who__face { flex: none; box-shadow: inset 0 0 0 2px var(--who), 0 0 0 2px var(--paper-sunk); }
+/* Here the name is the answer, so it wraps rather than ellipsing — the sheet is
+   where you came to read it in full. A wrapped pill is why the radius above is
+   a corner and not a capsule: a two-line capsule is a lozenge. */
+.up__name { min-width: 0; overflow-wrap: anywhere; }
 
 /* ==========================================================================
    Ask

@@ -1245,6 +1245,16 @@ const crew = (it) => claimsOn(it)
   .map((c) => ({ ...c, member: memberById(c.member_id) }))
   .filter((c) => c.member)
 
+// Who is up for a plan, in the trip's own order rather than the order the votes
+// landed in — so the faces on a row stay where they are when somebody else says
+// yes, and anyone who has left the trip drops off for the same reason as above.
+const voters = (it) => S.members.filter((m) => it.votes.includes(m.id))
+
+// A list of people, said the way you would say it. Used where the answer is
+// read rather than counted — labels, and the line at the top of a plan.
+const andList = (names) => (names.length < 2 ? (names[0] ?? '')
+  : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`)
+
 // Everything under one tab, its lists in the order the tab names them — food
 // before drink, so the page reads the way the shop does. Positions restart per
 // list, so this is the only ordering that means anything across two of them.
@@ -2047,14 +2057,13 @@ function whenChip(item, offer) {
 function itemRow(item, mixed) {
   const own = isOwn(item)
   const plan = isPlan(item)
-  const votes = plan ? item.votes.length : 0
 
   const meta = [
     // Food keeps its meal heading, so the day is the one thing the row does not
     // already say — and only when there is one.
     takesDays(currentTab()) ? whenChip(item, plan) : '',
     plan ? placeChip(item) : '',
-    votes ? `<span class="item__votes">${votes} up for it</span>` : '',
+    plan ? votesChip(item) : '',
   ].filter(Boolean).join('')
 
   return `
@@ -2082,6 +2091,49 @@ function voteBox(item) {
             ${me ? `style="--mine:${colorOf(me)}"` : ''}
             aria-label="${voted ? `You are up for ${esc(item.title)}` : `Say you are up for ${esc(item.title)}`}">
       ${voted ? ICONS.tick : ''}</button>`
+}
+
+// "3 up for it" tells you the kayaking is on without telling you whether it is
+// on with the people you would go with — which is the thing you are deciding
+// when you look. So the count is spent on faces instead: the same faces the rest
+// of the app uses for who has a thing, saying who is up for this one. Three
+// faces is as many as a row can hold, so past two people the words go back to
+// being the total — the faces show you the shape of it, the number says how far
+// it goes past them, and the sheet has every name.
+//
+// Two names still fit as words, and words are the plainer answer, so up to two
+// get said. Past that the faces carry it and the sheet spells the rest out —
+// which is where the chip goes, and why it is a button rather than a label.
+//
+// Nothing at all when nobody has voted: the empty ring on the left already says
+// so, and the row is asking you, not telling you.
+//
+// You go first when you are on it, so the three faces that fit always include
+// your own — a row that has dropped you off the end reads as though you never
+// said, which is the one thing about it you already know.
+function votesChip(item) {
+  const on = voters(item).sort((a, b) => Number(b.id === S.me) - Number(a.id === S.me))
+  if (!on.length) return ''
+  const names = on.map((m) => (m.id === S.me ? 'You' : m.name))
+  const few = on.length <= 2
+  const said = few
+    ? `${andList(names)} ${names.length === 1 && names[0] !== 'You' ? 'is' : 'are'} up for it`
+    : `${on.length} up for it`
+
+  // What the button says, and then what it did not have the width to. The
+  // visible words come first and whole: somebody driving this by voice says the
+  // words they can see, and a label that starts somewhere else is a button they
+  // cannot ask for. The names it could not fit follow, for the reader that has
+  // room for them.
+  const label = `${said} — ${item.title}${few ? '' : `: ${andList(names)}`}. Open to see who.`
+
+  return `
+    <button class="votes" data-act="open-item" data-id="${item.id}"
+            aria-label="${esc(label)}">
+      <span class="who__faces">${on.slice(0, FACES).map((m) => `
+        <span class="who__face" style="--who:${colorOf(m)}">${faceInner(m)}</span>`).join('')}</span>
+      <span class="votes__say">${esc(said)}</span>
+    </button>`
 }
 
 // ---- views ------------------------------------------------------------------
@@ -4143,6 +4195,30 @@ function sheetItem(s) {
     })
   }
 
+  // A plan sheet answers two questions about two different sets of people, so it
+  // says which is which. Who is up for it comes first: it is the question the row
+  // asks, and three faces deep is exactly as far as the row could answer it — the
+  // point of opening this is to see the rest of the names.
+  //
+  // Your own name is a button and everybody else's is only a name. A vote is the
+  // one thing on this trip you cannot cast for somebody else: putting Sam down
+  // for the kayaking is how a plan ends up with five yeses and two kayakers.
+  const upForIt = !plan ? '' : (() => {
+    const up = voters(item)
+    const voted = up.some((m) => m.id === S.me)
+    return `
+      <div class="sheet__group">
+        <span class="eyebrow">Up for it</span>
+        ${up.length ? `<ul class="up">${up.map((m) => `
+          <li class="up__row">
+            <span class="who__face" style="--who:${colorOf(m)}" aria-hidden="true">${faceInner(m)}</span>
+            <span class="up__name">${esc(m.name)}${m.id === S.me ? ' (you)' : ''}</span>
+          </li>`).join('')}</ul>` : '<p class="sheet__note">Nobody has said yet.</p>'}
+        ${me ? `<button class="btn btn--wide btn--sm" data-act="vote" data-id="${item.id}" aria-pressed="${voted}">
+          ${voted ? 'Actually, count me out' : "I'm up for it"}</button>` : ''}
+      </div>`
+  })()
+
   const on = new Map(claimsOn(item).map((c) => [c.member_id, c]))
   const rows = S.members.map((m) => {
     const claim = on.get(m.id)
@@ -4172,15 +4248,26 @@ function sheetItem(s) {
   // your own name is in the list like everybody else's, and tapping it is the
   // same tap — a shortcut that duplicates the row underneath it only makes you
   // read both to work out whether they do the same thing.
+  //
+  // On a plan the names mean something narrower than "who is coming", and coming
+  // to them straight after a list of everyone who is up for it is exactly when
+  // they would be misread — so on a plan they get a heading that says so, and the
+  // sentence about them moves down to sit with them rather than over everything.
+  const named = !plan ? rows : `
+    <div class="sheet__group">
+      <span class="eyebrow">Organising it</span>
+      <p class="sheet__note">Optional, and it can be more than one of you — only for the plans that need booking or kit.</p>
+      ${rows}
+    </div>`
+
   return sheetShell({
     title: item.title,
-    blurb: plan
-      ? 'Optional, and it can be more than one of you — only for the plans that need booking or kit.'
-      : 'As many of you as it takes. Each person ticks off their own share.',
+    blurb: plan ? '' : 'As many of you as it takes. Each person ticks off their own share.',
     body: `
       ${kindSwitch}
       ${table}
-      ${rows}
+      ${upForIt}
+      ${named}
       <div style="margin-top:18px">
         <form data-act="add-member">
           <label class="field"><span>Someone not on the list?</span>
@@ -4315,7 +4402,7 @@ const copyTo = (item, day) => ({
 const namesOn = (item) => {
   const who = claimsOn(item).map((c) => memberById(c.member_id)?.name).filter(Boolean)
   if (!who.length) return 'Somebody has'
-  return who.length === 1 ? `${who[0]} has` : `${who.slice(0, -1).join(', ')} and ${who.at(-1)} have`
+  return `${andList(who)} ${who.length === 1 ? 'has' : 'have'}`
 }
 
 // The days of the trip, plus the answer that is always available: no day at all.
