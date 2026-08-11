@@ -24,6 +24,9 @@
 <body>
   <div id="root" aria-live="polite"></div>
   <div id="sheet-root"></div>
+  <!-- Questions stop the app, and half of them are asked from inside a sheet, so
+       they stand outside both roots rather than in either of them. -->
+  <div id="ask-root"></div>
   <div id="toast" role="status" aria-live="polite"></div>
   <div id="install"></div>
   <script id="google-identity" src="https://accounts.google.com/gsi/client" async></script>

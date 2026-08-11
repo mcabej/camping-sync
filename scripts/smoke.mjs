@@ -2,20 +2,40 @@
 // tab-bar rework shows up here rather than on somebody's phone.
 import { readFileSync } from 'node:fs'
 
-const el = () => ({
-  innerHTML: '', textContent: '', value: '',
-  classList: { add() {}, remove() {}, toggle() {} },
-  querySelector: () => null, querySelectorAll: () => [],
-  setAttribute() {}, removeAttribute() {}, focus() {}, setSelectionRange() {},
-  matches: () => false, closest: () => null, getBoundingClientRect: () => ({ top: 0, bottom: 0 }),
-})
-const roots = { root: el(), 'sheet-root': el(), toast: el(), install: el() }
+// Focus is real enough here to be tested. A stub where focus() does nothing and
+// activeElement is forever null cannot tell whether the dialog hands the focus
+// back when it closes — it would pass either way, which is not a test.
+let onFocus = null
+const el = () => {
+  const node = {
+    innerHTML: '', textContent: '', value: '',
+    classList: { add() {}, remove() {}, toggle() {} },
+    querySelector: () => null, querySelectorAll: () => [],
+    setAttribute() {}, removeAttribute() {}, setSelectionRange() {},
+    addEventListener() {},
+    focus() { onFocus = node },
+    matches: () => false, closest: () => null, getBoundingClientRect: () => ({ top: 0, bottom: 0 }),
+  }
+  return node
+}
+const roots = { root: el(), 'sheet-root': el(), 'ask-root': el(), toast: el(), install: el() }
+
+// The dialog takes the focus off the page on its way in, which is the half of
+// it that makes handing the focus back afterwards worth checking. Nothing here
+// parses HTML, so the ask root answers the one question the dialog asks of it.
+const askButton = el()
+roots['ask-root'].querySelector = (sel) => (
+  sel === '[autofocus]' && roots['ask-root'].innerHTML.includes('autofocus') ? askButton : null)
 
 globalThis.document = {
   getElementById: (id) => roots[id], addEventListener() {}, createElement: el,
   documentElement: { style: { setProperty() {} }, classList: { toggle() {} } },
   body: { classList: { add() {}, remove() {}, toggle() {} }, style: { setProperty() {}, removeProperty() {} } },
-  hidden: false, activeElement: null, querySelector: () => null,
+  hidden: false, querySelector: () => null,
+  // Readable and writable, because the tests set it by hand to say "the cursor
+  // is in the message box" and focus() sets it the way the app does.
+  get activeElement() { return onFocus },
+  set activeElement(node) { onFocus = node },
 }
 globalThis.matchMedia = () => ({ matches: false })
 globalThis.window = {
@@ -44,7 +64,8 @@ const hooks = ['S', 'render', 'viewTrip', 'renderSheet', 'CAMP', 'TABS',
   'ensureChatSocket', 'stopChatSocket', 'showChatChanges', 'fitChatBox',
   'clearComposer', 'watchKeyboard',
   'campMentionRange', 'completeCampMention',
-  'settlement', 'customExpenseShares', 'googleSignIn', 'tripRoute', 'isEditing', 'unsaved', 'restore']
+  'settlement', 'customExpenseShares', 'googleSignIn', 'tripRoute', 'isEditing', 'unsaved', 'restore',
+  'ask', 'askCopy', 'closeAsk']
 new Function(`${src}\n;Object.assign(globalThis, {${hooks.map((h) => `__${h}: ${h}`).join(',')}})`)()
 
 const { __S: S, __render: render, __viewTrip: viewTrip, __renderSheet: renderSheet, __TABS: TABS,
@@ -57,7 +78,8 @@ const { __S: S, __render: render, __viewTrip: viewTrip, __renderSheet: renderShe
   __campMentionRange: campMentionRange, __completeCampMention: completeCampMention,
   __settlement: settlement, __customExpenseShares: customExpenseShares,
   __googleSignIn: googleSignIn, __tripRoute: tripRoute, __isEditing: isEditing,
-  __unsaved: unsaved, __restore: restore } = globalThis
+  __unsaved: unsaved, __restore: restore,
+  __ask: ask, __askCopy: askCopy, __closeAsk: closeAsk } = globalThis
 const { CATALOG } = await import('../lib/catalog.js')
 
 // A trip with a bit of everything: claimed by one, claimed by three, unclaimed,
@@ -1169,6 +1191,53 @@ check('the packing list is never asked which day', !find(roots['sheet-root'].inn
 S.sheet = null
 S.items = flat
 S.tab = 'pack'
+
+// ---- the one dialog ---------------------------------------------------------
+
+// There is nothing native left to ask with, so these are the manners the app's
+// own dialog has to have in place of confirm()'s.
+const pressed = el()
+pressed.focus()
+const dropped = ask({ title: `Remove "Josh's tent"?`, blurb: 'Its expense will stay in Settle up.', yes: 'Remove' })
+const asked = roots['ask-root'].innerHTML
+check('a question is the app\'s own dialog, not the browser\'s',
+  find(asked, 'role="alertdialog"') && find(asked, 'aria-modal="true"'))
+check('and its button says what it does, where OK said nothing',
+  find(asked, '>Remove</button>') && !find(asked, '>OK</button>'))
+check('a name with quotes in it is escaped into the question',
+  find(asked, 'Remove &quot;Josh&#39;s tent&quot;?'))
+check('the question takes the focus off the page behind it',
+  document.activeElement === askButton)
+check('the page behind is inert while it is up',
+  roots.root.inert === true && roots['sheet-root'].inert === true)
+check('and so is the install card, which the tab key would otherwise reach',
+  roots.install.inert === true)
+closeAsk(true)
+check('yes is what it resolves to', await dropped === true)
+check('and the page behind comes back with the question',
+  roots.root.inert === false && roots['sheet-root'].inert === false
+  && roots.install.inert === false && !roots['ask-root'].innerHTML)
+check('the focus goes back to whatever had it before the question',
+  document.activeElement === pressed)
+
+const stayed = ask({ title: 'Remove Ali?' })
+closeAsk(false)
+check('walking away is a no, the same as a dismissed confirm()', await stayed === false)
+
+const older = ask({ title: 'The first question?' })
+const newer = ask({ title: 'The second question?' })
+check('a second question walks away from the first', await older === false)
+check('and only the second one is left on screen',
+  find(roots['ask-root'].innerHTML, 'The second question?')
+  && !find(roots['ask-root'].innerHTML, 'The first question?'))
+closeAsk(true)
+check('leaving the second one to be answered', await newer === true)
+
+askCopy({ title: 'Copy this link', value: 'http://x/t/pine-camp-123' })
+const copyAsk = roots['ask-root'].innerHTML
+check('the clipboard fallback hands the text over to be copied by hand',
+  find(copyAsk, 'value="http://x/t/pine-camp-123"') && find(copyAsk, 'readonly'))
+closeAsk(true)
 
 // The two views that are not the trip.
 S.sheet = null; S.view = 'landing'; S.trips = []; render()

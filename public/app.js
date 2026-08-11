@@ -168,7 +168,9 @@ const S = {
 
 const root = document.getElementById('root')
 const sheetRoot = document.getElementById('sheet-root')
+const askRoot = document.getElementById('ask-root')
 const toastEl = document.getElementById('toast')
+const installEl = document.getElementById('install')
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => (
   { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
@@ -243,6 +245,118 @@ function toast(msg) {
   clearTimeout(toastTimer)
   toastTimer = setTimeout(() => toastEl.classList.remove('is-up'), 2600)
 }
+
+// ---- asking -----------------------------------------------------------------
+
+// Everywhere the app stops to ask something. confirm() and prompt() did this
+// until now, and they arrived wearing the browser's furniture: a system font, an
+// OK the app says nowhere else, and "camping-sync.up.railway.app says" over the
+// top of a question we had written carefully — the address bar introducing us to
+// somebody who has been using the trip all week. So the question is ours now,
+// and there is one of it.
+//
+// It answers as a promise, because every caller was already reading confirm()'s
+// answer on the line it asked: `if (await ask({...}))` is the same sentence.
+let askAnswer = null   // resolve() of the question currently up, or null
+let askFrom = null     // what had the focus before it, to give back afterwards
+
+// Everything the question stands in front of. The scrim covers all of it, but a
+// scrim only stops fingers — the tab key walks straight through one, and the
+// install card is a live pair of buttons that can raise itself on a timer while
+// a question is up. The toast is left out on purpose: it holds nothing to press,
+// and an aria-live region going inert is a sentence cut off mid-announcement.
+const BEHIND = () => [root, sheetRoot, installEl]
+
+function closeAsk(answer) {
+  if (!askAnswer) return
+  const settle = askAnswer
+  askAnswer = null
+  askRoot.innerHTML = ''
+  // Order matters: focus will not go back to something still inert.
+  for (const layer of BEHIND()) layer.inert = false
+  askFrom?.focus?.()
+  askFrom = null
+  settle(answer)
+}
+
+function openAsk(html) {
+  // Never two at once, and a second question is a way of walking away from the
+  // first — which is what a dismissed confirm() meant too.
+  closeAsk(false)
+  // Read before the dialog is anywhere near the page: it carries an autofocus,
+  // and where it lands is decided by the browser at a moment of its choosing.
+  askFrom = document.activeElement
+  const answered = new Promise((resolve) => { askAnswer = resolve })
+  askRoot.innerHTML = html
+  // The page behind is not a page you can use while this is up. `inert` says so
+  // to the pointer, the tab key and the screen reader in one word — and it is
+  // what keeps a live update redrawing the trip underneath from stealing the
+  // focus out of the dialog.
+  for (const layer of BEHIND()) layer.inert = true
+  const first = askRoot.querySelector('[autofocus]')
+  first?.focus()
+  first?.select?.()
+  return answered
+}
+
+// One at a time, so the question and its small print can hold fixed ids and be
+// named to a screen reader by the words on screen rather than by a copy of them.
+function askShell({ title, blurb, body = '', acts }) {
+  return `
+    <div class="ask-scrim" data-ask="scrim">
+      <div class="ask" role="alertdialog" aria-modal="true"
+           aria-labelledby="ask-title"${blurb ? ' aria-describedby="ask-blurb"' : ''}>
+        <div class="ask__head">
+          <h3 id="ask-title">${esc(title)}</h3>
+          ${blurb ? `<p id="ask-blurb">${esc(blurb)}</p>` : ''}
+        </div>
+        ${body}
+        <div class="ask__foot">${acts}</div>
+      </div>
+    </div>`
+}
+
+// Yes or no. `yes` is the answer written out — "Remove", "Take it off" — because
+// a button that says what it does can be read on its own, and the last thing
+// somebody about to undo a payment should have to do is scroll their eye back up
+// to the question to find out what OK meant.
+//
+// Removing gets no colour of its own: blaze means nobody has picked this up yet
+// and nothing else, and the question mark is doing the warning already.
+function ask({ title, blurb = '', yes = 'OK', no = 'Cancel' }) {
+  return openAsk(askShell({
+    title,
+    blurb,
+    acts: `
+      <button class="btn" data-ask="no">${esc(no)}</button>
+      <button class="btn btn--primary" data-ask="yes" autofocus>${esc(yes)}</button>`,
+  }))
+}
+
+// The fallback when the clipboard will not take something — an old browser, or
+// a page the OS has decided is not allowed to write to it. There is nothing to
+// answer here: the text is the whole point, sitting selected in a box, one
+// long-press from being copied the manual way.
+function askCopy({ title, blurb = '', value }) {
+  return openAsk(askShell({
+    title,
+    blurb,
+    body: `<div class="ask__body">
+      <input class="ask__copy" value="${esc(value)}" readonly spellcheck="false"
+             aria-labelledby="ask-title" autofocus>
+    </div>`,
+    acts: `<button class="btn btn--primary" data-ask="yes">Done</button>`,
+  }))
+}
+
+askRoot.addEventListener('click', (ev) => {
+  const hit = ev.target.closest('[data-ask]')
+  if (!hit) return
+  // The scrim is the card's own parent, so only a press on the space around the
+  // card counts as walking away — not one that landed on the card and bubbled.
+  if (hit.dataset.ask === 'scrim' && ev.target !== hit) return
+  closeAsk(hit.dataset.ask === 'yes')
+})
 
 // ---- api --------------------------------------------------------------------
 
@@ -4647,11 +4761,16 @@ document.addEventListener('click', async (ev) => {
 
     case 'forget-trip': {
       const t = (S.trips ?? []).find((x) => x.id === el.dataset.id)
-      if (t && confirm(`Take "${t.name}" off this device? The trip itself stays put, and the link still works.`)) {
-        forgetTrip(t.id)
-        render()
-        toast('Removed from this device.')
-      }
+      if (!t) break
+      const off = await ask({
+        title: `Take "${t.name}" off this device?`,
+        blurb: 'The trip itself stays put, and the link still works.',
+        yes: 'Take it off',
+      })
+      if (!off) break
+      forgetTrip(t.id)
+      render()
+      toast('Removed from this device.')
       break
     }
 
@@ -4862,8 +4981,12 @@ document.addEventListener('click', async (ev) => {
       if (!payment) break
       const from = memberById(payment.from_member)?.name || 'someone'
       const to = memberById(payment.to_member)?.name || 'someone'
-      if (confirm(`Undo ${from} paying ${to} ${moneyText(payment.amount)}?`)
-          && await mutate(() => api(`/payments/${payment.id}`, { method: 'DELETE' }))) {
+      const undo = await ask({
+        title: `Undo ${from} paying ${to} ${moneyText(payment.amount)}?`,
+        blurb: 'The amount goes back to being owed.',
+        yes: 'Undo it',
+      })
+      if (undo && await mutate(() => api(`/payments/${payment.id}`, { method: 'DELETE' }))) {
         toast('Payment removed.')
       }
       break
@@ -4871,8 +4994,13 @@ document.addEventListener('click', async (ev) => {
 
     case 'delete-expense': {
       const expense = S.expenses.find((row) => row.id === el.dataset.expense)
-      if (expense && confirm(`Remove "${expense.description}" from Settle up?`)
-          && await mutate(() => api(`/expenses/${expense.id}`, { method: 'DELETE' }))) {
+      if (!expense) break
+      const gone = await ask({
+        title: `Remove "${expense.description}" from Settle up?`,
+        blurb: 'What everyone owes is worked out again without it.',
+        yes: 'Remove',
+      })
+      if (gone && await mutate(() => api(`/expenses/${expense.id}`, { method: 'DELETE' }))) {
         S.sheet = null
         renderSheet()
         toast('Expense removed.')
@@ -4921,7 +5049,11 @@ document.addEventListener('click', async (ev) => {
       const ids = new Set(there.map((row) => row.id))
       const linked = S.expenses.filter((expense) => ids.has(expense.item_id))
       const costNote = linked.length ? ` Its ${linked.length === 1 ? 'expense' : 'expenses'} will stay in Settle up.` : ''
-      if (spoken.length && !confirm(`${namesOn(spoken[0])} put their name to ${day ? dayFull(day) : 'the undated one'}.${costNote} Take that day off anyway?`)) break
+      if (spoken.length && !(await ask({
+        title: 'Take that day off anyway?',
+        blurb: `${namesOn(spoken[0])} put their name to ${day ? dayFull(day) : 'the undated one'}.${costNote}`,
+        yes: 'Take it off',
+      }))) break
       // The sheet is open on one of these rows, so if that is the one going, it
       // is pointed at another before it goes and stays open on the same thing.
       if (there.some((i) => i.id === S.sheet?.id)) {
@@ -4956,7 +5088,7 @@ document.addEventListener('click', async (ev) => {
     case 'copy-where': {
       const where = String(S.trip.location ?? '').trim()
       try { await navigator.clipboard.writeText(where); toast('Address copied.') }
-      catch { prompt('Copy the address:', where) }
+      catch { await askCopy({ title: 'Copy the address', value: where }) }
       break
     }
 
@@ -4966,8 +5098,8 @@ document.addEventListener('click', async (ev) => {
       break
     }
 
-    // prompt() only counts inside a gesture, and nothing above this point in the
-    // handler has awaited, so this is still one.
+    // Chrome's install prompt only counts inside a gesture, and nothing on the
+    // way to this case has awaited, so this is still one.
     case 'install-yes':
       hideInstall()
       await runInstallPrompt()
@@ -5133,21 +5265,25 @@ document.addEventListener('click', async (ev) => {
 
     case 'kill': {
       const it = S.items.find((i) => i.id === el.dataset.id)
-      const linked = it ? S.expenses.filter((expense) => expense.item_id === it.id) : []
-      const costNote = linked.length ? ` Its ${linked.length === 1 ? 'expense' : 'expenses'} will stay in Settle up.` : ''
-      if (it && confirm(`Remove "${it.title}" from the list?${costNote}`)) {
-        S.sheet = null
-        renderSheet()
-        mutate(() => api(`/items/${it.id}`, { method: 'DELETE' }))
-      }
+      if (!it) break
+      const linked = S.expenses.filter((expense) => expense.item_id === it.id)
+      const costNote = linked.length ? `Its ${linked.length === 1 ? 'expense' : 'expenses'} will stay in Settle up.` : ''
+      if (!(await ask({ title: `Remove "${it.title}" from the list?`, blurb: costNote, yes: 'Remove' }))) break
+      S.sheet = null
+      renderSheet()
+      mutate(() => api(`/items/${it.id}`, { method: 'DELETE' }))
       break
     }
 
     case 'drop-member': {
       const m = memberById(el.dataset.id)
-      if (m && confirm(`Remove ${m.name}? Anything they were bringing goes back to nobody.`)) {
-        mutate(() => api(`/trips/${S.trip.id}/members/${m.id}`, { method: 'DELETE' }))
-      }
+      if (!m) break
+      const out = await ask({
+        title: `Remove ${m.name}?`,
+        blurb: 'Anything they were bringing goes back to nobody.',
+        yes: 'Remove',
+      })
+      if (out) mutate(() => api(`/trips/${S.trip.id}/members/${m.id}`, { method: 'DELETE' }))
       break
     }
 
@@ -5251,7 +5387,13 @@ document.addEventListener('click', async (ev) => {
         try { await navigator.share({ title: S.trip.name, text, url }) } catch { /* dismissed */ }
       } else {
         try { await navigator.clipboard.writeText(url); toast('Link copied. Send it to your friends.') }
-        catch { prompt('Copy this link:', url) }
+        catch {
+          await askCopy({
+            title: 'Copy this link',
+            blurb: 'Send it to whoever is coming — it is the way in to the trip.',
+            value: url,
+          })
+        }
       }
       break
     }
@@ -5544,6 +5686,15 @@ document.addEventListener('submit', async (ev) => {
 })
 
 document.addEventListener('keydown', (ev) => {
+  // A question in front of everything else answers for everything else: Escape
+  // walks away from it rather than closing the sheet standing behind it.
+  if (askAnswer) {
+    if (ev.key === 'Escape') closeAsk(false)
+    // Enter on a button is that button, and one of them is Cancel. Anywhere
+    // else in the dialog it is the answer being held out.
+    else if (ev.key === 'Enter' && ev.target.tagName !== 'BUTTON') closeAsk(true)
+    return
+  }
   if (ev.target.id === 'chat-text') {
     const mention = root.querySelector?.('#chat-mention')
     if (mention && !mention.hidden && (ev.key === 'Enter' || ev.key === 'Tab')) {
@@ -6008,7 +6159,11 @@ function watchKeyboard() {
 }
 watchKeyboard()
 
-window.addEventListener('popstate', boot)
+// Back is an answer, and the answer is no. confirm() used to stop the event loop
+// dead, so the button could not be pressed while it was up; a question that
+// waits on a promise can be walked out from under, and answering it afterwards
+// would run "Remove" against a trip you have already left.
+window.addEventListener('popstate', () => { closeAsk(false); boot() })
 
 // ---- sync -------------------------------------------------------------------
 
@@ -6147,8 +6302,6 @@ function worthAsking() {
   if (n.at && Date.now() - n.at < MONTH) return false
   return visits >= 2 && localTrips().length > 0
 }
-
-const installEl = document.getElementById('install')
 
 let deferred = null   // Chrome's beforeinstallprompt, held back for our moment
 let installTimer

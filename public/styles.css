@@ -1810,6 +1810,58 @@ button.wx__day:hover .wx__wet, .wx__row--open .wx__wet { color: var(--ink); }
 .sheet__group > .eyebrow { display: block; margin-bottom: 9px; }
 
 /* ==========================================================================
+   Ask
+   ========================================================================== */
+
+/* The one dialog. A sheet is somewhere you go and can stay a while; this is a
+   sentence you have to answer before anything else happens, so it does not
+   climb the bottom of the screen — it lands in the middle of it, over the
+   sheet that asked, and is no wider than the question needs.
+
+   Above the sheet (50) and the install card (55). The toast (60) is left over
+   it: a question is not a reason to swallow "That change is not saved." */
+.ask-scrim {
+  position: fixed; inset: 0 0 var(--kb); z-index: 65;
+  background: rgba(22, 36, 31, .5);
+  display: flex; align-items: center; justify-content: center;
+  padding: 20px; padding-bottom: calc(20px + env(safe-area-inset-bottom));
+  animation: fade .16s ease;
+}
+
+.ask {
+  width: 100%; max-width: 400px; max-height: 100%; overflow-y: auto;
+  background: var(--canvas); border-radius: var(--r-lg);
+  box-shadow: var(--shadow-lift);
+  animation: rise .2s cubic-bezier(.2, .8, .3, 1);
+}
+.ask__head { padding: 20px 20px 0; }
+/* Wrapping the trip's own name and a question mark, so it holds a line height
+   the display face can breathe in rather than the headline crush of an h3. */
+.ask__head h3 { font-size: 19px; line-height: 1.2; overflow-wrap: anywhere; }
+.ask__head p { margin: 8px 0 0; font-size: 14px; color: var(--ink-soft); }
+.ask__body { padding: 16px 20px 0; }
+
+/* Answers, in the order they are meant to be read: walking away first, on the
+   left, and the thing you pressed for last — under the thumb, and never the
+   one a stray tap on the edge of the card finds. */
+.ask__foot { display: flex; gap: 10px; padding: 18px 20px 20px; }
+.ask__foot .btn { flex: 1 1 0; min-width: 0; }
+/* Room for "Take it off" beside "Cancel" on a small phone; below it if the two
+   of them will not fit. */
+@media (max-width: 359px) {
+  .ask__foot { flex-direction: column-reverse; }
+}
+
+/* The address or the link, where the clipboard would not take it. Read-only
+   and selected on arrival, so it is one long-press from being copied by hand —
+   and monospaced, because a URL is a thing you check character by character. */
+.ask__copy {
+  width: 100%; padding: 12px 14px; border-radius: var(--r-md);
+  background: var(--paper); border: 1.5px solid var(--line-strong);
+  font-family: var(--mono); font-size: 14px;
+}
+
+/* ==========================================================================
    Toast
    ========================================================================== */
 
