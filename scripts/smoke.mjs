@@ -120,7 +120,8 @@ const hooks = ['S', 'render', 'viewTrip', 'renderSheet', 'CAMP', 'TABS',
   'settlement', 'customExpenseShares', 'googleSignIn', 'tripRoute', 'isEditing', 'unsaved', 'restore',
   'ask', 'askCopy', 'closeAsk',
   'loadPrefs', 'savePrefs', 'applyTheme', 'viewSettings', 'showSettings', 'leaveSettings',
-  'isSettingsRoute', 'FEATURES', 'THEMES', 'PREFS_KEY', 'FACES']
+  'isSettingsRoute', 'FEATURES', 'THEMES', 'PREFS_KEY', 'FACES',
+  'heads', 'hounds', 'needOf', 'coverOf', 'statsFor', 'partyWords']
 new Function(`${src}\n;Object.assign(globalThis, {${hooks.map((h) => `__${h}: ${h}`).join(',')}})`)()
 
 const { __S: S, __render: render, __viewTrip: viewTrip, __renderSheet: renderSheet, __TABS: TABS,
@@ -138,7 +139,9 @@ const { __S: S, __render: render, __viewTrip: viewTrip, __renderSheet: renderShe
   __loadPrefs: loadPrefs, __savePrefs: savePrefs, __applyTheme: applyTheme,
   __viewSettings: viewSettings, __showSettings: showSettings, __leaveSettings: leaveSettings,
   __isSettingsRoute: isSettingsRoute, __FEATURES: FEATURES, __THEMES: THEMES,
-  __PREFS_KEY: PREFS_KEY, __FACES: FACES } = globalThis
+  __PREFS_KEY: PREFS_KEY, __FACES: FACES,
+  __heads: headcount, __hounds: hounds, __needOf: needOf, __coverOf: coverOf,
+  __statsFor: statsFor, __partyWords: partyWords } = globalThis
 const { CATALOG } = await import('../lib/catalog.js')
 
 // A trip with a bit of everything: claimed by one, claimed by three, unclaimed,
@@ -1427,6 +1430,100 @@ const copyAsk = roots['ask-root'].innerHTML
 check('the clipboard fallback hands the text over to be copied by hand',
   find(copyAsk, 'value="http://x/t/pine-camp-123"') && find(copyAsk, 'readonly'))
 closeAsk(true)
+
+// Headcount and quantities: the trip runs Fri 4 – Sun 6 September 2026, which is
+// three days, and has four people on the member list.
+const crew = S.members
+check("a member is one person until they say otherwise", headcount() === 4 && hounds() === 0)
+S.members = [
+  { ...crew[0], plus_adults: 1, kids: 2, dogs: 1 },
+  ...crew.slice(1),
+]
+check("who you bring counts, and the dog does not", headcount() === 7 && hounds() === 1)
+check('and it is said in words beside the person', partyWords(S.members[0]) === '1 adult, 2 kids and a dog')
+check('nobody brought is no words at all', partyWords(S.members[1]) === '')
+
+const water = item({ id: 'water', t: 'Drinking water', list: 'drinks', category: 'Drinks',
+  per_head: 4, unit: 'L', per_day: 1 })
+const plates = item({ id: 'plates', t: 'Plates, bowls, mugs', category: 'Camp kitchen', per_head: 1 })
+const rated = [water, plates, item({ id: 'wood', t: 'Firewood', category: 'Fire & sitting', qty: 'two bags' })]
+S.items = rated
+
+check('a per-day rate spans the trip', needOf(water) === 84)
+check('and a rate that is not per-day does not', needOf(plates) === 7)
+check('a thing with no rate has no number to work out', needOf(rated[2]) === 0)
+water.day = SAT
+check('a thing put down for one day is that day only', needOf(water) === 28)
+water.day = ''
+
+// One tap has always meant "I have got this", and it still does.
+plates.claims = [claim('m2')]
+check('one tap covers the whole of it', coverOf(plates).covered === 7 && coverOf(plates).frac === 1)
+plates.claims = [{ member_id: 'm2', packed: false, qty: 4 }]
+const four = coverOf(plates)
+check('four of the nine is four of the nine', four.covered === 4 && four.frac < 1)
+check('and the coverage bar can finally tell the difference',
+  statsFor([plates]).short === 1 && statsFor([plates]).open === 0)
+plates.claims = [{ member_id: 'm2', packed: false, qty: 4 }, claim('m3')]
+check('somebody else takes the rest', coverOf(plates).covered === 7)
+check('and their share is what was left', coverOf(plates).amounts.get('m3') === 3)
+plates.claims = [{ member_id: 'm2', packed: false, qty: 40 }]
+check('promising more than there is does not overrun the bar', coverOf(plates).frac === 1)
+plates.claims = [{ member_id: 'm2', packed: false, qty: 4 }]
+
+S.tab = 'eat'; S.camp = false; S.filter = { kind: '', cat: '', hide: false, q: '' }
+check('the row says how many, worked out — 4L each, seven people, three days',
+  find(viewTrip(), '<span class="item__qty item__qty--sum">84 L</span>'))
+
+S.tab = 'pack'
+const counted = viewTrip()
+check('a part-covered row says how far it has got', find(counted, '>4 of 7<'))
+check('free text still stands where there is no rate', find(counted, '>two bags<'))
+check('the bar says what is short as well as what is missing',
+  find(counted, '<b>1</b> need someone, 1 short'))
+check('and something nobody has enough of is not "sorted"',
+  find(counted, 'class="tick tick--open" data-act="tick" data-id="plates"'))
+
+S.sheet = { kind: 'item', id: 'plates' }; renderSheet()
+const claimSheet = roots['sheet-root'].innerHTML
+check('the claim sheet leads with how many there are', find(claimSheet, '<b>7</b> needed'))
+check('and the shortfall wears the blaze, not the part somebody has',
+  find(claimSheet, '<b class="say--open">3</b> still to find'))
+check('and says where the number came from', find(claimSheet, '1 each, for 7 people'))
+check('a part-share is shown against the name that made it', find(claimSheet, '4 · Not packed yet'))
+S.items = [...rated]
+S.items[1] = { ...plates, claims: [...plates.claims, claim('m1')] }
+S.sheet = { kind: 'item', id: 'plates' }; renderSheet()
+check('once your name is down you can say how much', find(roots['sheet-root'].innerHTML, 'data-act="save-share"'))
+S.items = rated
+
+S.sheet = { kind: 'edit', id: 'water' }; renderSheet()
+const editSheet = roots['sheet-root'].innerHTML
+check('the rate is editable where the wording is', find(editSheet, 'name="per_head"') && find(editSheet, 'name="unit"'))
+check('and per-day is a switch rather than a guess',
+  attrs(editSheet, 'aria-pressed="true"', 'data-name="per_day" data-value="1"'))
+S.sheet = { kind: 'edit', id: 'Sleeping bag' }
+S.items = [...rated, item({ id: 'Sleeping bag', t: 'Sleeping bag', kind: 'own', own: ['m1'] })]
+renderSheet()
+check('personal kit is never asked for a rate, because one each is what it means',
+  !find(roots['sheet-root'].innerHTML, 'name="per_head"'))
+
+S.camp = 'overview'; S.items = rated
+const who = viewTrip()
+check('the trip page says how many people the quantities are for', find(who, '<b>7 people</b>'))
+check('and that four names is not four people', find(who, 'from 4 on the list'))
+check('the dog is on the list without being counted', find(who, 'and a dog'))
+check('who somebody is bringing is asked on every row',
+  (who.match(/data-act="party"/g) ?? []).length === 4)
+S.sheet = { kind: 'party', id: 'm1' }; renderSheet()
+check('and answered in three numbers', find(roots['sheet-root'].innerHTML, 'name="plus_adults"')
+  && find(roots['sheet-root'].innerHTML, 'name="kids"') && find(roots['sheet-root'].innerHTML, 'name="dogs"'))
+
+S.members = crew
+S.items = flat
+S.sheet = null
+S.camp = false
+S.tab = 'pack'
 
 // The two views that are not the trip.
 S.sheet = null; S.view = 'landing'; S.trips = []; render()

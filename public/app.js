@@ -1293,7 +1293,7 @@ const tickedForMe = (it) => (goingHome() ? stowedForMe(it) : packedForMe(it))
 // somebody has put their name to it — or, for your own kit, you have packed it.
 // On your own page everything already has your name on it, so there the only
 // question left is whether it is in the car — going out, or coming home.
-const isSettled = (it) => (S.tab === 'mine' ? tickedForMe(it) : isOwn(it) ? isMine(it) : isClaimed(it))
+const isSettled = (it) => (S.tab === 'mine' ? tickedForMe(it) : isOwn(it) ? isMine(it) : isCovered(it))
 
 // Search is the one filter that does not care how the list is organised: you
 // type "sock" because you want the socks, wherever they are filed and whoever
@@ -1370,15 +1370,111 @@ function activeFilter() {
 // switch in the sheet, so the sheets open where you are looking.
 const activeSection = () => (activeFilter().kind === 'own' ? 'own' : 'shared')
 
+// ---- headcount and quantities ------------------------------------------------
+
+// How many people are on the trip, which is not how many rows are in the member
+// list: everybody is themselves plus whoever they said they were bringing. Kids
+// count — one body drinks water and needs somewhere to sleep — and dogs do not,
+// because a dog needs no plate and no share of the burgers. The same two lines
+// live in lib/db.js, which is where the server answers the same question.
+const heads = () => S.members.reduce((n, m) => n + 1 + (m.plus_adults ?? 0) + (m.kids ?? 0), 0)
+const hounds = () => S.members.reduce((n, m) => n + (m.dogs ?? 0), 0)
+
+// Who somebody is bringing, in words, and empty when it is nobody — which is
+// what makes it a prompt on the row rather than a line that says "nobody" nine
+// times. The feed says the same thing its own way from the server.
+function partyWords(m) {
+  const said = [
+    m.plus_adults ? `${m.plus_adults} ${m.plus_adults === 1 ? 'adult' : 'adults'}` : '',
+    m.kids ? `${m.kids} ${m.kids === 1 ? 'kid' : 'kids'}` : '',
+    m.dogs ? (m.dogs === 1 ? 'a dog' : `${m.dogs} dogs`) : '',
+  ].filter(Boolean)
+  if (said.length < 2) return said[0] ?? ''
+  return `${said.slice(0, -1).join(', ')} and ${said[said.length - 1]}`
+}
+
+// A rate is what an item knows about itself: four litres a person a day, one
+// plate each. Most things have none and always will — "how much firewood per
+// person" has no honest answer — and those keep the free-text box they had.
+const isRated = (it) => Number(it.per_head) > 0
+
+// How many days a per-day rate covers. A row with a day of its own is that day's
+// and spans one; a row for any day, or for no day yet, is the whole trip's. A
+// trip with no dates has no days to multiply by, so it counts as one — which is
+// the same answer as "we do not know yet", said without a zero in it.
+const spanOf = (it) => (it.per_day && !isDayString(it.day) ? Math.max(tripDays(S.trip).length, 1) : 1)
+
+// The number the whole feature is for: how many of it the trip needs, worked out
+// rather than remembered. Nobody types it and nobody has to come back and fix it
+// when the eleventh person joins.
+const needOf = (it) => (isRated(it) ? round2(it.per_head * heads() * spanOf(it)) : 0)
+
+// Floats are floats: 4 × 9 ÷ 9 is not always 4, and "4.000000000000001 L" on a
+// packing list is not an improvement on free text.
+const round2 = (n) => Math.round(n * 100) / 100
+
+// What is covered, and by whom. One thing is one unit of the bar however many
+// names are on it — but on a thing with a rate the names do not split it evenly,
+// they split it by what each of them said they were bringing.
+//
+// A claim with no number on it is somebody saying "I have got the rest", which
+// is what one tap has always meant, so those share out whatever is left over
+// after the numbered promises. Promising more than the trip needs cannot make
+// the bar longer than the thing it measures, so everything is a fraction of
+// whichever is bigger, the need or the promises.
+//
+// `shares` are fractions of the whole thing, which is what the bar is drawn in.
+// `amounts` are the same answer in litres and plates, which is what a person
+// reads — including the person who tapped once and never said a number, whose
+// share is however much of it is left over.
+function coverOf(it) {
+  const on = crew(it)
+  const need = needOf(it)
+  const shares = new Map(), amounts = new Map()
+  if (!on.length) return { need, covered: 0, frac: 0, shares, amounts }
+
+  if (!need) {
+    for (const c of on) shares.set(c.member_id, 1 / on.length)
+    return { need: 0, covered: 0, frac: 1, shares, amounts }
+  }
+
+  const named = on.filter((c) => c.qty > 0)
+  const rest = on.filter((c) => !(c.qty > 0))
+  const promised = named.reduce((n, c) => n + c.qty, 0)
+  const each = rest.length ? Math.max(0, need - promised) / rest.length : 0
+  const covered = rest.length ? Math.max(need, promised) : promised
+  const whole = Math.max(need, promised)
+
+  for (const c of named) amounts.set(c.member_id, round2(c.qty))
+  for (const c of rest) amounts.set(c.member_id, round2(each))
+  for (const [id, n] of amounts) shares.set(id, n / whole)
+  return { need, covered: round2(covered), frac: Math.min(covered / need, 1), shares, amounts }
+}
+
+// Sorted, on a group thing: somebody's name on it, and — where the list knows
+// how many there are — enough of them. Four sleeping bags between nine people is
+// four sleeping bags, however many people have put their name down.
+const isCovered = (it) => coverOf(it).frac > 0.999
+
+// How much there is, for the row and the sheet. A bare number where the thing is
+// its own unit, because "9 burgers" beside the word Burgers says it twice.
+const amount = (n, unit) => (unit ? `${n} ${unit}` : String(n))
+
 // Each section answers a different question, so each gets its own tally.
 // Plans are not "brought" by anyone, so they are counted by interest instead.
 //
 // A thing with three names on it is still one thing, so it is one unit of the
 // bar split three ways. Counting it once per person would let a crowded item
 // swell the coloured half and quietly shrink the gap nobody has filled.
+//
+// Two numbers for what is left, because they are two different problems: `open`
+// is what nobody has picked up and `short` is what somebody has picked up too
+// little of. `gap` is what the bar draws — the two of them added up as fractions
+// of a thing each, so a list where one plate set of nine is missing does not
+// look as empty as a list where nine whole things are.
 function statsFor(items) {
   const perMember = new Map()
-  let shared = 0, open = 0, own = 0, mine = 0, ideas = 0, wanted = 0
+  let shared = 0, open = 0, short = 0, gap = 0, own = 0, mine = 0, ideas = 0, wanted = 0
 
   for (const it of items) {
     if (isPlan(it)) {
@@ -1389,15 +1485,20 @@ function statsFor(items) {
       if (isMine(it)) mine++
     } else {
       shared++
-      const on = crew(it)
-      if (!on.length) { open++; continue }
-      for (const c of on) {
-        const had = perMember.get(c.member_id) ?? { share: 0, n: 0 }
-        perMember.set(c.member_id, { share: had.share + 1 / on.length, n: had.n + 1 })
+      const { frac, shares } = coverOf(it)
+      gap += 1 - frac
+      if (!shares.size) open++
+      else if (frac <= 0.999) short++
+      for (const [id, share] of shares) {
+        const had = perMember.get(id) ?? { share: 0, n: 0 }
+        perMember.set(id, { share: had.share + share, n: had.n + 1 })
       }
     }
   }
-  return { shared, open, claimed: shared - open, perMember, own, mine, ideas, wanted }
+  return {
+    shared, open, short, todo: open + short, gap, claimed: shared - open - short,
+    perMember, own, mine, ideas, wanted,
+  }
 }
 
 // Everything that is yours to put in the car: the shared things you have put
@@ -1716,10 +1817,19 @@ function barParts(tab, section) {
     .map(([id, { share, n }]) => `<div class="coverage__seg" style="flex:${share};background:${colorOf(memberById(id))}"
            title="${esc(memberById(id).name)}: ${n}"></div>`).join('')
 
+  // Two ways of not being handled, and the bar says both: nobody has picked it
+  // up, or somebody has and there is not enough of it to go round. The second
+  // one is new — before there was a headcount to measure against, one name on a
+  // thing read as covered whether it was nine sleeping bags or four.
+  const say = c.open && c.short ? `<b>${c.open}</b> need someone, ${c.short} short`
+    : c.open ? `<b>${c.open}</b> need someone`
+    : c.short ? `<b>${c.short}</b> need more`
+    : `<b>All ${c.shared} covered.</b>`
+
   return {
-    segs: `${segs}${c.open > 0 ? `<div class="coverage__seg coverage__seg--gap" style="flex:${c.open}"></div>` : ''}`,
-    say: c.open === 0 ? `<b>All ${c.shared} covered.</b>` : `<b>${c.open}</b> need someone`,
-    aria: `${c.claimed} of ${c.shared} claimed`,
+    segs: `${segs}${c.gap > 0.001 ? `<div class="coverage__seg coverage__seg--gap" style="flex:${c.gap}"></div>` : ''}`,
+    say,
+    aria: `${c.claimed} of ${c.shared} covered`,
   }
 }
 
@@ -1925,6 +2035,30 @@ function noMatch(f) {
     </div>`
 }
 
+// What the row says about how much of a thing there is. Without a rate it is
+// whatever somebody typed, which is where "two bags" and "the big one" live.
+// With one it is arithmetic — and once somebody is bringing part of it, a score:
+// "4 of 9" is the sentence the old free-text box could never say, and the one
+// that tells you the list is not finished with this row yet.
+function muchOf(item) {
+  if (!isRated(item)) return String(item.qty ?? '')
+  const { need, covered } = coverOf(item)
+  return covered && covered < need
+    ? `${covered} of ${amount(need, item.unit)}`
+    : amount(need, item.unit)
+}
+
+// And the same question on your own page, where it has a different answer: the
+// trip needing 36 litres is not what you have to get into the car. Yours is what
+// you said you would bring, or — if you only ever tapped once — whatever is left
+// after everybody who did name a number.
+function myMuch(item) {
+  if (!isRated(item)) return String(item.qty ?? '')
+  const { need, amounts } = coverOf(item)
+  const mine = amounts.get(S.me)
+  return amount(mine === undefined ? need : mine, item.unit)
+}
+
 // A person, in the space a face takes. Two letters at most: on a row this is
 // scenery until you look for yourself in it, and then it has to answer at once.
 function initials(name) {
@@ -1975,7 +2109,9 @@ function tickBox(item, home = false) {
     : done ? `Your share of ${item.title} is packed — untick it`
     : `Tick ${item.title} when your share is packed`
 
-  const cls = done ? ' tick--done' : on || home ? ' tick--mine' : isClaimed(item) ? '' : ' tick--open'
+  // Blaze means "this still needs somebody", which on a thing the list can count
+  // includes one somebody has only got four of.
+  const cls = done ? ' tick--done' : on || home ? ' tick--mine' : isCovered(item) ? '' : ' tick--open'
   return `
     <button class="tick${cls}" data-act="${home ? 'stow' : 'tick'}" data-id="${item.id}" aria-pressed="${done}"
             ${me ? `style="--mine:${colorOf(me)}"` : ''} aria-label="${esc(label)}">
@@ -2066,12 +2202,13 @@ function itemRow(item, mixed) {
     plan ? votesChip(item) : '',
   ].filter(Boolean).join('')
 
+  const much = muchOf(item)
   return `
     <li class="item${allPacked(item) ? ' item--packed' : ''}">
       ${plan ? voteBox(item) : tickBox(item)}
       <div class="item__main">
         <button class="item__open" data-act="open-item" data-id="${item.id}">
-          <span class="item__title">${esc(item.title)}${item.qty ? `<span class="item__qty">${esc(item.qty)}</span>` : ''}</span>
+          <span class="item__title">${esc(item.title)}${much ? `<span class="item__qty${isRated(item) ? ' item__qty--sum' : ''}">${esc(much)}</span>` : ''}</span>
           ${mixed && own ? '<span class="mine__from">personal kit · only you see this</span>' : ''}
           ${item.note ? `<span class="item__note">${esc(item.note)}</span>` : ''}
         </button>
@@ -2166,13 +2303,15 @@ const byWhen = (a, b) => {
 }
 
 // The same bar as the one in the app, at a glance and in the same colours: who
-// has got what, then the hatched gap nobody has picked up.
+// has got what, then the hatched gap. The server works it out the same way the
+// list does — a thing somebody has only got four of leaves five in the gap here
+// too, or this would be the one screen still saying a short list was covered.
 function tripBar(t) {
   if (!t.shared) return { track: '', say: 'Nothing on the lists yet' }
   const segs = t.claims.map(({ hue, n }) =>
     `<span class="coverage__seg" style="flex:${n};background:${colorOf({ hue })}"></span>`).join('')
   return {
-    track: `${segs}${t.open ? `<span class="coverage__seg coverage__seg--gap" style="flex:${t.open}"></span>` : ''}`,
+    track: `${segs}${t.gap > 0.001 ? `<span class="coverage__seg coverage__seg--gap" style="flex:${t.gap}"></span>` : ''}`,
     say: t.open
       ? `<b class="say--open">${t.open}</b> still need someone`
       : `<b>All ${t.shared} covered.</b>`,
@@ -2181,7 +2320,13 @@ function tripBar(t) {
 
 function tripCard(t) {
   const bar = tripBar(t)
-  const meta = [shortWhere(t), fmtDates(t), `${t.members} ${t.members === 1 ? 'person' : 'people'}`].filter(Boolean)
+  // People, not names on the list: somebody who is bringing their partner and
+  // two kids is four of them, and four is the number every quantity inside the
+  // trip is worked out from.
+  const meta = [
+    shortWhere(t), fmtDates(t),
+    `${t.people} ${t.people === 1 ? 'person' : 'people'}${t.dogs ? ` · ${t.dogs === 1 ? 'a dog' : `${t.dogs} dogs`}` : ''}`,
+  ].filter(Boolean)
   const you = t.you
     ? `<span class="trip-card__you"><span class="trip-card__dot" style="background:${colorOf(t.you)}"></span>${esc(t.you.name)}</span>`
     : '<span class="trip-card__you trip-card__you--out">Add your name</span>'
@@ -2884,7 +3029,7 @@ function groupSection(name, tally, body) {
 // packed. Mixed groups count both and leave the word off.
 function categoryGroups(groups, mixed) {
   return groups.map(([cat, list]) => {
-    const done = list.filter((i) => (isOwn(i) ? isMine(i) : isClaimed(i))).length
+    const done = list.filter((i) => (isOwn(i) ? isMine(i) : isCovered(i))).length
     const tally = list.every(isOwn) ? `${done}/${list.length} packed` : `${done}/${list.length}`
     return groupSection(cat, isPlan(list[0]) ? `${list.length}` : tally,
       `<ul class="items">${list.map((i) => itemRow(i, mixed)).join('')}</ul>`)
@@ -2903,7 +3048,7 @@ function listPage() {
   const found = pool.filter((i) => matchesFilter(i, { ...f, q: '' }))
   const items = found.filter((i) => matchesQuery(i, f.q))
   const c = statsFor(all)
-  const count = (key) => (key === 'own' ? [c.own - c.mine, true] : [c.open, false])
+  const count = (key) => (key === 'own' ? [c.own - c.mine, true] : [c.todo, false])
 
   let body
   // With suggestions turned off in settings, writing your own is not the
@@ -2972,13 +3117,14 @@ function mineRow(item) {
     // the question you are actually asking on the morning you leave.
     others.length ? `with ${others.map((c) => c.member.name).join(', ')}` : '',
   ].filter(Boolean).join(' · ')
+  const mine = myMuch(item)
 
   return `
     <li class="item${tickedForMe(item) ? ' item--packed' : ''}">
       ${tickBox(item, home)}
       <div class="item__main">
         <button class="item__open" data-act="open-item" data-id="${item.id}">
-          <span class="item__title">${esc(item.title)}${item.qty ? `<span class="item__qty">${esc(item.qty)}</span>` : ''}</span>
+          <span class="item__title">${esc(item.title)}${mine ? `<span class="item__qty${isRated(item) ? ' item__qty--sum' : ''}">${esc(mine)}</span>` : ''}</span>
           <span class="mine__from">${esc(from)}</span>
           ${item.note ? `<span class="item__note">${esc(item.note)}</span>` : ''}
         </button>
@@ -3065,7 +3211,7 @@ function countdown(trip) {
 // have to act on differently.
 function openWork() {
   const lists = TABS.filter((t) => t.lists.length && !isPlanTab(t))
-    .map((t) => ({ tab: t, n: statsFor(itemsOn(t)).open }))
+    .map((t) => ({ tab: t, n: statsFor(itemsOn(t)).todo }))
   const need = lists.reduce((sum, x) => sum + x.n, 0)
 
   if (need) {
@@ -3073,6 +3219,8 @@ function openWork() {
     // tab, which is the order the rows underneath already read in.
     const worst = lists.reduce((best, x) => (x.n > best.n ? x : best))
     return {
+      // "Someone" covers both halves of it: a thing nobody has, and a thing
+      // there is not enough of, are both waiting on a person to say they will.
       say: `<b>${need}</b> ${need === 1 ? 'thing still needs' : 'things still need'} someone`,
       go: worst.tab.label, to: worst.tab.id,
     }
@@ -3824,29 +3972,40 @@ function peopleCard() {
       if (c.packed) packed.set(c.member_id, (packed.get(c.member_id) ?? 0) + 1)
     }
   }
+  const people = heads()
+  const dogs = hounds()
   return `
     <div class="card">
       <div class="card__head">
         <h3>Who's coming</h3>
         <button class="btn btn--sm" data-act="share">Invite</button>
       </div>
+      <p class="people__heads"><b>${people} ${people === 1 ? 'person' : 'people'}</b>${dogs ? ` and ${dogs === 1 ? 'a dog' : `${dogs} dogs`}` : ''}${
+        people === S.members.length ? '' : `, from ${S.members.length} on the list`
+      }. Water, plates and meals are counted from that number.</p>
       <p>Colours match the bar on every list. The count is what they're bringing for the group — personal kit stays private to each person.</p>
       <div class="people">
         ${S.members.map((m) => {
           const n = load.get(m.id) ?? 0
           const diet = String(m.diet ?? '').trim()
-          // Every row offers the question, whether or not it has been answered.
-          // It is one quiet line, and it is the only thing that makes the field
-          // findable — a person who has nothing to avoid still has to be able to
-          // fill in the person who does.
+          const bringing = partyWords(m)
+          // Both questions are offered on every row, whether or not they have
+          // been answered. They are two quiet lines, and they are the only thing
+          // that makes either field findable — a person with nobody to bring and
+          // nothing to avoid still has to be able to fill in the person who has.
           return `
             <div class="person">
               <span class="person__face" style="--who:${colorOf(m)}" aria-hidden="true">${faceInner(m)}</span>
               <span class="person__main">
                 <span class="person__name">${esc(m.name)}${m.id === S.me ? ' <span class="person__you mono">you</span>' : ''}</span>
-                <button class="person__diet${diet ? ' person__diet--set' : ''}" data-act="diet" data-id="${m.id}"
-                        aria-label="${diet ? `Change what ${esc(m.name)} can eat` : `Say what ${esc(m.name)} can't eat`}">
-                  ${diet ? esc(diet) : m.id === S.me ? 'Anything you avoid?' : 'Dietary needs?'}</button>
+                <span class="person__asks">
+                  <button class="person__diet${bringing ? ' person__diet--set' : ''}" data-act="party" data-id="${m.id}"
+                          aria-label="${bringing ? `Change who ${esc(m.name)} is bringing` : `Say who ${esc(m.name)} is bringing`}">
+                    ${bringing ? `+ ${esc(bringing)}` : m.id === S.me ? 'Bringing anyone?' : 'Anyone with them?'}</button>
+                  <button class="person__diet${diet ? ' person__diet--set' : ''}" data-act="diet" data-id="${m.id}"
+                          aria-label="${diet ? `Change what ${esc(m.name)} can eat` : `Say what ${esc(m.name)} can't eat`}">
+                    ${diet ? esc(diet) : m.id === S.me ? 'Anything you avoid?' : 'Dietary needs?'}</button>
+                </span>
               </span>
               <span class="person__load">${n ? `${packed.get(m.id) ?? 0} of ${n} packed` : 'nothing yet'}</span>
               ${m.id === S.me ? '' : `<button class="item__kill" data-act="drop-member" data-id="${m.id}" aria-label="Remove ${esc(m.name)}">${ICONS.x}</button>`}
@@ -4074,7 +4233,7 @@ function campPage() {
 // belongs: how much of your load is still sitting in the house.
 function tabFlag(tab) {
   if (tab.id === 'mine') return myLoad().filter((it) => !tickedForMe(it)).length
-  return tab.lists.length ? statsFor(itemsOn(tab)).open : 0
+  return tab.lists.length ? statsFor(itemsOn(tab)).todo : 0
 }
 
 function tabbar() {
@@ -4219,23 +4378,60 @@ function sheetItem(s) {
       </div>`
   })()
 
+  // How many there are to bring, on the things that know. It leads, because it
+  // is the fact that decides whether one name on this is the end of the matter —
+  // and it says where the number came from, or it is just another figure nobody
+  // wrote and nobody trusts.
+  const cover = coverOf(item)
+  const rated = isRated(item)
+  // Blaze is for what nobody has, here as everywhere: the shortfall wears it,
+  // not the part that is already somebody's.
+  const needBox = !rated ? '' : `
+    <div class="need">
+      <p class="need__say"><b>${esc(amount(cover.need, item.unit))}</b> needed${
+        cover.frac > 0.999 ? ' · all spoken for'
+        : cover.covered ? ` · <b class="say--open">${esc(String(round2(cover.need - cover.covered)))}</b> still to find`
+        : ''}</p>
+      <p class="need__from">${esc(amount(item.per_head, item.unit))} each${item.per_day ? ' per day' : ''}, for ${heads()} ${heads() === 1 ? 'person' : 'people'}${
+        item.per_day && spanOf(item) > 1 ? ` over ${spanOf(item)} days` : ''}.</p>
+    </div>`
+
   const on = new Map(claimsOn(item).map((c) => [c.member_id, c]))
   const rows = S.members.map((m) => {
     const claim = on.get(m.id)
     const expense = claim ? expenseForClaim(item.id, m.id) : null
+    // On a thing with a number, what somebody is down for is the first thing
+    // worth knowing about their row — including the "the rest of it" that one
+    // tap has always meant, which is now a figure like everybody else's.
+    const much = claim && rated ? `${amount(cover.amounts.get(m.id) ?? 0, item.unit)}${claim.qty > 0 ? '' : ' — the rest'} · ` : ''
     return `
       <div class="claim-row">
         <button class="pick" data-act="claim" data-id="${item.id}" data-member="${m.id}"
                 aria-pressed="${!!claim}">
           <span class="pick__swatch" style="background:${colorOf(m)}"></span>
           <span class="pick__main"><span class="pick__title">${esc(m.name)}${m.id === S.me ? ' (you)' : ''}</span>
-            ${claim ? `<span class="pick__note">${claim.packed ? 'Packed theirs.' : 'Not packed yet.'}</span>` : ''}</span>
+            ${claim ? `<span class="pick__note">${esc(much)}${claim.packed ? 'Packed theirs.' : 'Not packed yet.'}</span>` : ''}</span>
           <span class="pick__tick">${ICONS.tickGreen}</span>
         </button>
         ${claim ? `<button class="claim-row__cost" data-act="expense" data-id="${item.id}" data-member="${m.id}"${expense ? ` data-expense="${expense.id}"` : ''}>
           ${expense ? `${moneyText(expense.amount)} · paid by ${esc(memberById(expense.paid_by)?.name || m.name)}` : 'Add what it cost'}</button>` : ''}
       </div>`
   }).join('')
+
+  // And the way to say four when four is the truth. Only on the things that are
+  // counted, and only once your name is on it, because "how many are you
+  // bringing" is a question for somebody who has already said they are bringing
+  // some. Leaving it empty puts you back to the rest of it, which is where one
+  // tap left you.
+  const share = !rated || !on.has(S.me) ? '' : `
+    <form class="share" data-act="save-share" data-id="${item.id}">
+      <label class="field"><span>How many are you bringing?</span>
+        <input name="qty" type="number" inputmode="decimal" min="0" step="any"
+               value="${on.get(S.me).qty > 0 ? on.get(S.me).qty : ''}"
+               placeholder="${esc(String(cover.amounts.get(S.me) ?? cover.need))}"></label>
+      <button class="btn btn--wide btn--sm" type="submit">Save my share</button>
+      <p class="field__hint">Leave it empty for whatever is left over once everybody else has said.</p>
+    </form>`
 
   // Putting your name to Saturday dinner is the moment what somebody cannot eat
   // stops being a fact about them and becomes a fact about the shopping. So it
@@ -4265,9 +4461,11 @@ function sheetItem(s) {
     blurb: plan ? '' : 'As many of you as it takes. Each person ticks off their own share.',
     body: `
       ${kindSwitch}
+      ${needBox}
       ${table}
       ${upForIt}
       ${named}
+      ${share}
       <div style="margin-top:18px">
         <form data-act="add-member">
           <label class="field"><span>Someone not on the list?</span>
@@ -4297,6 +4495,36 @@ function sheetEdit(s) {
   if (!item) return ''
   const cats = catsOn(tabForList(item.list))
 
+  // The other way to answer "how much", for the things that have a per-person
+  // answer. It is here rather than in the add sheet because it is a refinement
+  // and adding is not the moment for one — most rated things arrive rated
+  // anyway, off the back of the catalogue, and this is where you disagree with
+  // it. Personal kit is never offered it: one each is what that list means.
+  //
+  // Clearing the number puts the row back to the box above, which is the honest
+  // place for two bags of firewood.
+  const rate = isOwn(item) || isPlan(item) ? '' : `
+    <div class="field">
+      <span>Or work it out per person <span style="font-weight:400">(optional)</span></span>
+      <div class="field--split">
+        <label class="field"><span class="field__sub">Each person needs</span>
+          <input name="per_head" type="number" inputmode="decimal" min="0" step="any"
+                 value="${item.per_head > 0 ? item.per_head : ''}" placeholder="0"></label>
+        <label class="field"><span class="field__sub">Counted in</span>
+          <input name="unit" maxlength="12" value="${esc(item.unit ?? '')}" placeholder="L, portions…"></label>
+      </div>
+      <div class="segmented" role="group" aria-label="How often">
+        <button type="button" class="segmented__btn" aria-pressed="${!item.per_day}" data-act="pick" data-name="per_day" data-value="">
+          For the trip</button>
+        <button type="button" class="segmented__btn" aria-pressed="${!!item.per_day}" data-act="pick" data-name="per_day" data-value="1">
+          Each day</button>
+      </div>
+      <input type="hidden" name="per_day" value="${item.per_day ? '1' : ''}">
+      <p class="field__hint">A number here beats the box above: the list works out ${
+        item.per_head > 0 ? `${esc(amount(item.per_head, item.unit))} × ${heads()} ${heads() === 1 ? 'person' : 'people'}` : 'the total'
+      } for itself, and works it out again when somebody joins.</p>
+    </div>`
+
   return sheetShell({
     title: 'Edit',
     blurb: isOwn(item)
@@ -4314,6 +4542,7 @@ function sheetEdit(s) {
             <input name="qty" maxlength="40" value="${esc(item.qty ?? '')}" placeholder="x2"></label>
         </div>
         <datalist id="cs-cats">${cats.map((c) => `<option value="${esc(c)}">`).join('')}</datalist>
+        ${rate}
         <label class="field"><span>Note <span style="font-weight:400">(optional)</span></span>
           <input name="note" maxlength="500" value="${esc(item.note ?? '')}"
                  placeholder="Anything the others need to know"></label>
@@ -4733,6 +4962,38 @@ function sheetCurrency() {
   })
 }
 
+// Who is coming with you. Filled in the same way as what somebody eats, by
+// anybody, and for the same reason: the person who knows the kids are coming is
+// as often whoever booked the pitch as whoever is driving them.
+//
+// Three numbers rather than a list of names, because the list of names is a
+// different app. What the trip needs to know about somebody's two-year-old is
+// that they are a person who will drink water, and their name is not part of it.
+function sheetParty(s) {
+  const m = memberById(s.id)
+  if (!m) return ''
+  const self = m.id === S.me
+  const field = (name, label, hint, value) => `
+    <label class="field party__field"><span>${label}</span>
+      <input name="${name}" type="number" inputmode="numeric" min="0" max="20" step="1" value="${Number(value) || 0}">
+      <span class="field__hint">${hint}</span></label>`
+
+  return sheetShell({
+    title: self ? 'Who you are bringing' : `Who ${m.name} is bringing`,
+    blurb: `${self ? 'You are' : 'They are'} already counted. This is everybody else who is coming under ${self ? 'your' : 'their'} name — and it is what the water, the plates and the meals are counted from.`,
+    body: `
+      <form data-act="save-party" data-id="${m.id}">
+        <div class="party">
+          ${field('plus_adults', 'Adults', 'Not counting ' + (self ? 'you' : 'them'), m.plus_adults)}
+          ${field('kids', 'Kids', 'They eat and drink too', m.kids)}
+          ${field('dogs', 'Dogs', 'Counted as nobody', m.dogs)}
+        </div>
+        <button class="btn btn--primary btn--wide" type="submit">Save</button>
+      </form>
+      <p class="field__hint" style="margin-top:12px">A dog is on the list so that everybody knows there is one — no plate, no camp chair and no share of the burgers is worked out for it.</p>`,
+  })
+}
+
 function sheetAdd(s) {
   const tab = tabById(s.tab)
   const cats = catsOn(tab)
@@ -4927,6 +5188,7 @@ function renderSheet() {
   const map = {
     item: sheetItem, edit: sheetEdit, add: sheetAdd, suggest: sheetSuggest,
     place: sheetPlace, when: sheetWhen, diet: sheetDiet, diets: sheetDiets,
+    party: sheetParty,
     expense: sheetExpense, payment: sheetPayment, currency: sheetCurrency,
   }
   const html = map[S.sheet.kind]?.(S.sheet) ?? ''
@@ -5963,6 +6225,11 @@ document.addEventListener('click', async (ev) => {
       renderSheet()
       break
 
+    case 'party':
+      S.sheet = { kind: 'party', id: el.dataset.id }
+      renderSheet()
+      break
+
     case 'diets':
       S.sheet = { kind: 'diets' }
       renderSheet()
@@ -6369,13 +6636,25 @@ document.addEventListener('submit', async (ev) => {
     case 'save-item': {
       if (!String(f.title ?? '').trim()) break
       const id = form.dataset.id
+      const was = S.items.find((i) => i.id === id)
       S.sheet = null
       renderSheet()
       await mutate(() => api(`/items/${id}`, {
         method: 'PATCH',
-        body: { title: f.title, category: f.category || 'Other', qty: f.qty, note: f.note },
+        body: {
+          title: f.title, category: f.category || 'Other', qty: f.qty, note: f.note,
+          // Only where the form asked: a plan and a piece of personal kit have
+          // no per-person field on them, and sending a zero from a form that
+          // never showed one would quietly wipe a rate somebody had set.
+          ...(f.per_head === undefined ? {}
+            : { per_head: Number(f.per_head) || 0, unit: f.unit, per_day: f.per_day ? 1 : 0 }),
+        },
       }))
-      toast('Saved.')
+      const now = S.items.find((i) => i.id === id)
+      toast(now && isRated(now)
+        ? (was && was.per_head === now.per_head && was.per_day === now.per_day ? 'Saved.'
+          : `Saved. That is ${amount(needOf(now), now.unit)} for the trip.`)
+        : 'Saved.')
       break
     }
 
@@ -6473,6 +6752,41 @@ document.addEventListener('submit', async (ev) => {
       renderSheet()
       toast(`Trip currency is ${tripCurrency()}.`)
       break
+
+    // Four of the nine, when four is the truth. An empty box is not zero: it is
+    // "the rest of it", which is the answer one tap gives and the one most
+    // people will leave it on.
+    case 'save-share': {
+      const id = form.dataset.id
+      const said = String(f.qty ?? '').trim()
+      S.sheet = null
+      renderSheet()
+      if (!await mutate(() => api(`/items/${id}/share`, {
+        method: 'POST', body: { memberId: S.me, qty: said === '' ? 0 : Number(said) },
+      }))) break
+      const it = S.items.find((i) => i.id === id)
+      toast(said === '' ? 'Down for whatever is left.'
+        : it && !isCovered(it) ? `Saved. ${round2(coverOf(it).need - coverOf(it).covered)} still to find.`
+        : 'Saved.')
+      break
+    }
+
+    // The headcount moves, so everything counted from it moves with it. Saying
+    // so is the whole point of the feature — otherwise the water quietly went up
+    // by eight litres and nobody noticed until the shop.
+    case 'save-party': {
+      const id = form.dataset.id
+      const was = heads()
+      S.sheet = null
+      renderSheet()
+      if (!await mutate(() => api(`/trips/${S.trip.id}/members/${id}`, {
+        method: 'PATCH',
+        body: { plus_adults: f.plus_adults, kids: f.kids, dogs: f.dogs },
+      }))) break
+      const now = heads()
+      toast(now === was ? 'Saved.' : `Saved. ${now} ${now === 1 ? 'person' : 'people'} on the trip now — quantities have moved.`)
+      break
+    }
   }
 })
 

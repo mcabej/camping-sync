@@ -9,6 +9,7 @@ import webpush from 'web-push'
 import { WebSocket, WebSocketServer } from 'ws'
 import {
   db, uid, now, newTripCode, bumpRev, logEvent, getTripState, nextPosition,
+  headsIn, dogsIn, tripCover,
 } from './lib/db.js'
 import { CATALOG, TIPS, WEATHER_ADVICE, catalogEntry } from './lib/catalog.js'
 
@@ -541,9 +542,19 @@ function campSnapshot(tripId, memberId) {
       endDate: trip.end_date, notes: trip.notes, goingHome: !!trip.going_home,
     },
     requester: state.members.find((member) => member.id === memberId)?.name ?? 'Camper',
-    members: state.members.map(({ name, diet }) => ({ name, diet })),
+    // The headcount, so that "how much water do we need?" is a question about
+    // this trip rather than about camping in general. It is people rather than
+    // names on the list: a member with two kids is three of them.
+    people: headsIn(state.members),
+    dogs: dogsIn(state.members),
+    members: state.members.map(({ name, diet, plus_adults, kids, dogs }) => ({
+      name, diet, bringing: partyWords({ plus_adults, kids, dogs }) || 'nobody',
+    })),
     items: state.items.slice(0, 250).map((item) => ({
       list: item.list, category: item.category, title: item.title, qty: item.qty,
+      perPerson: item.per_head > 0
+        ? `${item.per_head}${item.unit ? ` ${item.unit}` : ''} each${item.per_day ? ' per day' : ''}`
+        : null,
       note: item.note, kind: item.kind, day: item.day, time: item.time,
       place: item.place, claimedBy: item.claims.map((claim) => (
         state.members.find((member) => member.id === claim.member_id)?.name ?? 'Former member'
@@ -1012,24 +1023,9 @@ app.post('/api/trips/summary', (req, res) => {
   const wanted = (Array.isArray(req.body?.trips) ? req.body.trips : []).slice(0, 40)
   const tripRow = db.prepare('SELECT id, name, location, start_date, end_date FROM trips WHERE id = ?')
   const memberRow = db.prepare('SELECT name, hue FROM members WHERE id = ? AND trip_id = ?')
-  const headcount = db.prepare('SELECT COUNT(*) AS c FROM members WHERE trip_id = ?')
-  // Plans are not "brought" by anyone and personal kit is private, so the home
-  // page counts the same thing the coverage bar does: shared things, and gaps.
-  const SHARED = `trip_id = ? AND kind = 'shared' AND list != 'activities'`
-  const sharedCount = db.prepare(`SELECT COUNT(*) AS c FROM items WHERE ${SHARED}`)
-  const openCount = db.prepare(`SELECT COUNT(*) AS c FROM items WHERE ${SHARED}
-                                AND NOT EXISTS (SELECT 1 FROM claims c WHERE c.item_id = items.id)`)
-  // A thing with three people on it is still one thing, so it is one unit of the
-  // bar split three ways. Counting it once per person would let a crowded item
-  // swell the coloured half and quietly shrink the gap nobody has filled.
-  const claims = db.prepare(`
-    SELECT m.hue AS hue,
-           SUM(1.0 / (SELECT COUNT(*) FROM claims x WHERE x.item_id = c.item_id)) AS n
-    FROM claims c
-    JOIN items i ON i.id = c.item_id
-    JOIN members m ON m.id = c.member_id
-    WHERE i.trip_id = ? AND i.kind = 'shared' AND i.list != 'activities'
-    GROUP BY m.hue ORDER BY n DESC`)
+  // People, not rows: a card that says "four" about a trip nine are going on is
+  // the same lie the free-text quantities were, told one screen earlier.
+  const party = db.prepare('SELECT plus_adults, kids, dogs FROM members WHERE trip_id = ?')
 
   const trips = [], missing = []
   for (const entry of wanted) {
@@ -1039,12 +1035,15 @@ app.post('/api/trips/summary', (req, res) => {
     // Trips that no longer exist are reported back so the device can forget them.
     if (!trip) { missing.push(id); continue }
     const me = viewerId(req, id, entry?.memberId)
+    const crew = party.all(id)
     trips.push({
       ...trip,
-      members: headcount.get(id).c,
-      shared: sharedCount.get(id).c,
-      open: openCount.get(id).c,
-      claims: claims.all(id),
+      people: headsIn(crew),
+      dogs: dogsIn(crew),
+      // The same bar as the one inside the trip, worked out the same way — a
+      // home page that called four plates between nine people covered would be
+      // the last screen still telling the story this feature is about.
+      ...tripCover(id),
       you: me ? memberRow.get(me, id) ?? null : null,
     })
   }
@@ -1717,6 +1716,24 @@ app.post('/api/trips/:id/members', (req, res) => {
   res.json({ member })
 })
 
+// Nobody can be brought in halves, and twenty people behind one name is a coach
+// trip rather than a camping trip, so both ends are held.
+const PARTY_COLS = ['plus_adults', 'kids', 'dogs']
+const PARTY_MAX = 20
+const partyCount = (v) => Math.max(0, Math.min(PARTY_MAX, Math.floor(Number(v) || 0)))
+
+// "1 adult and 2 kids", for the feed. The browser says the same thing its own
+// way beside the person it is about; this is the sentence version.
+function partyWords(p) {
+  const said = [
+    p.plus_adults ? `${p.plus_adults} ${p.plus_adults === 1 ? 'adult' : 'adults'}` : '',
+    p.kids ? `${p.kids} ${p.kids === 1 ? 'kid' : 'kids'}` : '',
+    p.dogs ? (p.dogs === 1 ? 'a dog' : `${p.dogs} dogs`) : '',
+  ].filter(Boolean)
+  if (said.length < 2) return said[0] ?? ''
+  return `${said.slice(0, -1).join(', ')} and ${said[said.length - 1]}`
+}
+
 // What somebody can eat is a fact about the trip rather than a private note:
 // the whole value of writing it down is that whoever ends up cooking finds out
 // without asking the table one at a time. So it is shared like a claim, and like
@@ -1728,6 +1745,27 @@ app.patch('/api/trips/:id/members/:mid', (req, res) => {
   if (!requireMember(req, res, trip.id)) return
   const m = db.prepare('SELECT * FROM members WHERE id = ? AND trip_id = ?').get(req.params.mid, trip.id)
   if (!m) return res.status(404).json({ error: 'They are not on this trip any more.' })
+
+  // Who somebody is bringing is a fact about the trip in the same way as what
+  // they can eat, filled in the same way and by anybody: the person who knows
+  // the kids are coming is as often whoever booked the pitch. The three move
+  // together, so answering one of them never clears the other two.
+  const asked = PARTY_COLS.filter((col) => req.body?.[col] !== undefined)
+  if (asked.length) {
+    const was = { plus_adults: m.plus_adults, kids: m.kids, dogs: m.dogs }
+    const set = { ...was }
+    for (const col of asked) set[col] = partyCount(req.body[col])
+    if (asked.some((col) => set[col] !== was[col])) {
+      db.prepare('UPDATE members SET plus_adults = ?, kids = ?, dogs = ? WHERE id = ?')
+        .run(set.plus_adults, set.kids, set.dogs, m.id)
+      const who = actorName(trip.id, req)
+      const self = who === m.name
+      const said = partyWords(set)
+      logEvent(trip.id, who, said
+        ? (self ? `is bringing ${said}` : `put ${m.name} down for ${said}`)
+        : (self ? 'is coming on their own' : `said ${m.name} is coming on their own`))
+    }
+  }
 
   if (req.body?.diet !== undefined) {
     const diet = clean(req.body.diet, 200)
@@ -1779,10 +1817,31 @@ app.delete('/api/trips/:id/members/:mid', (req, res) => {
 
 // ---- items ------------------------------------------------------------------
 
+// A rate is a small number by nature — four litres, one plate. This is only here
+// so that a typo cannot turn into a coverage bar that will never fill.
+const RATE_MAX = 1000
+
+// The rate a new row is born with. Whoever is adding can say, but almost nobody
+// does — so the catalogue answers instead, by title, which is the one place that
+// knows a burger is a meal each and firewood is not. It means "Burgers" typed by
+// hand at half past ten counts the same as "Burgers" taken from the suggestions,
+// and that @camp adding the water gets the 4L a person a day with it.
+function rateFor(raw, title, kind) {
+  const said = Number(raw?.per_head)
+  const rate = said > 0
+    ? { per_head: Math.min(said, RATE_MAX), unit: clean(raw?.unit, 12), per_day: raw?.per_day ? 1 : 0 }
+    : raw?.per_head !== undefined ? { per_head: 0, unit: '', per_day: 0 } : null
+  const from = rate ?? catalogEntry(title) ?? {}
+  // One each is what personal kit already means, so a rate on it would be the
+  // same fact written twice and disagreeing the moment somebody edits one.
+  if (kind === 'own') return { per_head: 0, unit: '', per_day: 0 }
+  return { per_head: from.per_head ?? 0, unit: from.unit ?? '', per_day: from.per_day ?? 0 }
+}
+
 function insertTripItems(tripId, memberId, incoming, who) {
   const ts = now()
-  const insert = db.prepare(`INSERT INTO items (id, trip_id, list, category, title, note, qty, kind, owner_id, place, lat, lon, day, time, position, created_at, updated_at)
-                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+  const insert = db.prepare(`INSERT INTO items (id, trip_id, list, category, title, note, qty, kind, owner_id, place, lat, lon, day, time, per_head, unit, per_day, position, created_at, updated_at)
+                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
   const created = []
   const shared = []
 
@@ -1794,10 +1853,12 @@ function insertTripItems(tripId, memberId, incoming, who) {
     const id = uid()
     const [lat, lon] = coords(raw)
     const day = dayField(raw?.day)
+    const rate = rateFor(raw, title, kind)
     insert.run(
       id, tripId, list, clean(raw?.category, 60), title, clean(raw?.note, 500), clean(raw?.qty, 40), kind,
       kind === 'own' ? memberId : null, clean(raw?.place, PLACE_MAX), lat, lon,
-      day, timeField(raw?.time), nextPosition(tripId, list), ts, ts,
+      day, timeField(raw?.time), rate.per_head, rate.unit, rate.per_day,
+      nextPosition(tripId, list), ts, ts,
     )
     const item = { id, list, title, kind, day }
     created.push(item)
@@ -1841,10 +1902,37 @@ app.patch('/api/items/:id', (req, res) => {
   const sets = ['updated_at = ?'], vals = [now()]
   const push = (col, val) => { sets.push(`${col} = ?`); vals.push(val) }
 
+  // Switching between shared and own resets the other model's state, so it is
+  // decided up here and acted on below: what a rate and a set of names mean both
+  // depend on which side of that line the row ends up. Asking for the kind a row
+  // already has is not a switch, and must not be treated as one.
+  const requestedKind = req.body?.kind !== undefined ? kindOf(clean(req.body.kind, 10), item.list) : null
+  const newKind = requestedKind && requestedKind !== item.kind ? requestedKind : null
+  if (newKind === 'own' && !me) {
+    return res.status(400).json({ error: 'Join the trip before taking something onto your own list.' })
+  }
+
   if (req.body?.title !== undefined) push('title', clean(req.body.title, 120))
   if (req.body?.note !== undefined) push('note', clean(req.body.note, 500))
   if (req.body?.qty !== undefined) push('qty', clean(req.body.qty, 40))
   if (req.body?.category !== undefined) push('category', clean(req.body.category, 60))
+
+  // A rate can be given, changed, or taken away again — a zero is somebody
+  // saying "there is no per-person answer for this one", and it puts the row
+  // back to the free-text box above, which is the honest place for two bags of
+  // firewood. The three columns move together, because a unit with no rate is a
+  // label on nothing and a per-day flag with no rate is nothing per day.
+  //
+  // A row that has just become somebody's own loses its rate whatever was asked
+  // for: one each is what a personal row already means, so "nine of these" is
+  // not a thing it can say. Going the other way the catalogue answers again.
+  if (req.body?.per_head !== undefined || newKind) {
+    const rate = rateFor(req.body?.per_head !== undefined ? req.body : null,
+      clean(req.body?.title, 120) || item.title, newKind ?? item.kind)
+    push('per_head', rate.per_head)
+    push('unit', rate.unit)
+    push('per_day', rate.per_day)
+  }
 
   // Which day it is on, and the hour if it has one. Two fields rather than one
   // because they are set from different places: the day is a chip you tap and
@@ -1865,13 +1953,6 @@ app.patch('/api/items/:id', (req, res) => {
     push('lon', lon)
   }
 
-  // Switching between shared and own resets the other model's state, so it is
-  // handled on its own rather than alongside who is bringing it.
-  const requestedKind = req.body?.kind !== undefined ? kindOf(clean(req.body.kind, 10), item.list) : null
-  const newKind = requestedKind && requestedKind !== item.kind ? requestedKind : null
-  if (newKind === 'own' && !me) {
-    return res.status(400).json({ error: 'Join the trip before taking something onto your own list.' })
-  }
   if (newKind) {
     push('kind', newKind)
     // Moving a thing onto your own list takes it off everybody else's view of
@@ -1975,6 +2056,41 @@ app.post('/api/items/:id/claim', (req, res) => {
   logEvent(item.trip_id, who,
     has ? `dropped ${item.title}${self ? '' : ` for ${member.name}`}`
       : self ? `is bringing ${item.title}` : `put ${member.name} down for ${item.title}`)
+
+  bumpRev(item.trip_id)
+  res.json(getTripState(item.trip_id, viewerId(req, item.trip_id)))
+})
+
+// How much of it you are bringing, on the rows that know how much there is. One
+// tap has always meant "I have got this" and still does — this is the answer for
+// the times it is not true, where four of the nine plates is genuinely all you
+// own. Saying a number puts your name down if it was not already, because that
+// is what offering to bring four of something is.
+//
+// Anybody can set anybody's, like the claim it is part of and unlike the packed
+// tick: a promise about the shopping is the group's business, and the person who
+// knows Sam is only bringing one cool box is often not Sam.
+const SHARE_MAX = 100000
+
+app.post('/api/items/:id/share', (req, res) => {
+  const found = claimant(req, res)
+  if (!found) return
+  const { item, member } = found
+  if (!(item.per_head > 0)) {
+    return res.status(400).json({ error: 'That one has no per-person amount to split.' })
+  }
+  // Nothing to do with how much of it exists: this is a promise, and a promise
+  // of a negative number of plates is not one.
+  const qty = Math.max(0, Math.min(SHARE_MAX, Math.round((Number(req.body?.qty) || 0) * 100) / 100))
+
+  db.prepare(`INSERT INTO claims (item_id, member_id, qty) VALUES (?, ?, ?)
+              ON CONFLICT(item_id, member_id) DO UPDATE SET qty = excluded.qty`)
+    .run(item.id, member.id, qty)
+
+  const who = actorName(item.trip_id, req)
+  const self = member.name === who
+  const much = qty ? `${qty}${item.unit ? ` ${item.unit}` : ''} of ${item.title}` : `the rest of ${item.title}`
+  logEvent(item.trip_id, who, self ? `is bringing ${much}` : `put ${member.name} down for ${much}`)
 
   bumpRev(item.trip_id)
   res.json(getTripState(item.trip_id, viewerId(req, item.trip_id)))

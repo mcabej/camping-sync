@@ -49,6 +49,12 @@ lost in a separate group chat.
 - **Weather** — the trip already knows where and when it is, so the forecast
   needs nothing from anybody. Days on the Trip tab, and what they mean for the
   list offered as one-tap adds: a wet Saturday is the reason a tarp exists.
+- **Headcount that drives quantities** — say who you are bringing (a partner,
+  two kids, a dog) and the lists count people rather than names. Things with a
+  per-person rate work their own totals out: the water reads "84 L" for seven
+  people over three days, and reads something else the moment the eighth person
+  joins. The bar knows the difference between four plates and nine people, so
+  "I'll bring 4 of the 9" leaves the other five in the gap where they belong.
 - **Dietary needs** — one line per person, shown at the top of the food list and
   again at the moment somebody takes on Saturday dinner, rather than buried on a
   page about people.
@@ -141,6 +147,11 @@ can never be half-claimed and half-one-each. Plans (`activities`) are always
 shared and never show the orange unclaimed chip — nobody "brings" a hike, so
 they're measured by votes and can take an optional organiser instead. Trips created before this split are migrated on boot: the column is
 added and known one-each titles are flipped over, using the catalogue.
+
+Quantities are the other thing an item can carry: `per_head`, `unit` and
+`per_day`, which turn "how much?" into arithmetic over the trip's headcount
+instead of a free-text box nobody trusts. Most rows have no rate and keep the
+`qty` text. See *Headcount and quantities*.
 
 An expense carries a description, an integer-minor-unit amount, a payer and the
 members sharing it. It can optionally point back to a claimed item, but petrol
@@ -500,6 +511,60 @@ the chip drops back to the hour, because the pressed tab has already said the
 rest. Eat's headings sort Breakfast, Lunch, Dinner rather than by whatever was
 added first; everything that is not a meal keeps the order it had, after them.
 
+### Headcount and quantities
+
+`qty` was free text, so nobody trusted it. It said `x2` on a Tuesday in March and
+went on saying `x2` after four more people joined, and the coverage bar could not
+tell four sleeping bags from nine people — one name on a thing read as covered
+however many of it there were. Three small columns fix both.
+
+**Who is coming.** `plus_adults`, `kids` and `dogs` on `members`, each capped at
+20 and set through the same `PATCH /api/trips/:id/members/:mid` as `diet`, by
+anybody, for the same reason: the person who knows the kids are coming is as
+often whoever booked the pitch. A member is always themselves plus whoever they
+named, so the headcount is `count(members) + Σ plus_adults + Σ kids`. Kids count
+— one body drinks water and needs somewhere to sleep — and dogs count as nobody.
+A dog is on the list so that everybody knows there is one; no plate, no camp
+chair and no share of the burgers is worked out for it. Existing rows migrate to
+nobody, which produces exactly the number the app was already using.
+
+**What one person needs.** `per_head`, `unit` and `per_day` on `items`. Zero on
+most rows and always will be: *how much firewood per person* has no honest
+answer, and `qty` is still where "two bags" goes. Where a rate is set the total is
+arithmetic — `per_head × people × span` — and `span` is the trip's days for a
+per-day rate on an undated row, or one for a row that belongs to a day. So water
+put down for the whole trip is 4L × 9 × 3, and water put down for Saturday is
+Saturday's.
+
+The rate comes from the catalogue by title, applied server-side on insert, so
+"Burgers" typed by hand at half past ten counts the same as "Burgers" taken from
+the suggestions, and @camp adding the water gets the 4L a person a day with it.
+Only a few things honestly have one: the meals (one each), plates and cutlery
+(one each), and drinking water (4L each per day). Snacks do not — nobody rations
+the crisps by the head. Nor does personal kit: one each is what that list already
+means, and a rate on it would be the same fact written twice. Switching a row to
+`own` clears its rate for that reason; switching it back asks the catalogue again.
+The Edit sheet is where you disagree with any of it, and clearing the number puts
+the row back to the free-text box above.
+
+**Who has how much of it.** `qty` on `claims`, and this is the half that fixes
+the bar. Zero is the default and does not mean nothing — it means *the rest of
+it*, which is what one tap has always meant, so every claim that already existed
+still covers the whole of its thing and one tap still says "I have got this".
+Somebody who can only manage four of the nine says four through `POST
+/api/items/:id/share`, and the other five stay in the gap where they belong.
+Anybody can set anybody's, like the claim it is part of and unlike the packed
+tick: a promise about the shopping is the group's business.
+
+`statsFor` therefore counts two kinds of unfinished — `open` is what nobody has
+picked up and `short` is what somebody has picked up too little of — and draws
+the gap as the two added together as fractions of a thing each, so a list missing
+five plates of nine does not look as empty as a list missing nine whole things.
+A thing is still one unit of the bar however many names are on it; what changed
+is that the names now split it by what each of them promised rather than evenly.
+Promising more than the trip needs cannot make the bar longer than the thing it
+measures.
+
 ### Dietary needs
 
 A `diet` line on `members`, 200 characters, and `PATCH
@@ -746,6 +811,11 @@ a door used to be.
 | `VAPID_PUBLIC_KEY` | generated in DB     | Optional fixed Web Push application key.    |
 | `VAPID_PRIVATE_KEY`| generated in DB     | Pair with `VAPID_PUBLIC_KEY`; keep secret.   |
 | `VAPID_SUBJECT`    | app notification email | Web Push contact URI (`mailto:` or URL).  |
+| `NODE_ENV`         | empty               | `production` marks the session cookie `Secure`. Leave unset locally. |
+
+`.env.example` carries all of them, with everything that has a working default
+commented out — copy it to `.env.local`, fill in the two keys at the top, and
+that is a complete local setup.
 
 ## Deploying
 

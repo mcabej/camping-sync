@@ -67,15 +67,40 @@ cover three dinners, and the coverage bar is the app's whole signature.
 
 See the README's *Days* section.
 
-### 3. Headcount that drives quantities
+### 3. Headcount that drives quantities — **built**
 
-`qty` is free text, so nobody trusts it. Let a member say who they are bringing
-— a partner, two kids, a dog — and give catalogue entries a per-person rate.
-Then "12 L of water" is computed, and it recomputes when the eleventh person
-joins. It also fixes the coverage bar, which today cannot tell four sleeping bags
-from nine people.
+`qty` was free text, so nobody trusted it: it said `x2` in March and went on
+saying `x2` after four more people joined. A member can now say who they are
+bringing — `plus_adults`, `kids`, `dogs` — and a catalogue entry can carry a
+per-person rate, so the water reads 84 L for seven people over three days and
+reads something else the moment the eighth arrives.
 
-Touches: `members`, `lib/catalog.js` rates, `statsFor`.
+Kids count as people and dogs count as nobody. A dog is on the list so everybody
+knows there is one; no plate and no share of the burgers is worked out for it,
+and pretending otherwise would put a number on the list that is wrong in a way
+nobody could see the reason for. Only a few things honestly have a rate — the
+meals, plates, cutlery, drinking water — and *how much firewood per person* is
+not one of them, so `qty` stays for those. The rate is applied server-side by
+title, which means "Burgers" typed by hand is the same as "Burgers" taken from
+the suggestions, and @camp adding the water gets the rate with it.
+
+The half worth arguing about was the coverage bar. A number on the item alone
+would have left it exactly as broken as before — one name on nine plates still
+reading as covered — so the number had to go on the claim too. `claims.qty`
+defaults to zero and zero means *the rest of it*, which is what one tap has
+always meant: every claim that already existed still covers the whole of its
+thing, and the one-tap gesture the app is built on is untouched. Saying "four of
+the nine" is the extra move, made where the decision is, and the other five stay
+in the gap. `statsFor` counts two kinds of unfinished now — nobody has this, and
+there is not enough of this — because they are two different problems and the
+sentence under the bar was only ever able to say the first.
+
+A per-day rate spans the trip's days when the row has no day of its own and one
+day when it has, which is days (§2) paying for itself: "water for Saturday" and
+"water for the weekend" are different amounts and the list already knew which
+one it was looking at.
+
+See the README's *Headcount and quantities* section.
 
 ### 4. Weather — **built**
 
