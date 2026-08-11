@@ -1139,6 +1139,30 @@ app.get('/api/trips/:id/notifications', (req, res) => {
   res.json(notificationState(trip.id, memberId, clean(req.query.endpoint, 2048)))
 })
 
+// Every trip's alerts in one answer, for the settings page. Muting belongs to
+// the member and the trip, so this is a read across the memberships the session
+// already proves — it takes no trip id and grants no access to a trip the
+// signed-in user is not on. Changing one still goes through the per-trip PATCH
+// above rather than a second way to write the same row.
+app.get('/api/notifications', (req, res) => {
+  const user = requireUser(req, res)
+  if (!user) return
+  const endpoint = clean(req.query.endpoint, 2048)
+  const rows = db.prepare(`SELECT m.id AS memberId, m.trip_id AS tripId, t.name AS name
+                           FROM members m JOIN trips t ON t.id = m.trip_id
+                           WHERE m.user_id = ? ORDER BY m.created_at DESC`).all(user.id)
+  res.json({
+    available: true,
+    publicKey: vapid.publicKey,
+    trips: rows.map(({ memberId, tripId, name }) => {
+      const state = notificationState(tripId, memberId, endpoint)
+      return {
+        tripId, name, muted: state.muted, unread: state.unread, subscribed: state.subscribed,
+      }
+    }),
+  })
+})
+
 app.put('/api/trips/:id/notifications', (req, res) => {
   const trip = requireTrip(req, res)
   if (!trip) return
@@ -1308,8 +1332,13 @@ app.post('/api/trips/:id/messages', (req, res) => {
       .catch((err) => console.error('Push notification failed:', err?.message ?? 'unknown error'))
   }
 
+  // Whether @camp is a question for Camp or just a line of the conversation is
+  // the sender's to answer: one person can have the assistant switched off while
+  // the rest of the room keeps it. Silence means yes, so a client from before
+  // there was a switch still gets an answer.
+  const invokeAssistant = req.body?.invokeAssistant !== false
   let assistant = null
-  if (inserted.changes && campMention(body)) {
+  if (inserted.changes && invokeAssistant && campMention(body)) {
     if (!req.user || !openai) {
       assistant = { status: 'unavailable' }
     } else {

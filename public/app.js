@@ -2,7 +2,11 @@
    Rendering is string-based with one delegated click handler; every mutation
    returns the whole trip state, so there is exactly one source of truth. */
 
-const MEMBER_COLORS = ['#2F6B57', '#37698F', '#7A5AA6', '#8C6A2F', '#B23C6B', '#4E7A2A', '#2E6E77', '#6B5B4A']
+// The eight person colours live in the stylesheet, where the dark palette can
+// answer for them too — a plum and a brown are the same circle on a dark ground.
+// What comes back is the custom property rather than the colour: these are set
+// inline, on a swatch or as `--who`, and both take a var() perfectly well.
+const MEMBER_COLORS = ['var(--m0)', 'var(--m1)', 'var(--m2)', 'var(--m3)', 'var(--m4)', 'var(--m5)', 'var(--m6)', 'var(--m7)']
 
 // Four places you do something, and no more. A tab bar is a promise that these
 // are the things the app is for, and it stops being one somewhere around five.
@@ -85,9 +89,20 @@ const ICONS = {
   // the way you are going, the stub arm points at the trip you are standing in.
   signpost: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 3v18"/><path d="M14.5 6H7l-3 3 3 3h7.5"/><path d="M14.5 15.5H18"/><path d="M11.5 21h6"/></svg>',
   send: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h13M13 6l6 6-6 6"/></svg>',
+  // A cog, drawn plainly. Every other icon in this app was redrawn to say
+  // something particular — a tent, a rucksack, a fingerpost — but the way into
+  // settings is the one place where being instantly recognised beats being
+  // interesting, and a cog is the thing everybody already knows. Eight teeth
+  // rather than a ring of spokes, which at this size would read as a sun and
+  // send people looking for a brightness slider.
+  // Eight teeth on a 9.4 radius with the valleys at 7.1, generated rather than
+  // drawn by hand so the thing is symmetric about both axes: an eyeballed cog
+  // sits a fraction low in its own hole, which is the sort of half-pixel that
+  // reads as "slightly wrong" without anybody being able to say why.
+  cog: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M10.45 2.73A9.4 9.4 0 0 1 13.55 2.73L13.96 5.18A7.1 7.1 0 0 1 15.44 5.79L17.46 4.35A9.4 9.4 0 0 1 19.65 6.54L18.21 8.56A7.1 7.1 0 0 1 18.82 10.04L21.27 10.45A9.4 9.4 0 0 1 21.27 13.55L18.82 13.96A7.1 7.1 0 0 1 18.21 15.44L19.65 17.46A9.4 9.4 0 0 1 17.46 19.65L15.44 18.21A7.1 7.1 0 0 1 13.96 18.82L13.55 21.27A9.4 9.4 0 0 1 10.45 21.27L10.04 18.82A7.1 7.1 0 0 1 8.56 18.21L6.54 19.65A9.4 9.4 0 0 1 4.35 17.46L5.79 15.44A7.1 7.1 0 0 1 5.18 13.96L2.73 13.55A9.4 9.4 0 0 1 2.73 10.45L5.18 10.04A7.1 7.1 0 0 1 5.79 8.56L4.35 6.54A9.4 9.4 0 0 1 6.54 4.35L8.56 5.79A7.1 7.1 0 0 1 10.04 5.18Z"/><circle cx="12" cy="12" r="3.1"/></svg>',
   bell: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg>',
   bellOff: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M13.7 5.25A6 6 0 0 0 6 9c0 2.1-.27 3.55-.68 4.58M18 9c0 7 3 7 3 9H9M10 21h4M3 3l18 18"/></svg>',
-  tick: '<svg viewBox="0 0 24 24" fill="none" stroke="#F4F8F0" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5 9.5 18 20 6.5"/></svg>',
+  tick: '<svg viewBox="0 0 24 24" fill="none" stroke="var(--on-forest)" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5 9.5 18 20 6.5"/></svg>',
   tickGreen: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5 9.5 18 20 6.5"/></svg>',
   x: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>',
   plus: '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
@@ -109,8 +124,64 @@ const ICONS = {
 
 // ---- state ------------------------------------------------------------------
 
+// What the settings page can turn off, and what each switch is called where a
+// person reads it. Kept as data rather than five hand-written rows: the page,
+// the defaults and the storage all read from here, so adding a sixth switch is
+// one entry rather than four edits in three places.
+//
+// Every one of these is on until somebody says otherwise. A switch is a way to
+// quieten an app you already use, not a checklist to fill in before it works.
+const FEATURES = [
+  {
+    id: 'assistant', label: 'Camp, in the Planning Room',
+    note: 'The assistant you can put a question to with @camp. Off, the room is just the group.',
+  },
+  {
+    id: 'weather', label: 'Weather forecast',
+    note: 'The forecast for where and when the trip is, on the trip page.',
+  },
+  {
+    id: 'suggestions', label: 'Suggestions and camp smarts',
+    note: '“What am I missing?” on every list, and the tips at the foot of the trip page.',
+  },
+  {
+    id: 'countdown', label: 'Countdown',
+    note: 'How many days to go, above what the trip is still waiting on.',
+  },
+  {
+    id: 'install', label: 'Offer to add to home screen',
+    note: 'The card that offers to install the app. Turning this off never asks again.',
+  },
+]
+
+const THEMES = [
+  { id: 'light', label: 'Light' },
+  { id: 'dark', label: 'Dark' },
+  { id: 'system', label: 'System' },
+]
+
+// Does this device want that part of the app? Absent means yes, so a feature
+// added after somebody last set their switches arrives turned on rather than
+// hidden behind a settings page they have no reason to open again.
+const wants = (id) => S.prefs.features[id] !== false
+
 const S = {
-  view: 'boot',      // boot | landing | join | trip | missing
+  view: 'boot',      // boot | landing | join | trip | settings | missing
+  // How this app is set up on this device: which palette, and which of the
+  // optional parts of it are on. Deliberately not on the account — a phone in
+  // a tent at night and a laptop at a desk want different answers to the same
+  // question, and the one thing you cannot do with a synced theme is have two.
+  // What does belong to the account — who you are, which trips are muted — is
+  // on the server already, and the settings page reads it from there.
+  prefs: { theme: 'system', features: {} },
+  // Alerts across every trip, for the settings page: null until asked.
+  // `{ loading, error, publicKey, permission, subscribed, trips: [...] }`.
+  alerts: null,
+  // Where the back arrow out of settings goes: wherever you opened it from.
+  // `settingsPushed` is whether the history entry it is standing on is one this
+  // app pushed, and so one it may pop on the way out.
+  settingsBack: '/',
+  settingsPushed: false,
   tab: 'pack',
   // A list tab, the trip overview, or the planning room nested under it. The
   // room gets its own URL and screen without taking a sixth slot in the bar.
@@ -530,6 +601,144 @@ async function enableNotifications() {
       S.notify.busy = false
       render()
     }
+  }
+}
+
+// Every trip's alerts at once, for the settings page. Asked for on the way in
+// and once only: the answer is small, and the switches below keep it in step
+// themselves rather than re-reading the whole lot after each one.
+//
+// Asked for even where this browser could not show a notification if it tried.
+// Which trips may reach you belongs to the account and is obeyed by every device
+// on it, so an iPhone that has not been added to the home screen should still be
+// able to mute a trip for the laptop that can.
+async function wantAlerts() {
+  if (!S.auth.user || S.alerts) return
+  const supported = pushSupported()
+  S.alerts = { loading: true, busy: false, error: '', trips: [], permission: '', publicKey: '', subscribed: false }
+  try {
+    const subscription = supported ? await currentPushSubscription() : null
+    const query = subscription ? `?endpoint=${encodeURIComponent(subscription.endpoint)}` : ''
+    const data = await api(`/notifications${query}`)
+    if (S.view !== 'settings') { S.alerts = null; return }
+    S.alerts = {
+      loading: false, busy: false, error: '',
+      permission: supported ? Notification.permission : 'unsupported',
+      publicKey: String(data.publicKey ?? ''),
+      // This browser is set up for alerts if any trip has it on file: one
+      // subscription follows you across every trip on the account.
+      subscribed: supported && (data.trips ?? []).some((t) => t.subscribed),
+      trips: (data.trips ?? []).map((t) => ({
+        tripId: String(t.tripId), name: String(t.name ?? 'Trip'),
+        muted: !!t.muted, unread: Number(t.unread) || 0,
+      })),
+    }
+  } catch (err) {
+    S.alerts = {
+      loading: false, busy: false, trips: [], permission: '', publicKey: '', subscribed: false,
+      error: err.message || 'Your notification settings could not be loaded.',
+    }
+  }
+  if (S.view === 'settings') render()
+}
+
+// After a write that may only half have landed. What the page believes is
+// thrown away rather than patched, because the point is that nobody here knows
+// what the server ended up with — so it asks.
+async function reloadAlerts() {
+  S.alerts = null
+  await wantAlerts()
+}
+
+// The device switch on the settings page. On means: ask the browser, then put
+// this endpoint on every trip on the account, because "notify me on this
+// device" is not a question you want to answer once per trip. Off unsubscribes
+// the browser and forgets the endpoint, and deliberately leaves the per-trip
+// mutes alone — turning your laptop off for a week is not the same as saying a
+// trip may never reach you.
+async function toggleDeviceAlerts() {
+  const a = S.alerts
+  if (!a || a.busy) return
+  a.busy = true
+  render()
+  try {
+    if (a.subscribed) {
+      await clearBrowserNotifications()
+      a.subscribed = false
+      if (S.notify.tripId) S.notify = { ...S.notify, subscribed: false }
+      toast('This device will not be notified.')
+    } else {
+      const permission = await Notification.requestPermission()
+      a.permission = permission
+      if (permission !== 'granted') {
+        toast(permission === 'denied'
+          ? 'Notifications are blocked in your browser settings.'
+          : 'Notifications were left off.')
+        return
+      }
+      const registration = await navigator.serviceWorker.ready
+      let subscription = await registration.pushManager.getSubscription()
+      subscription ??= await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: pushApplicationKey(a.publicKey),
+      })
+      const body = { subscription: subscription.toJSON() }
+      // Every trip on the account, and they are independent writes, so they go
+      // together rather than one behind the other.
+      //
+      // When some of them fail the browser is subscribed to the rest, and this
+      // switch used to settle back to off — an off switch on a device that is
+      // about to be notified, which is the one state worth going out of the way
+      // to avoid. So what actually landed is read back from the server rather
+      // than inferred from which call threw.
+      const writes = await Promise.allSettled(a.trips.map((t) => api(
+        `/trips/${t.tripId}/notifications`, { method: 'PUT', body })))
+      const failed = writes.filter((w) => w.status === 'rejected')
+      if (failed.length) {
+        // The bell in the Planning Room reads the same rows and answers once per
+        // trip, so it is sent back to ask again rather than left holding this.
+        if (S.notify.tripId) S.notify = { ...S.notify, tripId: '' }
+        await reloadAlerts()
+        throw new Error(failed.length === writes.length
+          ? failed[0].reason?.message || 'Notifications could not be turned on.'
+          : `Notifications were turned on for ${writes.length - failed.length} of your ${writes.length} trips.`)
+      }
+      a.subscribed = true
+      if (S.notify.tripId) S.notify = { ...S.notify, subscribed: true }
+      toast(a.trips.length ? 'This device will be notified.' : 'Notifications are on for this device.')
+    }
+  } catch (err) {
+    toast(err.message || 'Notifications could not be changed.')
+  } finally {
+    // A reload above may have replaced this object outright, and it is the one
+    // the page is drawing that needs its switch letting go of, not this one.
+    if (S.alerts === a) a.busy = false
+    if (S.view === 'settings') render()
+  }
+}
+
+// Muting one trip from the settings page. The same PATCH the bell in its
+// Planning Room sends, so the two never drift apart.
+async function toggleAlertsFor(tripId) {
+  const a = S.alerts
+  if (!a || a.busy) return
+  const trip = a.trips.find((t) => t.tripId === tripId)
+  if (!trip) return
+  a.busy = true
+  render()
+  try {
+    const subscription = await currentPushSubscription()
+    const state = await api(`/trips/${tripId}/notifications`, {
+      method: 'PATCH', body: { muted: !trip.muted, endpoint: subscription?.endpoint ?? '' },
+    })
+    trip.muted = !!state.muted
+    if (S.notify.tripId === tripId) S.notify = { ...S.notify, muted: trip.muted }
+    toast(trip.muted ? `${trip.name} is muted.` : `${trip.name} can notify you.`)
+  } catch (err) {
+    toast(err.message)
+  } finally {
+    a.busy = false
+    if (S.view === 'settings') render()
   }
 }
 
@@ -1601,7 +1810,7 @@ function filterBar(all, kinds, count) {
     return `
       <button class="filters__chip" data-act="filter-kind" data-value="${key}" aria-pressed="${f.kind === key}">
         ${SECTIONS[key].label}${n ? `<span class="filters__n"${yours
-          ? ` style="background:${colorOf(meMember())};color:#F4F8F0"` : ''}>${n}</span>` : ''}</button>`
+          ? ` style="background:${colorOf(meMember())};color:var(--on-forest)"` : ''}>${n}</span>` : ''}</button>`
   }
 
   const catChip = (cat) => `
@@ -1715,6 +1924,23 @@ function initials(name) {
   return letters.toUpperCase()
 }
 
+// What goes inside a face. Google hands over a photograph at sign-in and the app
+// was drawing two letters over the top of it, which is a worse likeness of
+// somebody than the likeness we already had.
+//
+// The initials stay for everyone Google has no picture of — someone who joined
+// by link and typed a name, a member added on their behalf — so this is the
+// better answer where there is one and the old one everywhere else. Their colour
+// is on the ring either way: it is the same colour as their share of the
+// coverage bar and their tick, and those cannot carry a face.
+//
+// `referrerpolicy` because Google's picture host does not need to be told which
+// trip was open when it was asked for.
+const faceInner = (who) => (who?.picture
+  ? `<img class="face__photo" src="${esc(who.picture)}" alt="" loading="lazy"
+       decoding="async" referrerpolicy="no-referrer">`
+  : esc(initials(who?.name)))
+
 // The one control you touch most, at the left of the row where a list keeps its
 // checkbox. Three states in the order you meet them: nobody has this yet (blaze
 // ring, tap to put your name down), you are bringing it (your colour, tap when
@@ -1769,7 +1995,8 @@ function whoBtn(item) {
             aria-label="${esc(`${on.map((c) => c.member.name).join(', ')} ${on.length === 1 ? 'is' : 'are'} ${verb} ${item.title} — change who`)}">
       <span class="who__faces">${shown.map((c) => `
         <span class="who__face${c.packed ? ' who__face--packed' : ''}"
-              style="--who:${colorOf(c.member)}">${esc(initials(c.member.name))}</span>`).join('')}</span>
+              style="--who:${colorOf(c.member)}">${faceInner(c.member)}${c.packed && c.member.picture
+          ? `<span class="who__tick" aria-hidden="true">${ICONS.tick}</span>` : ''}</span>`).join('')}</span>
       ${rest ? `<span class="who__more">+${rest}</span>` : ''}
     </button>`
 }
@@ -1959,6 +2186,26 @@ function joinBlock() {
     </section>`
 }
 
+// Where signing in or out puts you: back where you were standing. Every one of
+// these paths used to end at the home page, which was right while the only
+// place to sign in from was the home page. Settings can do it too, and being
+// thrown off the page you deliberately opened — with the URL still claiming you
+// are on it — is the app losing your place, not taking you anywhere.
+async function afterAuthChange() {
+  if (S.view === 'settings') {
+    // The alerts belonged to the session that has just been replaced.
+    S.alerts = null
+    render()
+    return
+  }
+  // The address bar says where you are, not the trip left over in memory from
+  // earlier in the visit — signing in from the home page after reading a trip
+  // used to drag you back into that trip, on a URL that said otherwise.
+  const found = tripRoute()
+  if (found) await openTrip(found.code)
+  else await showLanding()
+}
+
 function googleSignIn(note = 'Your account keeps your name and trips together across devices.') {
   const dev = S.auth.devBypass
     ? '<button class="btn btn--wide auth__dev" data-act="dev-sign-in">Continue as developer</button>'
@@ -1973,11 +2220,14 @@ function googleSignIn(note = 'Your account keeps your name and trips together ac
           </div>`
 }
 
+// Signing out used to be here, next to your name, which made the one row about
+// the account a row with one thing you could do to it. Everything about the
+// account now lives on one page, and this points at it — including for somebody
+// who has not signed in, who has a theme and a set of switches all the same.
 function accountBlock() {
-  if (!S.auth.user) return ''
   return `<section class="landing__account">
-            <span>Signed in as <b>${esc(S.auth.user.name)}</b></span>
-            <button class="btn btn--sm btn--quiet" data-act="sign-out">Sign out</button>
+            <span>${S.auth.user ? `Signed in as <b>${esc(S.auth.user.name)}</b>` : ''}</span>
+            <a class="btn btn--sm btn--quiet" href="${SETTINGS_PATH}" data-act="settings">Settings</a>
           </section>`
 }
 
@@ -2005,14 +2255,12 @@ const legacyMemberships = () => localTrips().map((tripId) => ({
 async function signedInWithGoogle(result) {
   if (S.authBusy || !result?.credential) return
   S.authBusy = true
-  const tripId = S.trip?.id
   try {
     applyAuth(await api('/auth/google', {
       method: 'POST', body: { credential: result.credential, legacyMemberships: legacyMemberships() },
     }))
     toast('Signed in. Your trips are linked to this account.')
-    if (tripId) await openTrip(tripId)
-    else await showLanding()
+    await afterAuthChange()
   } catch (err) {
     toast(err.message)
   } finally {
@@ -2102,9 +2350,9 @@ function viewLanding() {
           <div class="demo-bar" aria-hidden="true">
             <div class="demo-bar__label"><span>Sample packing list</span><span>9/14 claimed</span></div>
             <div class="demo-bar__track">
-              <div class="demo-bar__seg" style="flex:4;background:#2F6B57"></div>
-              <div class="demo-bar__seg" style="flex:3;background:#37698F"></div>
-              <div class="demo-bar__seg" style="flex:2;background:#7A5AA6"></div>
+              <div class="demo-bar__seg" style="flex:4;background:var(--m0)"></div>
+              <div class="demo-bar__seg" style="flex:3;background:var(--m1)"></div>
+              <div class="demo-bar__seg" style="flex:2;background:var(--m2)"></div>
               <div class="demo-bar__seg demo-bar__seg--gap"></div>
             </div>
           </div>`}
@@ -2173,6 +2421,184 @@ function viewJoin() {
       ${card}
     </main>
   </div>`
+}
+
+// ---- settings ---------------------------------------------------------------
+
+// A switch, said the same way everywhere it appears. The label is the control:
+// the whole row is the button, so the target is a row rather than a 40px pill,
+// which is the difference between working and not working on a phone in a tent.
+function toggleRow({ act, id, on: isOn, label, note, busy = false }) {
+  return `
+    <button class="switch" role="switch" aria-checked="${isOn}" data-act="${act}"${id ? ` data-id="${esc(id)}"` : ''}
+            ${busy ? 'disabled' : ''}>
+      <span class="switch__say">
+        <span class="switch__label">${esc(label)}</span>
+        ${note ? `<span class="switch__note">${esc(note)}</span>` : ''}
+      </span>
+      <span class="switch__track" aria-hidden="true"><span class="switch__knob"></span></span>
+    </button>`
+}
+
+// Who you are, everywhere. The name and picture come from Google and are
+// rewritten from it at every sign-in, so there is nothing here to edit — the
+// name you can change is the one on a particular trip, which is a different
+// name on purpose and is edited where it is used, beside the people on it.
+function settingsAccount() {
+  if (!S.auth.user) {
+    return `
+      <section class="card set-card">
+        <h2>Account</h2>
+        <p class="card__body">Signing in keeps your name and your trips together, so the same list opens on your phone and your laptop, and nobody else can speak as you.</p>
+        ${googleSignIn('')}
+      </section>`
+  }
+
+  const { name, email, picture } = S.auth.user
+  const trips = S.auth.memberships.length
+  return `
+    <section class="card set-card">
+      <h2>Account</h2>
+      <div class="account">
+        ${picture
+          ? `<img class="account__face" src="${esc(picture)}" alt="" width="48" height="48" referrerpolicy="no-referrer">`
+          : `<span class="account__face account__face--none" aria-hidden="true">${esc(initials(name))}</span>`}
+        <div class="account__who">
+          <b>${esc(name)}</b>
+          ${email ? `<span>${esc(email)}</span>` : ''}
+        </div>
+      </div>
+      <p class="set-note">${trips
+        ? `${trips} trip${trips === 1 ? '' : 's'} on this account. Your name and picture come from Google — what you are called on a particular trip is set on that trip, beside everyone else's.`
+        : 'No trips on this account yet.'}</p>
+      <button class="btn btn--wide btn--quiet" data-act="sign-out">Sign out</button>
+    </section>`
+}
+
+function settingsAppearance() {
+  const following = S.prefs.theme === 'system'
+  return `
+    <section class="card set-card">
+      <h2>Appearance</h2>
+      <div class="segmented" role="group" aria-label="Theme">
+        ${THEMES.map((t) => `
+          <button type="button" class="segmented__btn" aria-pressed="${S.prefs.theme === t.id}"
+                  data-act="theme" data-value="${t.id}">${t.label}</button>`).join('')}
+      </div>
+      <p class="set-note">${following
+        ? `Following this device, which is ${prefersDark() ? 'dark' : 'light'} at the moment.`
+        : 'This device only. A theme is about the screen in your hand and the light it is in, so it is not carried to your other ones.'}</p>
+    </section>`
+}
+
+// Two questions that read as one and are not: whether this browser is allowed to
+// show a notification at all, and which trips are allowed to send one. The first
+// belongs to the device, the second to you — mute a trip here and it is muted on
+// your laptop too.
+function settingsNotifications() {
+  if (!S.auth.user) {
+    return `
+      <section class="card set-card">
+        <h2>Notifications</h2>
+        <p class="card__body">Sign in to see which trips can reach you. A trip can still be muted from its Planning Room in the meantime.</p>
+      </section>`
+  }
+
+  const a = S.alerts
+  if (!a || a.loading) {
+    return `
+      <section class="card set-card">
+        <h2>Notifications</h2>
+        <p class="card__body">Checking…</p>
+      </section>`
+  }
+
+  // A request that never arrived is not the same answer as "off, and no trips".
+  // Drawn as switches, the failure would read as settings — the wrong ones, in
+  // the calm voice of the right ones — so it says what happened and offers the
+  // one thing worth doing about it.
+  if (a.error) {
+    return `
+      <section class="card set-card">
+        <h2>Notifications</h2>
+        <p class="card__body">${esc(a.error)}</p>
+        <button class="btn btn--quiet" data-act="retry-alerts">Try again</button>
+      </section>`
+  }
+
+  // Whether this browser can be notified, and which trips may notify you, are
+  // two answers, and only the first one is this browser's. A device that cannot
+  // ring keeps the trip switches: they are what your phone will obey.
+  const unsupported = a.permission === 'unsupported'
+  const blocked = a.permission === 'denied'
+  const device = unsupported
+    ? '<p class="set-note">This browser cannot show notifications. On an iPhone they arrive once the app is added to the home screen.</p>'
+    : blocked
+      ? '<p class="set-note set-note--warn">Notifications are blocked for this site in your browser settings. Nothing here can turn them back on — that switch is the browser\'s.</p>'
+      : a.subscribed
+        ? `${toggleRow({
+            act: 'device-alerts', on: true, busy: a.busy,
+            label: 'Notify me on this device',
+            note: 'Turning this off leaves your trips alone and stops this browser only.',
+          })}`
+        : `${toggleRow({
+            act: 'device-alerts', on: false, busy: a.busy,
+            label: 'Notify me on this device',
+            note: 'Planning Room messages, while the app is closed.',
+          })}`
+
+  const trips = a.trips.length
+    ? a.trips.map((t) => toggleRow({
+        act: 'trip-alerts', id: t.tripId, on: !t.muted, busy: a.busy,
+        label: t.name, note: t.muted ? 'Muted' : 'Planning Room messages',
+      })).join('')
+    : '<p class="set-note">No trips to be notified about yet.</p>'
+
+  return `
+    <section class="card set-card">
+      <h2>Notifications</h2>
+      ${device}
+      <h3 class="set-sub">Which trips</h3>
+      ${unsupported || blocked
+        ? '<p class="set-note">These belong to you rather than to this browser: muting a trip here mutes it on the devices that can reach you.</p>'
+        : ''}
+      <div class="switches">${trips}</div>
+    </section>`
+}
+
+function settingsFeatures() {
+  return `
+    <section class="card set-card">
+      <h2>Features</h2>
+      <p class="card__body">Everything here is on to start with. Turning one off only changes what this device shows you — nobody else's trip loses anything.</p>
+      <div class="switches">
+        ${FEATURES.map((f) => toggleRow({
+          act: 'feature', id: f.id, on: wants(f.id), label: f.label, note: f.note,
+        })).join('')}
+      </div>
+    </section>`
+}
+
+function viewSettings() {
+  return `
+    <div class="app app--focus">
+      <header class="topbar topbar--bare topbar--focus">
+        <div class="roombar">
+          <a class="roombar__back" href="${esc(S.settingsBack)}" data-act="leave-settings">
+            <span aria-hidden="true">${ICONS.back}</span>
+            <span class="sr-only">Back</span>
+          </a>
+          <h1 class="roombar__title">Settings</h1>
+          <span class="roombar__balance" aria-hidden="true"></span>
+        </div>
+      </header>
+      <main class="page set-page">
+        ${settingsAccount()}
+        ${settingsAppearance()}
+        ${settingsNotifications()}
+        ${settingsFeatures()}
+      </main>
+    </div>`
 }
 
 // The days of the trip as a strip you swipe, at the top of the page.
@@ -2298,6 +2724,16 @@ function topbar() {
           <span class="topbar__title">${esc(S.trip.name)}</span>
           ${meta ? `<span class="topbar__meta">${meta}</span>` : ''}
         </div>
+        <!-- The two ways out of the list you are reading, at the two ends of the
+             row: the fingerpost leaves the trip, the cog leaves the app itself.
+             It sat at the foot of the trip page, which meant scrolling a long
+             page on one tab out of five to reach something that has nothing to
+             do with that page. The Planning Room and Settle up headers already
+             put their one control in this same right-hand slot. -->
+        <a class="topbar__cog" href="${SETTINGS_PATH}" data-act="settings"
+           aria-label="Settings" title="Settings">
+          <span aria-hidden="true">${ICONS.cog}</span>
+        </a>
       </div>
       ${under}
     </header>`
@@ -2418,6 +2854,10 @@ function listPage() {
   const count = (key) => (key === 'own' ? [c.own - c.mine, true] : [c.open, false])
 
   let body
+  // With suggestions turned off in settings, writing your own is not the
+  // quieter of two offers any more — it is the offer, and it takes the loud
+  // button rather than leaving the empty page with a link where a door was.
+  const suggests = wants('suggestions')
   // An empty list has nothing to sit at the foot of, so the two ways to fill it
   // move into the card and the loud one leads.
   if (!pool.length) {
@@ -2426,9 +2866,11 @@ function listPage() {
         <h3>${f.kind === 'own' ? 'Your list is empty' : 'Nothing here yet'}</h3>
         <p>${f.kind === 'own'
            ? 'The things nobody can bring for you — a sleeping bag, a headtorch, your own boots. Only you will see what you put here.'
-           : 'Pull in the usual suspects, or write your own.'}</p>
-        <button class="btn btn--blaze" data-act="suggest">What am I missing?</button>
-        <button class="empty__or" data-act="add">or write your own</button>
+           : suggests ? 'Pull in the usual suspects, or write your own.' : 'Write the first thing on it.'}</p>
+        ${suggests
+          ? `<button class="btn btn--blaze" data-act="suggest">What am I missing?</button>
+             <button class="empty__or" data-act="add">or write your own</button>`
+          : '<button class="btn btn--blaze" data-act="add">Add the first thing</button>'}
       </div>`
   } else if (!items.length) {
     body = noMatch(f)
@@ -2438,7 +2880,7 @@ function listPage() {
         <button class="listfoot__add" data-act="add">
           <span class="listfoot__plus">${ICONS.plus}</span>Add your own
         </button>
-        <button class="listfoot__ask" data-act="suggest">${ICONS.spark}What am I missing?</button>
+        ${suggests ? `<button class="listfoot__ask" data-act="suggest">${ICONS.spark}What am I missing?</button>` : ''}
       </div>`
   }
 
@@ -2616,7 +3058,10 @@ function readyRow({ label, title, to, parts: p }) {
 }
 
 function statusCard() {
-  const c = countdown(S.trip)
+  // The whole top line of the card, not just the number: turning the countdown
+  // off and being left with "No dates yet" in the slot it used to fill would be
+  // the countdown still talking, in its least useful voice.
+  const c = wants('countdown') ? countdown(S.trip) : null
   const work = openWork()
   const rows = [
     ...TABS.filter((t) => t.lists.length)
@@ -2634,7 +3079,7 @@ function statusCard() {
           ${c.n ? `<span class="countdown__n">${c.n}</span><span class="countdown__word">${c.word}</span>`
                 : `<span class="countdown__word countdown__word--alone">${c.word}</span>`}
         </p>`
-      : `
+      : !wants('countdown') ? '' : `
         <button class="countdown countdown--ask" data-act="set-dates">
           <span class="countdown__word countdown__word--alone">No dates yet</span>
           <span class="countdown__go">Set them</span>
@@ -2810,6 +3255,10 @@ function wxAdvice(advice) {
 }
 
 function weatherCard() {
+  // Turned off in settings: the card goes, and with it the request behind it —
+  // see the guard on wantWeather in render, which is what stops a card nobody
+  // is showing from still asking the forecast service every time.
+  if (!wants('weather')) return ''
   const t = S.trip
   // Nothing to forecast for and nothing worth nudging about: a trip with no
   // dates has not got to the point where the weather is a question.
@@ -3102,7 +3551,7 @@ function dietTable({ eyebrow, sheet, cap }) {
             <span class="diets__who" aria-label="${esc(g.who.map((m) => m.name).join(', '))}">
               ${g.who.map((m) => `
                 <span class="who__face" style="--who:${colorOf(m)}"
-                      aria-hidden="true">${esc(initials(m.name))}</span>`).join('')}
+                      aria-hidden="true">${faceInner(m)}</span>`).join('')}
             </span>
           </li>`).join('')}
       </ul>
@@ -3340,7 +3789,7 @@ function peopleCard() {
           // fill in the person who does.
           return `
             <div class="person">
-              <span class="person__swatch" style="background:${colorOf(m)}"></span>
+              <span class="person__face" style="--who:${colorOf(m)}" aria-hidden="true">${faceInner(m)}</span>
               <span class="person__main">
                 <span class="person__name">${esc(m.name)}${m.id === S.me ? ' <span class="person__you mono">you</span>' : ''}</span>
                 <button class="person__diet${diet ? ' person__diet--set' : ''}" data-act="diet" data-id="${m.id}"
@@ -3382,7 +3831,9 @@ function roomDoor() {
           <span class="room-door__last">
             <b${last.assistant ? ' class="mono"' : ''}>${esc(last.author)}</b>
             ${esc(last.body)}</span>`
-        : '<span>Questions, decisions and <span class="mono">@camp</span> help live here.</span>'}
+        : wants('assistant')
+          ? '<span>Questions, decisions and <span class="mono">@camp</span> help live here.</span>'
+          : '<span>Questions and decisions live here, where they can be found later.</span>'}
       </span>
       <span class="room-door__go">${unread
         ? `<span class="room-door__unread">${unread > 99 ? '99+' : unread} new</span>`
@@ -3395,9 +3846,20 @@ function chatRows() {
     const member = memberById(message.member_id)
     const when = new Date(message.created_at)
     const assistant = message.role === 'assistant'
+    // A message is somebody talking, so it is signed with them rather than with
+    // a coloured tab standing in for them. The name in the meta line stays: at
+    // this size a face is recognition, not identification, and the two together
+    // are how you read a room you have scrolled back through.
+    //
+    // Whoever wrote it may have left the trip since. The message keeps the name
+    // it was sent under, so the face falls back to that rather than to nothing.
     return `
       <li class="thread__message${message.member_id === S.me ? ' thread__message--mine' : ''}${assistant ? ' thread__message--assistant' : ''}">
-        <span class="thread__mark"${assistant ? '' : ` style="background:${member ? colorOf(member) : 'var(--ink-faint)'}"`} aria-hidden="true">${assistant ? ICONS.camp : ''}</span>
+        ${assistant
+          ? `<span class="thread__mark" aria-hidden="true">${ICONS.camp}</span>`
+          : `<span class="thread__mark thread__mark--face" aria-hidden="true"
+               style="--who:${member ? colorOf(member) : 'var(--ink-faint)'}"
+               >${faceInner(member ?? { name: message.author_name })}</span>`}
         <div class="thread__content">
           <div class="thread__meta">
             <strong>${esc(message.author_name)}${assistant ? ' <span class="thread__camp mono">assistant</span>' : ''}</strong>
@@ -3423,6 +3885,13 @@ function chatRows() {
   return messageRows + streamRows
 }
 
+// Two different noes wearing one word. The server says whether Camp can answer
+// at all — no key, no assistant — and the settings page says whether you want it
+// to. Everything the room draws asks this rather than the flag underneath, so
+// turning Camp off puts the room back to being the group talking, including the
+// @camp completion and what the sr-only help promises.
+const assistantOn = () => S.chat.assistantAvailable && wants('assistant')
+
 function chatCard() {
   const chat = S.chat
   const waiting = chat.tripId !== S.trip.id || chat.loading
@@ -3432,7 +3901,7 @@ function chatCard() {
     <section class="chat-card chat-card--page" aria-labelledby="planning-room-title" aria-busy="${waiting}">
       <span class="sr-only chat__connection mono" data-chat-connection
         data-state="${esc(chat.connection)}" role="status" aria-live="polite">${chatConnectionLabel(chat.connection)}</span>
-      <p class="sr-only" id="chat-help">${chat.assistantAvailable
+      <p class="sr-only" id="chat-help">${assistantOn()
         ? 'Keep decisions with the trip. Start with <span class="mono">@camp</span> for help using its details and lists.'
         : 'Keep decisions with the trip, where everybody can find them later.'}</p>
       <div class="chat__body">
@@ -3452,8 +3921,8 @@ function chatCard() {
       </div>
       ${waiting || chat.error ? '' : `
         <form class="chat__composer" data-act="send-message">
-          <label class="sr-only" for="chat-text">${chat.assistantAvailable ? 'Message the group or @camp' : 'Message the group'}</label>
-          ${chat.assistantAvailable ? `
+          <label class="sr-only" for="chat-text">${assistantOn() ? 'Message the group or @camp' : 'Message the group'}</label>
+          ${assistantOn() ? `
             <div class="chat__mention" id="chat-mention" role="listbox" aria-label="Mention Camp" hidden>
               <button class="chat__mention-option" id="chat-mention-camp" type="button" role="option"
                 aria-selected="true" data-act="chat-mention">
@@ -3465,8 +3934,8 @@ function chatCard() {
           <div class="chat__write">
             <textarea id="chat-text" name="text" rows="1" maxlength="2000" required
               aria-describedby="chat-help" aria-autocomplete="list"
-              ${chat.assistantAvailable ? 'aria-controls="chat-mention"' : ''} aria-expanded="false"
-              placeholder="${chat.assistantAvailable ? 'Message the group or @camp…' : 'Write a message…'}">${esc(chat.draft)}</textarea>
+              ${assistantOn() ? 'aria-controls="chat-mention"' : ''} aria-expanded="false"
+              placeholder="${assistantOn() ? 'Message the group or @camp…' : 'Write a message…'}">${esc(chat.draft)}</textarea>
             <button class="btn btn--primary chat__send" type="submit" aria-label="${chat.busy ? 'Sending message' : 'Send message'}"
               ${chat.busy ? 'disabled' : ''}>${chat.busy ? '<span class="chat__sending" aria-hidden="true">…</span>' : ICONS.send}</button>
           </div>
@@ -3532,6 +4001,7 @@ function campPage() {
         </div>
       </div>
 
+      ${!wants('suggestions') || !S.tips.length ? '' : `
       <div class="card trip-smarts">
         <h3>Camp smarts</h3>
         <p>The things people find out the hard way on their first trip.</p>
@@ -3543,7 +4013,7 @@ function campPage() {
             </div>`).join('')}
         </div>
         ${moreBtn('tips', S.tips.length, 3)}
-      </div>
+      </div>`}
     </main>`
 }
 
@@ -4513,7 +4983,7 @@ function render({ chatBottom = false } = {}) {
   const box = document.activeElement
   const caret = box?.id === 'cs-find' ? { start: box.selectionStart, end: box.selectionEnd } : null
 
-  const views = { landing: viewLanding, join: viewJoin, trip: viewTrip }
+  const views = { landing: viewLanding, join: viewJoin, trip: viewTrip, settings: viewSettings }
   root.innerHTML = views[S.view]?.() ?? '<div class="page"><p>Loading…</p></div>'
   fitChatBox(root.querySelector?.('#chat-text'))
   const nextChat = root.querySelector?.('.chat__body')
@@ -4563,12 +5033,13 @@ function render({ chatBottom = false } = {}) {
   // forecast is the one thing here that comes from somewhere else, so nothing
   // waits on it. It answers once per question — see wantWeather — so this being
   // in render() costs a string comparison and nothing else.
-  if (S.view === 'trip' && S.camp === 'overview') wantWeather()
+  if (S.view === 'trip' && S.camp === 'overview' && wants('weather')) wantWeather()
   if (S.view === 'trip') wantNotificationState()
   if (S.view === 'trip' && S.camp === 'room') {
     wantMessages()
     markRoomRead()
   }
+  if (S.view === 'settings') wantAlerts()
   ensureChatSocket()
   syncRoomPresence()
 }
@@ -4579,6 +5050,49 @@ const meKey = (tripId) => `cs.me.${tripId}`
 const TRIPS_KEY = 'cs.trips'
 const DEV_USER_KEY = 'cs.dev-user'
 const foldsKey = (tripId) => `cs.folds.${tripId}`
+// Read by the inline script in index.html as well as here, and it has to keep
+// being readable by a five-line try/catch that runs before anything else does.
+const PREFS_KEY = 'cs.prefs'
+
+function loadPrefs() {
+  let kept = {}
+  try { kept = JSON.parse(localStorage.getItem(PREFS_KEY) ?? '{}') } catch { /* nothing kept */ }
+  const theme = THEMES.some((t) => t.id === kept?.theme) ? kept.theme : 'system'
+  const features = {}
+  for (const f of FEATURES) features[f.id] = kept?.features?.[f.id] !== false
+  S.prefs = { theme, features }
+  applyTheme()
+}
+
+function savePrefs() {
+  try { localStorage.setItem(PREFS_KEY, JSON.stringify(S.prefs)) } catch {
+    // Private mode. The settings hold for this visit and are forgotten with it,
+    // which is the same bargain the folded headings and the install card make.
+  }
+}
+
+const prefersDark = () => !!globalThis.matchMedia?.('(prefers-color-scheme: dark)').matches
+const darkNow = () => S.prefs.theme === 'dark' || (S.prefs.theme === 'system' && prefersDark())
+
+// The status bar and the address bar are painted by the browser from a meta
+// tag, not by the stylesheet, so the header's colour has to be said twice.
+const THEME_COLOR = { light: '#1B382E', dark: '#16261F' }
+
+// "System" is resolved to a real light or dark here rather than left to CSS, so
+// there is one answer on the page at a time and the inline boot script, this,
+// and the media listener below cannot disagree about what is showing.
+function applyTheme() {
+  const dark = darkNow()
+  document.documentElement.dataset.theme = dark ? 'dark' : 'light'
+  const meta = document.querySelector?.('meta[name="theme-color"]')
+  if (meta) meta.content = dark ? THEME_COLOR.dark : THEME_COLOR.light
+}
+
+// Following the phone is only following it if it keeps up: the system flips at
+// sunset, or someone changes it while the app is open in another window.
+globalThis.matchMedia?.('(prefers-color-scheme: dark)')?.addEventListener?.('change', () => {
+  if (S.prefs.theme === 'system') applyTheme()
+})
 
 // Packing happens over a week and a dozen visits, not in one sitting, so a
 // heading you shut on Tuesday is still shut on Thursday. It is a view of the
@@ -4719,6 +5233,63 @@ function tripRoute(pathname = location.pathname) {
   return match ? { code: decodeURIComponent(match[1]), view: match[2] || '' } : null
 }
 
+const SETTINGS_PATH = '/settings'
+const isSettingsRoute = (pathname = location.pathname) => /^\/settings\/?$/.test(String(pathname))
+
+// Settings stands outside a trip: it is about you and this device, and the same
+// page opens from the home screen and from inside a trip. `back` is where the
+// arrow out of it goes — the page you were on, or home when it was opened from
+// a bookmark with nothing behind it.
+function showSettings(back = '/') {
+  S.settingsBack = isSettingsRoute(back) ? '/' : back
+  S.view = 'settings'
+  S.alerts = null
+  if (location.pathname === SETTINGS_PATH) {
+    // Already standing on it: a reload, a bookmark, or the back and forward
+    // buttons. There is a page underneath to go back to only if this entry is
+    // one we pushed, and the mark we left on it is what survives a reload.
+    S.settingsPushed = !!history.state?.back
+  } else {
+    history.pushState({ back: S.settingsBack }, '', SETTINGS_PATH)
+    S.settingsPushed = true
+  }
+  // The page paints on what is already known — who you are came with the boot —
+  // and render asks for the notification settings behind it. Nothing here waits
+  // on the network to draw.
+  render()
+  window.scrollTo(0, 0)
+}
+
+// The arrow back out. Settings is a detour, so leaving it unwinds the detour:
+// it pops the entry going in pushed, which is the one thing that makes this
+// arrow and the browser's own back button agree. Pushing the page you came from
+// back on instead looked identical on screen and left a pair of entries behind
+// every visit, so pressing back afterwards walked into settings again, and
+// again, before it ever reached the page you were actually reading.
+//
+// A push is still right when there is nothing underneath: /settings can be the
+// whole of a visit, opened from a bookmark or a home-screen icon.
+async function leaveSettings() {
+  S.alerts = null
+  if (S.settingsPushed) {
+    // The pop restores the scroll position too, which the push never could.
+    history.back()
+    return
+  }
+  const back = tripRoute(S.settingsBack)
+  if (back) {
+    // Which page of the trip, before it is opened rather than after, so the
+    // trip is drawn once on the page you left rather than twice.
+    S.camp = back.view || false
+    history.pushState({ tripView: back.view }, '', S.settingsBack)
+    await openTrip(back.code)
+  } else {
+    history.pushState({}, '', '/')
+    await showLanding()
+  }
+  window.scrollTo(0, 0)
+}
+
 async function goToTrip(code) {
   S.camp = false
   history.pushState({ tripView: false }, '', `/t/${encodeURIComponent(code)}`)
@@ -4798,8 +5369,10 @@ document.addEventListener('click', async (ev) => {
         applyAuth(await api('/auth/logout', { method: 'POST' }))
         S.me = null
         toast('Signed out.')
-        if (S.trip?.id) await openTrip(S.trip.id)
-        else await showLanding()
+        // Signing out on the settings page leaves you on it: it is the page you
+        // chose to be on, and it still has plenty to say to somebody signed out.
+        // The alerts go with the session that could read them.
+        await afterAuthChange()
       } catch (err) { toast(err.message) }
       break
     }
@@ -4807,7 +5380,6 @@ document.addEventListener('click', async (ev) => {
     case 'dev-sign-in': {
       if (S.authBusy) break
       S.authBusy = true
-      const tripId = S.trip?.id
       try {
         let devId = localStorage.getItem(DEV_USER_KEY)
         if (!devId) {
@@ -4818,8 +5390,7 @@ document.addEventListener('click', async (ev) => {
           method: 'POST', body: { devId, legacyMemberships: legacyMemberships() },
         }))
         toast('Signed in for development.')
-        if (tripId) await openTrip(tripId)
-        else await showLanding()
+        await afterAuthChange()
       } catch (err) { toast(err.message) }
       finally { S.authBusy = false; render() }
       break
@@ -4828,6 +5399,54 @@ document.addEventListener('click', async (ev) => {
     case 'open-trip':
       await goToTrip(el.dataset.id)
       window.scrollTo(0, 0)
+      break
+
+    // Settings is a page you go to and come back from, so it is a push with
+    // where you were kept on it: the back arrow returns to the trip you were
+    // reading rather than dropping you on the home page.
+    case 'settings':
+      showSettings(location.pathname)
+      break
+
+    case 'leave-settings':
+      await leaveSettings()
+      break
+
+    case 'theme': {
+      const value = el.dataset.value
+      if (!THEMES.some((t) => t.id === value) || S.prefs.theme === value) break
+      S.prefs = { ...S.prefs, theme: value }
+      savePrefs()
+      applyTheme()
+      render()
+      break
+    }
+
+    case 'feature': {
+      const id = el.dataset.id
+      if (!FEATURES.some((f) => f.id === id)) break
+      S.prefs.features[id] = !wants(id)
+      savePrefs()
+      // Turning the forecast back on has to ask for one: it was never fetched
+      // while the card was off, and wantWeather answers once per question.
+      if (id === 'weather' && wants(id)) S.wx = null
+      render()
+      break
+    }
+
+    // Forgetting the answer is the whole of the retry: render asks for alerts
+    // whenever the settings page has none.
+    case 'retry-alerts':
+      S.alerts = null
+      render()
+      break
+
+    case 'device-alerts':
+      await toggleDeviceAlerts()
+      break
+
+    case 'trip-alerts':
+      await toggleAlertsFor(el.dataset.id)
       break
 
     // Leaving a trip is a push rather than a back(), because you can arrive on
@@ -5575,8 +6194,13 @@ document.addEventListener('submit', async (ev) => {
       }
       const wasAvailable = S.chat.assistantAvailable
       try {
+        // Turning Camp off took away the invitation — the placeholder, the
+        // completion, the line offering it — but not the answer: typing the
+        // eight characters yourself still summoned it, in a room the settings
+        // page had promised was just the group. So the sender says whether it
+        // wants one, and the room stays as quiet as it looks.
         const { message, assistant, assistantAvailable } = await api(`/trips/${tripId}/messages`, {
-          method: 'POST', body: pending,
+          method: 'POST', body: { ...pending, invokeAssistant: wants('assistant') },
         })
         if (S.chat.tripId !== tripId) break
         mergeMessages([message])
@@ -6386,7 +7010,10 @@ function worthAsking() {
 let deferred = null   // Chrome's beforeinstallprompt, held back for our moment
 let installTimer
 
-const canInstall = () => !isInstalled() && !inWebview && (!!deferred || iosSafari)
+// One gate for both ways the offer appears — the card that comes to you after a
+// couple of visits, and the standing nudge at the foot of the home page — so
+// turning it off in settings turns off the asking rather than one of its halves.
+const canInstall = () => wants('install') && !isInstalled() && !inWebview && (!!deferred || iosSafari)
 
 // Closing a card you went looking for is not a refusal, so it is not counted
 // as one — otherwise reading the iOS instructions twice retires the question.
@@ -6480,6 +7107,12 @@ function installBlock() {
 // ---- boot -------------------------------------------------------------------
 
 async function boot() {
+  // Before anything is asked for or drawn: the settings decide what the rest of
+  // the boot is allowed to do, and the theme is already on the page from the
+  // inline script in index.html — this is what keeps the two agreeing after a
+  // change, and what re-applies it when the phone flips at sunset.
+  loadPrefs()
+
   await Promise.all([
     api('/auth').then(applyAuth, () => {
       S.auth = { loaded: true, clientId: '', devBypass: false, user: null, memberships: [] }
@@ -6491,7 +7124,8 @@ async function boot() {
   ])
 
   const found = tripRoute()
-  if (found) {
+  if (isSettingsRoute()) showSettings(history.state?.back ?? '/')
+  else if (found) {
     const route = found.view || history.state?.tripView
     S.camp = route === 'room' || route === 'settle' || route === 'overview' ? route : false
     await openTrip(found.code)

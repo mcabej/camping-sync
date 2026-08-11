@@ -6,19 +6,83 @@
    glance. Everything else stays quiet so that bar can shout.
    ========================================================================== */
 
+/* Two palettes, one shape. Every colour the app draws with is named here, and
+   the dark block below re-answers the same names — so a screen is written once
+   and the theme is a swap of values rather than a second set of rules. The
+   families that carry an alpha (text on the forest header, hairlines, scrims)
+   keep their channels in a `--*-rgb` token, so a use site can stay at exactly
+   the alpha it was tuned to instead of rounding to the nearest shared token. */
 :root {
+  color-scheme: light;
+
   --canvas:      #E7EBE3;
   --paper:       #FBFCF9;
   --paper-sunk:  #F1F4EE;
+  /* Paper that lifts under the pointer. */
+  --paper-lift:  #fff;
+  /* Paper you can see the page through: the chat bubble and the places menu. */
+  --paper-veil:  rgba(251, 252, 249, .97);
   --ink:         #16241F;
   --ink-soft:    #57685F;
   --ink-faint:   #8A978F;
+  --ink-rgb:     22 36 31;
   --forest:      #2C5647;
   --forest-deep: #1B382E;
+  --forest-rgb:  27 56 46;
+  /* Green as ink rather than as ground. In this palette they are the same two
+     colours, which is exactly why they need separate names: a dark green reads
+     as both a header you put white text on and a word you write on paper. In
+     the dark palette those two part company — the ground goes darker and the
+     ink has to go lighter — and anything that had borrowed the surface colour
+     to write with would come out invisible. Everything that draws a word, a
+     chevron or a focus ring in green uses these; everything that fills a shape
+     uses --forest / --forest-deep above. */
+  --forest-ink:      #2C5647;
+  --forest-ink-deep: #1B382E;
   --blaze:       #DB5322;
   --blaze-soft:  #FBE9E0;
+  /* Blaze pressed, blaze in the unclaimed hatching, and the wash it leaves
+     under a pointer. One meaning, four values. */
+  --blaze-deep:  #C3461A;
+  --blaze-dark:  #A83C15;
+  --blaze-wash:  #F8DDD0;
+  --blaze-rgb:   219 83 34;
+  --on-blaze:    #fff;
   --line:        #D2DACD;
   --line-strong: #B6C2B1;
+
+  /* Whatever sits on the forest header, tab bar and primary buttons. Light in
+     both themes — those surfaces are dark in both. */
+  --on-forest:     #F4F8F0;
+  --on-forest-rgb: 244 248 240;
+  --hero-ink:      #EAF0E6;
+  --hero-rgb:      234 240 230;
+  /* A well sunk into a dark surface, and a rail raised out of one. */
+  --well:      rgba(0, 0, 0, .22);
+  --well-lift: rgba(255, 255, 255, .22);
+
+  /* Quiet green surfaces: the sunken row, Camp's own chat bubble, the bar the
+     composer and the day track sit on. */
+  --tint:        #E4EEE5;
+  --tint-strong: #D5E8D3;
+  --bar:         #DEE5DA;
+  --bar-veil:    rgba(222, 229, 218, .94);
+  --mint:        #9BC6A6;
+
+  /* A switch off, and the knob that says so by where it is sitting. Its own
+     tokens rather than borrowed ones: in the dark palette a knob the colour of
+     lifted paper would be the same colour as the track it slides on, which is
+     a switch you cannot read the state of. */
+  --switch-off:  #B6C2B1;
+  --switch-knob: #fff;
+
+  --hair:      rgb(var(--forest-rgb) / .14);
+  --hair-soft: rgb(var(--ink-rgb) / .12);
+  --mark:      rgb(var(--forest-rgb) / .09);
+  --scrim:      rgb(var(--ink-rgb) / .45);
+  --scrim-deep: rgb(var(--ink-rgb) / .5);
+  --sheen:      rgb(var(--ink-rgb) / .055);
+  --drop:       0 1px 1px rgb(var(--ink-rgb) / .08);
 
   --m0: #2F6B57; --m1: #37698F; --m2: #7A5AA6; --m3: #8C6A2F;
   --m4: #B23C6B; --m5: #4E7A2A; --m6: #2E6E77; --m7: #6B5B4A;
@@ -37,6 +101,78 @@
   /* How much of the bottom of the page the on-screen keyboard is sitting on.
      Measured in app.js; zero everywhere there is no keyboard. */
   --kb: 0px;
+}
+
+/* Dark is not the light palette inverted. The canvas goes to a green-black
+   rather than a neutral one so the trip still feels like it is outdoors at
+   night, the paper stays a shade above it so a card is still a card, and blaze
+   is lifted — #DB5322 on a dark ground reads brown, and blaze meaning "nobody
+   has picked this up" is the one thing that cannot go quiet. Person colours are
+   lifted for the same reason: at 4% lightness a plum and a brown are the same
+   circle. The header and tab bar stay dark green in both themes, so everything
+   named `--on-forest` is untouched below.
+
+   There is no `prefers-color-scheme` block to keep in step with this one:
+   "System" is resolved to a real light or dark before first paint by the inline
+   script in index.html, which is also what keeps a dark app from flashing white
+   on the way in. Every screen in this app is drawn by JavaScript, so a palette
+   that needed none would be a palette for a blank page. */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --canvas:      #0F1714;
+  --paper:       #18211D;
+  --paper-sunk:  #131B18;
+  --paper-lift:  #1F2A25;
+  --paper-veil:  rgba(24, 33, 29, .97);
+  --ink:         #E3EAE4;
+  --ink-soft:    #A2AFA7;
+  --ink-faint:   #828F87;
+  --ink-rgb:     227 234 228;
+  --forest:      #437C67;
+  --forest-deep: #16261F;
+  --forest-rgb:  74 135 112;
+  --forest-ink:      #79C2A2;
+  --forest-ink-deep: #93D3B4;
+  --blaze:       #F0662F;
+  --blaze-soft:  #3A2117;
+  --blaze-deep:  #FF7A45;
+  --blaze-dark:  #B4481C;
+  --blaze-wash:  #46261A;
+  --blaze-rgb:   240 102 47;
+  --on-blaze:    #1A0E07;
+  --line:        #2A3831;
+  --line-strong: #3D4E45;
+
+  --well:      rgba(0, 0, 0, .32);
+  --well-lift: rgba(255, 255, 255, .16);
+
+  --tint:        #1C2A24;
+  --tint-strong: #22362D;
+  --bar:         #141D19;
+  --bar-veil:    rgba(20, 29, 25, .94);
+  --mint:        #7FBE97;
+
+  --switch-off:  #4C6156;
+  --switch-knob: #D8E2DA;
+
+  /* Hairlines on a dark ground have to be light to be lines at all, so these
+     stop deriving from the ink and are stated outright. */
+  --hair:      rgb(255 255 255 / .09);
+  --hair-soft: rgb(255 255 255 / .1);
+  --mark:      rgb(255 255 255 / .08);
+  --scrim:      rgb(0 0 0 / .6);
+  --scrim-deep: rgb(0 0 0 / .68);
+  --sheen:      rgb(255 255 255 / .06);
+  --drop:       0 1px 1px rgb(0 0 0 / .4);
+
+  --m0: #57B08F; --m1: #6FAAD8; --m2: #B394E0; --m3: #D0A354;
+  --m4: #E9779F; --m5: #8CC45B; --m6: #55AEB8; --m7: #B39C82;
+
+  /* A shadow is light falling on a page. On a dark ground there is no light to
+     fall, so the lift comes from a deeper drop and the raised paper above. */
+  --shadow: 0 1px 2px rgb(0 0 0 / .4), 0 4px 14px rgb(0 0 0 / .34);
+  --shadow-lift: 0 2px 4px rgb(0 0 0 / .46), 0 12px 32px rgb(0 0 0 / .5);
 }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -84,20 +220,20 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
   box-shadow: inset 0 0 0 1.5px var(--line-strong);
   transition: transform .12s ease, box-shadow .12s ease, background .12s ease;
 }
-.btn:hover { background: #fff; box-shadow: inset 0 0 0 1.5px var(--ink-faint); }
+.btn:hover { background: var(--paper-lift); box-shadow: inset 0 0 0 1.5px var(--ink-faint); }
 .btn:active { transform: translateY(1px); }
 .btn[disabled] { opacity: .45; pointer-events: none; }
 
-.btn--primary { background: var(--forest-deep); color: #F4F7F1; box-shadow: none; }
+.btn--primary { background: var(--forest-deep); color: var(--on-forest); box-shadow: none; }
 .btn--primary:hover { background: var(--forest); box-shadow: none; }
 
-.btn--blaze { background: var(--blaze); color: #fff; box-shadow: none; }
-.btn--blaze:hover { background: #C3461A; box-shadow: none; }
+.btn--blaze { background: var(--blaze); color: var(--on-blaze); box-shadow: none; }
+.btn--blaze:hover { background: var(--blaze-deep); box-shadow: none; }
 
 .btn--ghost { background: none; box-shadow: inset 0 0 0 1.5px var(--line); }
 /* Taking a thing off the list: available, never inviting. */
 .btn--quiet { background: none; color: var(--ink-soft); box-shadow: inset 0 0 0 1.5px var(--line); }
-.btn--quiet:hover { color: var(--blaze); background: var(--blaze-soft); box-shadow: inset 0 0 0 1.5px rgba(219, 83, 34, .3); }
+.btn--quiet:hover { color: var(--blaze); background: var(--blaze-soft); box-shadow: inset 0 0 0 1.5px rgb(var(--blaze-rgb) / .3); }
 .btn--sm { min-height: 36px; padding: 0 12px; font-size: 14px; }
 .btn--wide { width: 100%; }
 
@@ -113,7 +249,7 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
   background: var(--paper); border: 1.5px solid var(--line-strong);
   transition: border-color .12s ease;
 }
-.field input:focus, .field textarea:focus, .field select:focus { border-color: var(--forest); outline-offset: 1px; }
+.field input:focus, .field textarea:focus, .field select:focus { border-color: var(--forest-ink); outline-offset: 1px; }
 .field textarea { min-height: 96px; resize: vertical; }
 /* Two fields side by side, until there is no room for two. A date input has a
    width it will not go under — the numbers and the picker button have to fit —
@@ -165,16 +301,16 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 .landing__hero {
   background: var(--forest-deep);
   background-image: var(--ripstop);
-  color: #EAF0E6;
+  color: var(--hero-ink);
   padding: calc(56px + env(safe-area-inset-top)) 22px 44px;
 }
 .landing__inner { max-width: 560px; margin: 0 auto; }
-.landing__hero .eyebrow { color: rgba(234, 240, 230, .55); }
+.landing__hero .eyebrow { color: rgb(var(--hero-rgb) / .55); }
 
 .landing__hero h1 {
   font-size: clamp(38px, 11vw, 60px);
   margin: 14px 0 0;
-  color: #F4F8F0;
+  color: var(--on-forest);
 }
 .landing__hero h1 em {
   font-style: normal;
@@ -183,7 +319,7 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 }
 .landing__hero p {
   margin: 16px 0 0; font-size: 17px; line-height: 1.5;
-  color: rgba(234, 240, 230, .78); max-width: 44ch;
+  color: rgb(var(--hero-rgb) / .78); max-width: 44ch;
 }
 
 /* The hero's thesis: a miniature coverage bar, already telling the story. */
@@ -191,13 +327,13 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 .demo-bar__label {
   display: flex; justify-content: space-between; align-items: baseline;
   font-family: var(--mono); font-size: 11.5px; letter-spacing: .08em;
-  text-transform: uppercase; color: rgba(234, 240, 230, .6); margin-bottom: 8px;
+  text-transform: uppercase; color: rgb(var(--hero-rgb) / .6); margin-bottom: 8px;
 }
 .demo-bar__track { display: flex; height: 14px; border-radius: 3px; overflow: hidden; gap: 2px; }
 .demo-bar__seg { height: 100%; }
 .demo-bar__seg--gap {
   flex: 1;
-  background: repeating-linear-gradient(-45deg, var(--blaze) 0 5px, #A83C15 5px 10px);
+  background: repeating-linear-gradient(-45deg, var(--blaze) 0 5px, var(--blaze-dark) 5px 10px);
 }
 
 /* Once you have trips of your own, the pitch has done its job — the hero gets
@@ -313,7 +449,7 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 .when { flex: none; display: flex; flex-direction: column; align-items: center; line-height: 1; }
 .when b {
   font-family: var(--display); font-weight: 800; font-size: 25px;
-  letter-spacing: -0.035em; font-variant-numeric: tabular-nums; color: var(--forest-deep);
+  letter-spacing: -0.035em; font-variant-numeric: tabular-nums; color: var(--forest-ink-deep);
 }
 .when > span {
   margin-top: 4px; font-size: 9.5px; font-weight: 600;
@@ -324,7 +460,7 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
   font-size: 10px; letter-spacing: .12em; text-transform: uppercase;
 }
 .when--none { color: var(--ink-faint); background: var(--paper-sunk); }
-.when--live { color: #F4F8F0; background: var(--forest); }
+.when--live { color: var(--on-forest); background: var(--forest); }
 
 @keyframes card-in { from { opacity: 0; transform: translateY(7px); } }
 .trips .trip-card { animation: card-in .28s ease backwards; }
@@ -338,7 +474,7 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 }
 .skel::after {
   content: ''; position: absolute; inset: 0;
-  background: linear-gradient(90deg, transparent, rgba(22, 36, 31, .055), transparent);
+  background: linear-gradient(90deg, transparent, var(--sheen), transparent);
   animation: sweep 1.4s ease-in-out infinite;
 }
 @keyframes sweep { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
@@ -353,7 +489,7 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
   transition: border-color .12s ease, background .12s ease;
 }
 .joinbar input::placeholder { color: var(--ink-faint); }
-.joinbar input:focus { background: var(--paper); border-color: var(--forest); }
+.joinbar input:focus { background: var(--paper); border-color: var(--forest-ink); }
 .joinbar .btn { flex: none; padding: 0 22px; }
 .joinbar--bad input { border-color: var(--blaze); background: var(--blaze-soft); }
 .joinbar--bad { animation: shake .3s ease; }
@@ -372,7 +508,7 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
   position: sticky; top: 0; z-index: 30;
   background: var(--forest-deep);
   background-image: var(--ripstop);
-  color: #EAF0E6;
+  color: var(--hero-ink);
   padding: calc(12px + env(safe-area-inset-top)) 18px 0;
 }
 /* Name over facts: the name is what you read, the place and the date are what
@@ -391,16 +527,28 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 .topbar__home {
   flex: none; width: 36px; height: 36px; margin-left: -10px;
   display: grid; place-items: center;
-  border-radius: 50%; color: rgba(244, 248, 240, .75); text-decoration: none;
+  border-radius: 50%; color: rgb(var(--on-forest-rgb) / .75); text-decoration: none;
 }
-.topbar__home:hover { background: rgba(244, 248, 240, .1); color: #F4F8F0; }
+.topbar__home:hover { background: rgb(var(--on-forest-rgb) / .1); color: var(--on-forest); }
 .topbar__home svg { width: 21px; height: 21px; display: block; }
+
+/* The other end of the same row, and the same shape as the way out of the trip:
+   both are doors rather than things you do to the trip, so neither is allowed
+   to look louder than the name between them. It hangs into the header's padding
+   on its own side, the way the fingerpost does on the left. */
+.topbar__cog {
+  flex: none; width: 36px; height: 36px; margin-right: -10px;
+  display: grid; place-items: center;
+  border-radius: 50%; color: rgb(var(--on-forest-rgb) / .75); text-decoration: none;
+}
+.topbar__cog:hover { background: rgb(var(--on-forest-rgb) / .1); color: var(--on-forest); }
+.topbar__cog svg { width: 20px; height: 20px; display: block; }
 /* One line, ellipsised. The header is a label for where you are, not a summary
    of the trip — the trip page still holds the address and the who. */
 .topbar__title {
   min-width: 0;
   font-family: var(--display); font-weight: 800; letter-spacing: -0.02em;
-  font-size: 17px; color: #F4F8F0;
+  font-size: 17px; color: var(--on-forest);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 
@@ -410,7 +558,7 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 .topbar__meta {
   display: flex; align-items: center; gap: 6px; min-width: 0;
   font-family: var(--mono); font-size: 11.5px; letter-spacing: .03em;
-  color: rgba(234, 240, 230, .62);
+  color: rgb(var(--hero-rgb) / .62);
 }
 /* Not a flex row: the pin rides inline with the text so the ellipsis lands on
    the name rather than on an anonymous flex item that will never shrink. */
@@ -437,30 +585,30 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 }
 .roombar__back {
   width: 44px; height: 44px; display: grid; place-items: center;
-  border-radius: 50%; color: #F4F8F0; text-decoration: none;
+  border-radius: 50%; color: var(--on-forest); text-decoration: none;
 }
-.roombar__back:hover { background: rgba(244, 248, 240, .1); }
+.roombar__back:hover { background: rgb(var(--on-forest-rgb) / .1); }
 .roombar__back svg { width: 21px; height: 21px; display: block; }
 .roombar__notify {
   position: relative; width: 44px; height: 44px; display: grid; place-items: center;
-  justify-self: end; border-radius: 50%; color: rgba(244, 248, 240, .72);
+  justify-self: end; border-radius: 50%; color: rgb(var(--on-forest-rgb) / .72);
 }
-.roombar__notify:hover { background: rgba(244, 248, 240, .1); color: #F4F8F0; }
+.roombar__notify:hover { background: rgb(var(--on-forest-rgb) / .1); color: var(--on-forest); }
 .roombar__notify svg { width: 21px; height: 21px; }
-.roombar__notify--on { color: #F4F8F0; }
+.roombar__notify--on { color: var(--on-forest); }
 .roombar__notify--on::after {
   content: ''; position: absolute; right: 9px; top: 8px;
   width: 7px; height: 7px; border-radius: 50%;
-  background: #9BC6A6; box-shadow: 0 0 0 2px var(--forest-deep);
+  background: var(--mint); box-shadow: 0 0 0 2px var(--forest-deep);
 }
 .roombar__notify[disabled] { opacity: .45; cursor: default; }
 .roombar__currency {
   width: 44px; height: 44px; justify-self: end; border-radius: 50%;
-  color: rgba(244, 248, 240, .78); font-size: 11.5px; font-weight: 600;
+  color: rgb(var(--on-forest-rgb) / .78); font-size: 11.5px; font-weight: 600;
 }
-.roombar__currency:hover { background: rgba(244, 248, 240, .1); color: #F4F8F0; }
+.roombar__currency:hover { background: rgb(var(--on-forest-rgb) / .1); color: var(--on-forest); }
 .roombar__title {
-  min-width: 0; text-align: center; color: #F4F8F0;
+  min-width: 0; text-align: center; color: var(--on-forest);
   font-size: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .roombar__balance { width: 44px; height: 44px; }
@@ -552,7 +700,7 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 /* Filled forest, the same way a pressed chip is filled — on the page these two
    rows are one control in two halves, and they should not answer differently. */
 .daybar__tab[aria-pressed="true"] {
-  background: var(--forest-deep); color: #F4F8F0;
+  background: var(--forest-deep); color: var(--on-forest);
 }
 .daybar__dow {
   font-family: var(--mono); font-size: 9.5px; font-weight: 600;
@@ -580,16 +728,16 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
    seen. The height it gives back goes to the list underneath. */
 .cov__track {
   flex: 1; min-width: 0; display: flex; gap: 2px; height: 6px;
-  border-radius: 3px; overflow: hidden; background: rgba(0, 0, 0, .22);
+  border-radius: 3px; overflow: hidden; background: var(--well);
 }
 /* Except when it has a word in it — a hairline has nowhere to put one. */
 .cov__track--empty { height: 13px; }
-.cov__say { flex: none; margin: 0; font-size: 12.5px; color: rgba(234, 240, 230, .7); white-space: nowrap; }
-.cov__say b { color: #F4F8F0; font-weight: 600; }
+.cov__say { flex: none; margin: 0; font-size: 12.5px; color: rgb(var(--hero-rgb) / .7); white-space: nowrap; }
+.cov__say b { color: var(--on-forest); font-weight: 600; }
 .cov__empty {
   flex: 1; display: grid; place-items: center;
   font-family: var(--mono); font-size: 9.5px; letter-spacing: .1em;
-  text-transform: uppercase; color: rgba(234, 240, 230, .4);
+  text-transform: uppercase; color: rgb(var(--hero-rgb) / .4);
 }
 
 .coverage__seg { transition: flex-grow .35s cubic-bezier(.4, 0, .2, 1); min-width: 3px; }
@@ -603,10 +751,10 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
    shear is set by the height; only losing the angle does, and the angle is
    worth more than the illusion costs. */
 .coverage__seg--gap {
-  background: repeating-linear-gradient(-45deg, var(--blaze) 0 5px, #A83C15 5px 10px);
+  background: repeating-linear-gradient(-45deg, var(--blaze) 0 5px, var(--blaze-dark) 5px 10px);
 }
 /* Plans that nobody has voted for are not a problem, so they are not orange. */
-.coverage__seg--quiet { background: rgba(234, 240, 230, .17); }
+.coverage__seg--quiet { background: rgb(var(--hero-rgb) / .17); }
 
 /* ==========================================================================
    Page content
@@ -681,7 +829,7 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 }
 .filters__chip:hover { color: var(--ink); }
 .filters__chip[aria-pressed="true"] {
-  color: #F4F8F0; background: var(--forest-deep); box-shadow: none;
+  color: var(--on-forest); background: var(--forest-deep); box-shadow: none;
 }
 /* What is left to do behind that chip — the same number the header switch used
    to carry, in the same blaze it means everywhere else. */
@@ -691,13 +839,13 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
   font-family: var(--mono); font-size: 10.5px; font-weight: 600;
   background: var(--blaze-soft); color: var(--blaze);
 }
-.filters__chip[aria-pressed="true"] .filters__n { background: var(--blaze); color: #fff; }
+.filters__chip[aria-pressed="true"] .filters__n { background: var(--blaze); color: var(--on-blaze); }
 
 /* How much a chip would put away, rather than how much is still open. Grey,
    because blaze means one thing in this app and this is the opposite of it. */
 .filters__n--quiet { background: var(--line); color: var(--ink-soft); }
 .filters__chip[aria-pressed="true"] .filters__n--quiet {
-  background: rgba(255, 255, 255, .22); color: #F4F8F0;
+  background: var(--well-lift); color: var(--on-forest);
 }
 .filters__chip svg { flex: none; width: 13px; height: 13px; }
 
@@ -780,7 +928,7 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
   display: block; margin: 3px 0 0; font-size: 13px; line-height: 1.45;
   color: var(--ink-soft); max-width: 56ch;
 }
-.item__open:hover .item__title { color: var(--forest-deep); }
+.item__open:hover .item__title { color: var(--forest-ink-deep); }
 .item__row { display: flex; align-items: center; gap: 7px; margin-top: 8px; flex-wrap: wrap; }
 .item__votes { font-family: var(--mono); font-size: 11.5px; color: var(--ink-faint); letter-spacing: .03em; }
 
@@ -802,7 +950,7 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 .tick:hover { box-shadow: inset 0 0 0 2px var(--ink-faint); }
 /* Blaze means one thing everywhere in this app: nobody has this. */
 .tick--open { box-shadow: inset 0 0 0 2px var(--blaze); color: var(--blaze); background: var(--blaze-soft); }
-.tick--open:hover { box-shadow: inset 0 0 0 2px var(--blaze); background: #F8DDD0; }
+.tick--open:hover { box-shadow: inset 0 0 0 2px var(--blaze); background: var(--blaze-wash); }
 .tick--mine { box-shadow: inset 0 0 0 2px var(--mine, var(--forest)); }
 .tick--mine:hover { box-shadow: inset 0 0 0 2.5px var(--mine, var(--forest)); }
 .tick--done { background: var(--mine, var(--forest)); box-shadow: none; }
@@ -823,13 +971,38 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 .who__faces { display: inline-flex; align-items: center; }
 .who__face + .who__face { margin-left: -8px; }
 .who__face {
+  position: relative; box-sizing: border-box; padding: 2px;
   width: 24px; height: 24px; border-radius: 50%;
   display: grid; place-items: center;
   font-family: var(--mono); font-size: 9.5px; font-weight: 700; letter-spacing: -.02em;
   color: var(--who); background: var(--paper);
   box-shadow: inset 0 0 0 2px var(--who), 0 0 0 2px var(--paper);
 }
-.who__face--packed { color: #F4F8F0; background: var(--who); }
+/* The first face on top, so each one hides the left edge of the one after it
+   and keeps its own bottom-right corner clear — that corner is where the tick
+   goes, and a tick half under the next face is a smudge. */
+.who__faces .who__face:nth-child(1) { z-index: 3; }
+.who__faces .who__face:nth-child(2) { z-index: 2; }
+.who__faces .who__face:nth-child(3) { z-index: 1; }
+/* Packed, told twice because a face and a set of initials cannot say it the same
+   way. Letters can go white on a filled circle; a photograph cannot be filled
+   in without covering the person, so it wears the tick instead. */
+.who__face--packed { color: var(--on-forest); background: var(--who); }
+.who__tick {
+  position: absolute; right: -2px; bottom: -2px;
+  width: 12px; height: 12px; border-radius: 50%;
+  display: grid; place-items: center;
+  background: var(--who); box-shadow: 0 0 0 1.5px var(--paper);
+}
+.who__tick svg { width: 8px; height: 8px; }
+
+/* A face at any size: the picture fills the ring, and the ring is the person's
+   colour, which is the one thing a photograph cannot tell you and the coverage
+   bar beside it still needs. */
+.face__photo {
+  width: 100%; height: 100%; border-radius: 50%;
+  object-fit: cover; display: block; background: var(--paper-sunk);
+}
 .who__more { font-family: var(--mono); font-size: 10.5px; font-weight: 600; color: var(--ink-faint); }
 
 /* The one × in the app, on the people list: taking somebody off the trip. Items
@@ -854,8 +1027,8 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 
 .mine__done {
   margin: 26px 0 0; padding: 15px; text-align: center;
-  font-size: 14px; font-weight: 600; color: var(--forest-deep);
-  background: #E4EEE5; border-radius: var(--r-md);
+  font-size: 14px; font-weight: 600; color: var(--forest-ink-deep);
+  background: var(--tint); border-radius: var(--r-md);
 }
 
 /* ---- foot of the list --------------------------------------------------- */
@@ -887,7 +1060,7 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 }
 .listfoot__plus svg { width: 13px; height: 13px; }
 .listfoot__add:hover .listfoot__plus {
-  color: var(--forest); background: var(--paper);
+  color: var(--forest-ink); background: var(--paper);
   box-shadow: inset 0 0 0 1.5px var(--forest);
 }
 
@@ -898,10 +1071,10 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
   min-height: 32px; padding: 0 12px; border-radius: 999px;
   font-size: 13px; font-weight: 600; white-space: nowrap;
   color: var(--blaze); background: var(--blaze-soft);
-  box-shadow: inset 0 0 0 1.5px rgba(219, 83, 34, .3);
+  box-shadow: inset 0 0 0 1.5px rgb(var(--blaze-rgb) / .3);
   transition: background .12s ease;
 }
-.listfoot__ask:hover { background: #F8DDD0; }
+.listfoot__ask:hover { background: var(--blaze-wash); }
 .listfoot__ask svg { flex: none; margin-left: -2px; }
 
 /* ---- chips that are information, not a job ------------------------------ */
@@ -962,7 +1135,7 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 }
 .segmented__btn:hover { color: var(--ink); }
 .segmented__btn[aria-pressed="true"] {
-  background: var(--forest-deep); color: #F4F8F0; box-shadow: var(--shadow);
+  background: var(--forest-deep); color: var(--on-forest); box-shadow: var(--shadow);
 }
 
 /* ---- meal coverage ------------------------------------------------------ */
@@ -999,9 +1172,9 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 .meals__cell svg { width: 13px; height: 13px; }
 .meals__cell:hover { box-shadow: inset 0 0 0 1.5px var(--line-strong); color: var(--ink-soft); }
 .meals__cell--on {
-  background: var(--forest-deep); color: #F4F8F0; box-shadow: none;
+  background: var(--forest-deep); color: var(--on-forest); box-shadow: none;
 }
-.meals__cell--on:hover { color: #F4F8F0; box-shadow: none; filter: brightness(1.12); }
+.meals__cell--on:hover { color: var(--on-forest); box-shadow: none; filter: brightness(1.12); }
 .meals__cell--gap {
   background: var(--blaze-soft); color: var(--blaze);
   box-shadow: inset 0 0 0 1.5px var(--blaze);
@@ -1027,7 +1200,7 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 }
 .days__chip:hover { color: var(--ink); box-shadow: inset 0 0 0 1.5px var(--line-strong); }
 .days__chip[aria-pressed="true"] {
-  background: var(--forest-deep); color: #F4F8F0; box-shadow: none;
+  background: var(--forest-deep); color: var(--on-forest); box-shadow: none;
 }
 
 /* ---- empty state -------------------------------------------------------- */
@@ -1071,31 +1244,31 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 .room-door {
   display: grid; grid-template-columns: 44px minmax(0, 1fr) auto;
   align-items: center; gap: 12px; min-height: 116px; padding: 20px;
-  border-radius: var(--r-lg); background: var(--forest-deep); color: #F4F8F0;
+  border-radius: var(--r-lg); background: var(--forest-deep); color: var(--on-forest);
   text-decoration: none; transition: background .16s ease, transform .12s ease;
 }
 .room-door:hover { background: var(--forest); }
 .room-door:active { transform: translateY(1px); }
 .room-door__icon {
   width: 44px; height: 44px; display: grid; place-items: center;
-  border-radius: var(--r-md); background: rgba(244, 248, 240, .1);
+  border-radius: var(--r-md); background: rgb(var(--on-forest-rgb) / .1);
 }
 .room-door__icon svg { width: 24px; height: 24px; }
 .room-door__copy { min-width: 0; }
 .room-door__copy strong { display: block; font-family: var(--display); font-size: 18px; }
 .room-door__copy > span {
-  display: block; margin-top: 4px; color: rgba(244, 248, 240, .72);
+  display: block; margin-top: 4px; color: rgb(var(--on-forest-rgb) / .72);
   font-size: 13.5px; line-height: 1.4;
 }
 /* The last thing said, on one line: enough to tell whether the room is worth
    opening, never enough for the door to start being the conversation. The
    ellipsis is CSS so it falls where the door actually runs out of width. */
 .room-door__last { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.room-door__last b { color: #F4F8F0; font-weight: 600; }
+.room-door__last b { color: var(--on-forest); font-weight: 600; }
 .room-door__go { font-size: 13px; font-weight: 600; white-space: nowrap; }
 .room-door__unread {
   display: inline-flex; min-height: 25px; padding: 2px 8px; align-items: center;
-  border-radius: 999px; background: rgba(244, 248, 240, .14); color: #fff;
+  border-radius: 999px; background: rgb(var(--on-forest-rgb) / .14); color: var(--on-forest);
 }
 
 .card {
@@ -1154,7 +1327,7 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 .stay__date {
   display: flex; align-items: baseline; gap: 4px; margin-top: 2px;
   font-family: var(--display); font-weight: 600; font-size: 14px;
-  letter-spacing: -0.01em; color: var(--forest-deep);
+  letter-spacing: -0.01em; color: var(--forest-ink-deep);
 }
 .stay__date b {
   font-weight: 800; font-size: 25px; line-height: 1;
@@ -1202,7 +1375,7 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 .where__pin svg { display: block; width: 15px; height: 15px; }
 
 .when__ask {
-  font: inherit; font-weight: 600; color: var(--forest);
+  font: inherit; font-weight: 600; color: var(--forest-ink);
   text-decoration: underline; text-decoration-color: var(--line-strong); text-underline-offset: 3px;
 }
 .when__ask:hover { text-decoration-color: currentColor; }
@@ -1219,7 +1392,7 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 /* A trip with no dates has nothing to count down to, so the number's slot
    carries the question instead of a shrug. */
 .countdown--ask { width: 100%; text-align: left; }
-.countdown__go { font-size: 13px; font-weight: 600; color: var(--forest); }
+.countdown__go { font-size: 13px; font-weight: 600; color: var(--forest-ink); }
 .countdown--ask:hover .countdown__go { text-decoration: underline; }
 
 /* What the trip is waiting on, above the four bars it is spread across. The
@@ -1234,12 +1407,12 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 .status__work .btn { flex: none; }
 .countdown__n {
   font-family: var(--display); font-weight: 800; font-size: 46px; line-height: .9;
-  letter-spacing: -0.035em; font-variant-numeric: tabular-nums; color: var(--forest-deep);
+  letter-spacing: -0.035em; font-variant-numeric: tabular-nums; color: var(--forest-ink-deep);
 }
 .countdown__word { font-size: 15px; color: var(--ink-soft); }
 .countdown__word--alone {
   font-family: var(--display); font-weight: 800; font-size: 28px;
-  letter-spacing: -0.02em; color: var(--forest-deep);
+  letter-spacing: -0.02em; color: var(--forest-ink-deep);
 }
 
 /* Every other tab shows one list. Here they all report in, and a row is a
@@ -1264,7 +1437,7 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 .ready__say { font-size: 12.5px; color: var(--ink-soft); white-space: nowrap; text-align: right; }
 .ready__say b { color: var(--ink); font-weight: 600; }
 .ready__none { color: var(--ink-faint); }
-.ready__row:hover .ready__name { color: var(--forest); }
+.ready__row:hover .ready__name { color: var(--forest-ink); }
 
 .status__mine {
   margin: 14px 0 0; padding-top: 13px; border-top: 1px solid var(--line);
@@ -1277,7 +1450,16 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
    top of it rather than to the middle of a block whose height varies. */
 .person { display: flex; align-items: flex-start; gap: 11px; padding: 10px 0; border-bottom: 1px solid var(--line); }
 .person:last-child { border-bottom: 0; }
-.person__swatch { width: 13px; height: 13px; border-radius: 3px; flex: none; margin-top: 4px; }
+/* The roster is the one page that is only about the people on the trip, so it
+   gets the largest face. A colour chip was standing in for somebody whose photo
+   the app already had. */
+.person__face {
+  box-sizing: border-box; flex: none; padding: 2px; margin-top: 1px;
+  width: 30px; height: 30px; border-radius: 50%;
+  display: grid; place-items: center;
+  font-family: var(--mono); font-size: 11px; font-weight: 700; letter-spacing: -.02em;
+  color: var(--who); background: var(--paper); box-shadow: inset 0 0 0 2px var(--who);
+}
 .person__main { flex: 1; min-width: 0; }
 .person__name { display: block; font-weight: 500; font-size: 15px; }
 .person__you { font-size: 12px; color: var(--ink-faint); }
@@ -1292,7 +1474,7 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
   font: inherit; font-size: 13px; line-height: 1.4; color: var(--ink-faint);
   overflow-wrap: anywhere;
 }
-.person__diet:hover { color: var(--forest); }
+.person__diet:hover { color: var(--forest-ink); }
 .person__diet--set { color: var(--ink-soft); }
 
 .invite__note { margin: 14px 0 0; font-size: 12.5px; color: var(--ink-faint); }
@@ -1306,7 +1488,7 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 .app--room {
   height: 100dvh; min-height: 0; padding-bottom: var(--kb);
   display: flex; flex-direction: column; overflow: hidden;
-  background: #DEE5DA;
+  background: var(--bar);
 }
 .room-page {
   flex: 1; min-height: 0; width: 100%; max-width: 760px;
@@ -1317,7 +1499,7 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
   --chat-pad-x: 18px;
   width: 100%; min-height: 0; margin: 0; padding: 0;
   display: flex; flex-direction: column; overflow: hidden;
-  background-color: #DEE5DA;
+  background-color: var(--bar);
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='140' viewBox='0 0 180 140'%3E%3Cg fill='none' stroke='%231B382E' stroke-opacity='.055' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M14 34h34M19 34 31 14l12 20M25 34l6-10 6 10'/%3E%3Cpath d='M91 12v27M78 28l13-16 13 16M82 34l9-13 9 13'/%3E%3Cpath d='M137 82h20v13a8 8 0 0 1-8 8h-4a8 8 0 0 1-8-8V82Zm20 4h4a5 5 0 0 1 0 10h-4'/%3E%3Cpath d='M42 94c8-9 18-8 24 0-8 9-18 9-24 0Zm12-6v13'/%3E%3Cpath d='m97 104 7-12 7 12-7 4-7-4Zm7 4v15'/%3E%3Ccircle cx='155' cy='31' r='5'/%3E%3Cpath d='m151 27-4-4m12 4 4-4m-8 13v6'/%3E%3C/g%3E%3C/svg%3E");
 }
 .chat__body {
@@ -1331,7 +1513,7 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
   content: ''; width: 7px; height: 7px; border-radius: 50%;
   background: var(--ink-faint); box-shadow: 0 0 0 1px var(--paper);
 }
-.chat__connection[data-state="live"] { color: var(--forest); }
+.chat__connection[data-state="live"] { color: var(--forest-ink); }
 .chat__connection[data-state="live"]::before { background: var(--forest); }
 .chat__connection[data-state="offline"] { color: var(--ink-soft); }
 .chat__connection[data-state="offline"]::before {
@@ -1340,7 +1522,7 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 
 .chat__older {
   display: block; min-height: 36px; margin: -2px auto 7px; padding: 5px 10px;
-  font-size: 13px; font-weight: 600; color: var(--forest);
+  font-size: 13px; font-weight: 600; color: var(--forest-ink);
   text-decoration: underline; text-decoration-color: var(--line-strong);
   text-underline-offset: 3px;
 }
@@ -1349,14 +1531,19 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 
 .thread { list-style: none; margin: 0; padding: 0; }
 .thread__message {
-  display: grid; grid-template-columns: 9px minmax(0, 1fr); gap: 11px;
+  display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 10px;
   padding: 12px 0;
 }
 .thread__message:first-child { padding-top: 3px; }
 .thread__message:last-child { border-bottom: 0; }
-.thread__mark {
-  width: 9px; height: 18px; margin-top: 3px; border-radius: 2px;
-  box-shadow: inset 0 0 0 1px rgba(22, 36, 31, .12);
+/* Who said it, at the top of the message so a long one stays anchored to them.
+   A person signs with their face; Camp signs with its mark. */
+.thread__mark { margin-top: 1px; }
+.thread__mark--face {
+  box-sizing: border-box; width: 28px; height: 28px; padding: 2px;
+  border-radius: 50%; display: grid; place-items: center;
+  font-family: var(--mono); font-size: 10.5px; font-weight: 700; letter-spacing: -.02em;
+  color: var(--who); background: var(--paper); box-shadow: inset 0 0 0 2px var(--who);
 }
 .thread__content { min-width: 0; }
 .thread__meta { display: flex; align-items: baseline; gap: 10px; }
@@ -1368,16 +1555,16 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 }
 .thread__message:not(.thread__message--mine):not(.thread__message--assistant) .thread__content {
   justify-self: start; width: fit-content; max-width: min(88%, 38rem);
-  padding: 9px 12px; border-radius: var(--r-md); background: rgba(251, 252, 249, .97);
-  box-shadow: 0 1px 1px rgba(22, 36, 31, .08);
+  padding: 9px 12px; border-radius: var(--r-md); background: var(--paper-veil);
+  box-shadow: var(--drop);
 }
-.thread__message--mine { grid-template-columns: minmax(0, 1fr) 9px; }
+.thread__message--mine { grid-template-columns: minmax(0, 1fr) 28px; }
 .thread__message--mine .thread__mark { grid-column: 2; grid-row: 1; }
 .thread__message--mine .thread__content {
   grid-column: 1; grid-row: 1; justify-self: end;
   width: fit-content; max-width: min(88%, 38rem);
-  padding: 9px 12px; border-radius: var(--r-md); background: #D5E8D3;
-  box-shadow: 0 1px 1px rgba(22, 36, 31, .08);
+  padding: 9px 12px; border-radius: var(--r-md); background: var(--tint-strong);
+  box-shadow: var(--drop);
 }
 .thread__message--mine .thread__meta { justify-content: flex-end; }
 .thread__message--mine .thread__meta strong { flex: 0 1 auto; text-align: right; }
@@ -1391,16 +1578,16 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 }
 .thread__message--assistant .thread__mark {
   width: 32px; height: 32px; margin-top: 0; border-radius: 8px;
-  display: grid; place-items: center; color: #F4F8F0;
+  display: grid; place-items: center; color: var(--on-forest);
   background: var(--forest-deep); box-shadow: none;
 }
 .thread__message--assistant .thread__mark svg { width: 19px; height: 19px; }
 .thread__message--assistant .thread__content {
   max-width: 65ch; padding: 12px 14px;
-  border-radius: var(--r-md); background: #E4EEE5;
+  border-radius: var(--r-md); background: var(--tint);
 }
 .thread__camp {
-  margin-left: 6px; color: var(--forest); font-size: 9.5px; font-weight: 600;
+  margin-left: 6px; color: var(--forest-ink); font-size: 9.5px; font-weight: 600;
   letter-spacing: .04em; text-transform: uppercase;
 }
 .assistant-copy { margin-top: 7px; color: var(--ink); font-size: 14.5px; line-height: 1.5; }
@@ -1411,9 +1598,9 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 }
 .assistant-copy li { padding-left: 2px; }
 .assistant-copy li + li { margin-top: 6px; }
-.assistant-copy strong { font-weight: 600; color: var(--forest-deep); }
+.assistant-copy strong { font-weight: 600; color: var(--forest-ink-deep); }
 .assistant-copy code {
-  padding: 1px 4px; border-radius: 4px; background: rgba(27, 56, 46, .09);
+  padding: 1px 4px; border-radius: 4px; background: var(--mark);
   font-family: var(--mono); font-size: .9em;
 }
 .assistant-copy__heading {
@@ -1436,16 +1623,16 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 .chat-card--page .chat__composer {
   position: relative; z-index: 2; flex: none; margin: 0;
   padding: 12px var(--chat-pad-x) calc(12px + env(safe-area-inset-bottom));
-  background: rgba(222, 229, 218, .94);
-  box-shadow: 0 -1px 0 rgba(27, 56, 46, .14), 0 -8px 18px rgba(27, 56, 46, .04);
+  background: var(--bar-veil);
+  box-shadow: 0 -1px 0 var(--hair), 0 -8px 18px rgb(var(--forest-rgb) / .04);
   backdrop-filter: blur(8px);
   border-top: 0;
 }
 .chat__mention {
   position: absolute; left: var(--chat-pad-x); right: var(--chat-pad-x);
   bottom: calc(100% - 5px); padding: 6px;
-  border: 1px solid rgba(27, 56, 46, .14); border-radius: var(--r-md);
-  background: rgba(251, 252, 249, .98); box-shadow: var(--shadow-lift);
+  border: 1px solid var(--hair); border-radius: var(--r-md);
+  background: var(--paper-veil); box-shadow: var(--shadow-lift);
 }
 .chat__mention[hidden] { display: none; }
 .chat__mention-option {
@@ -1456,19 +1643,19 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 .chat__mention-option:hover, .chat__mention-option:focus-visible { background: var(--paper-sunk); }
 .chat__mention-mark {
   width: 38px; height: 38px; display: grid; place-items: center;
-  border-radius: 9px; color: #F4F8F0; background: var(--forest-deep);
+  border-radius: 9px; color: var(--on-forest); background: var(--forest-deep);
 }
 .chat__mention-mark svg { width: 21px; height: 21px; }
 .chat__mention-copy { min-width: 0; }
 .chat__mention-copy strong, .chat__mention-copy small { display: block; }
 .chat__mention-copy strong { font-family: var(--display); font-size: 15px; }
 .chat__mention-copy small { margin-top: 1px; color: var(--ink-soft); font-size: 12px; }
-.chat__mention-handle { color: var(--forest); font-size: 12px; font-weight: 600; }
+.chat__mention-handle { color: var(--forest-ink); font-size: 12px; font-weight: 600; }
 .chat__write {
   position: relative; border: 1.5px solid var(--line-strong); border-radius: var(--r-lg);
   background: var(--paper); transition: border-color .12s ease;
 }
-.chat__write:focus-within { border-color: var(--forest); }
+.chat__write:focus-within { border-color: var(--forest-ink); }
 .chat__write textarea {
   display: block; width: 100%; min-height: 62px; max-height: 180px; resize: none;
   padding: 19px 64px 19px 14px; border: 0; overflow-y: hidden;
@@ -1492,7 +1679,7 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 .tip:last-child { border-bottom: 0; }
 .tip__mark {
   flex: none; width: 22px; height: 22px; margin-top: 2px; border-radius: 4px;
-  background: var(--blaze); display: grid; place-items: center; color: #fff;
+  background: var(--blaze); display: grid; place-items: center; color: var(--on-blaze);
 }
 .tip__mark svg { width: 13px; height: 13px; }
 .tip h4 { margin: 0 0 4px; font-size: 15px; font-weight: 600; line-height: 1.3; }
@@ -1526,7 +1713,7 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 }
 button.wx__day:hover .wx__wet, .wx__row--open .wx__wet { color: var(--ink); }
 .wx__when { font-size: 13.5px; font-weight: 600; white-space: nowrap; }
-.wx__glyph { display: grid; place-items: center; color: var(--forest); }
+.wx__glyph { display: grid; place-items: center; color: var(--forest-ink); }
 .wx__glyph svg { width: 20px; height: 20px; display: block; }
 .wx__word {
   font-size: 13.5px; color: var(--ink-soft);
@@ -1584,7 +1771,7 @@ button.wx__day:hover .wx__wet, .wx__row--open .wx__wet { color: var(--ink); }
   box-shadow: var(--shadow); text-decoration: none;
   transition: background .16s ease, transform .12s ease;
 }
-.settle-door:hover { background: #fff; }
+.settle-door:hover { background: var(--paper-lift); }
 .settle-door:active { transform: translateY(1px); }
 .settle-door__copy { min-width: 0; }
 .settle-door__copy strong { display: block; font-family: var(--display); font-size: 18px; }
@@ -1592,8 +1779,8 @@ button.wx__day:hover .wx__wet, .wx__row--open .wx__wet { color: var(--ink); }
   display: block; margin-top: 4px; color: var(--ink-soft); font-size: 13.5px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.settle-door__total { color: var(--forest-deep); font-size: 15px; font-weight: 600; white-space: nowrap; }
-.settle-door__go { color: var(--forest); font-size: 18px; }
+.settle-door__total { color: var(--forest-ink-deep); font-size: 15px; font-weight: 600; white-space: nowrap; }
+.settle-door__go { color: var(--forest-ink); font-size: 18px; }
 
 .app--focus { padding-bottom: env(safe-area-inset-bottom); }
 .settle-page { max-width: 760px; display: grid; gap: 16px; padding-top: 20px; padding-bottom: 48px; }
@@ -1628,21 +1815,21 @@ button.wx__day:hover .wx__wet, .wx__row--open .wx__wet { color: var(--ink); }
 .expense-row b, .expense-row small { display: block; overflow-wrap: anywhere; }
 .expense-row b { font-size: 14px; }
 .expense-row small { margin-top: 2px; color: var(--ink-soft); font-size: 12px; }
-.expense-row > strong { flex: none; color: var(--forest-deep); }
+.expense-row > strong { flex: none; color: var(--forest-ink-deep); }
 .settle { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
 .settle__row {
   display: flex; align-items: baseline; justify-content: space-between; gap: 14px;
   padding: 9px 0; border-bottom: 1px solid var(--line); font-size: 14px;
 }
 .settle__row > span { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
-.settle__row > strong { flex: none; color: var(--forest-deep); white-space: nowrap; }
+.settle__row > strong { flex: none; color: var(--forest-ink-deep); white-space: nowrap; }
 /* The button that closes the line off. It sits after the amount rather than
    under it, so a list of debts still reads down the page as debts. */
 .settle__row > .btn { flex: none; align-self: center; }
 .settle__acts { display: flex; justify-content: flex-end; margin-top: 12px; }
 .settle__square {
   margin: 0; padding: 11px 13px; border-radius: var(--r-md);
-  background: #E4EEE5; color: var(--forest-deep); font-size: 14px; font-weight: 600;
+  background: var(--tint); color: var(--forest-ink-deep); font-size: 14px; font-weight: 600;
 }
 .settle__round {
   margin: 11px 0 0; font-size: 12px; line-height: 1.45; color: var(--ink-faint);
@@ -1653,8 +1840,8 @@ button.wx__day:hover .wx__wet, .wx__row--open .wx__wet { color: var(--ink); }
    and this is news. */
 .mine__facing {
   margin: 0 0 14px; padding: 11px 13px; border-radius: var(--r-md);
-  font-size: 13.5px; line-height: 1.5; color: var(--forest-deep);
-  background: #E4EEE5;
+  font-size: 13.5px; line-height: 1.5; color: var(--forest-ink-deep);
+  background: var(--tint);
 }
 
 /* ---- what people can eat ------------------------------------------------- */
@@ -1727,7 +1914,7 @@ button.wx__day:hover .wx__wet, .wx__row--open .wx__wet { color: var(--ink); }
    rather than a working constraint. */
 .tabbar__label { white-space: nowrap; }
 .tabbar__btn svg { width: 21px; height: 21px; }
-.tabbar__btn[aria-current="page"] { color: var(--forest-deep); border-top-color: var(--blaze); }
+.tabbar__btn[aria-current="page"] { color: var(--forest-ink-deep); border-top-color: var(--blaze); }
 
 /* The count sits on the corner of the icon with a ring of the bar's own colour,
    so it reads as a badge rather than smearing into the glyph underneath.
@@ -1738,7 +1925,7 @@ button.wx__day:hover .wx__wet, .wx__row--open .wx__wet { color: var(--ink); }
 .tabbar__flag {
   position: absolute; top: -4px; left: 12px;
   min-width: 15px; height: 15px; padding: 0 4px; border-radius: 8px;
-  background: var(--blaze); color: #fff;
+  background: var(--blaze); color: var(--on-blaze);
   font-family: var(--mono); font-size: 9.5px; font-weight: 600; line-height: 1;
   display: grid; place-items: center;
   box-shadow: 0 0 0 2px var(--paper);
@@ -1754,7 +1941,7 @@ button.wx__day:hover .wx__wet, .wx__row--open .wx__wet { color: var(--ink); }
      a sheet pinned to the bottom opens underneath the keys. Standing the scrim
      on top of the keyboard puts the sheet back where a thumb can reach it. */
   position: fixed; inset: 0 0 var(--kb); z-index: 50;
-  background: rgba(22, 36, 31, .45);
+  background: var(--scrim);
   display: flex; align-items: flex-end; justify-content: center;
   animation: fade .16s ease;
 }
@@ -1813,6 +2000,85 @@ button.wx__day:hover .wx__wet, .wx__row--open .wx__wet { color: var(--ink); }
    under it to carry a label of its own. */
 .sheet__body > .eyebrow { display: block; margin-bottom: 9px; }
 
+/* ---- settings ------------------------------------------------------------ */
+
+/* One column, and no wider than a paragraph is comfortable to read. The trip
+   pages go two-up on a desktop because they are a status board you take in at
+   once; this is a list of decisions you make one at a time, and a second column
+   of switches would only make you check both sides for the one you came for. */
+.set-page {
+  max-width: 620px; display: grid; gap: 16px;
+  padding-top: 20px; padding-bottom: 48px;
+}
+.set-card { margin-bottom: 0; }
+.set-card > h2 { font-size: 19px; margin-bottom: 12px; }
+.set-card > p.card__body { margin: 0 0 14px; }
+.set-card .segmented { grid-template-columns: repeat(3, 1fr); margin-bottom: 12px; }
+
+/* The heading inside a card, for the one card with two halves to it. */
+.set-sub {
+  font-family: var(--mono); font-size: 11px; font-weight: 600;
+  letter-spacing: .14em; text-transform: uppercase; color: var(--ink-faint);
+  margin: 20px 0 8px;
+}
+
+.set-note { margin: 0; color: var(--ink-soft); font-size: 13px; line-height: 1.5; }
+.set-note--warn { color: var(--blaze); }
+.set-card .set-note + .btn { margin-top: 14px; }
+
+.account { display: flex; align-items: center; gap: 13px; margin-bottom: 14px; }
+.account__face { border-radius: 50%; background: var(--paper-sunk); object-fit: cover; }
+.account__face--none {
+  width: 48px; height: 48px; display: grid; place-items: center;
+  font-family: var(--mono); font-size: 15px; font-weight: 600;
+  color: var(--on-forest); background: var(--forest);
+}
+.account__who { display: grid; gap: 1px; min-width: 0; }
+.account__who b { font-size: 16px; }
+.account__who span {
+  color: var(--ink-soft); font-size: 13px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* A switch is a row you press, not a track you have to hit. The label and the
+   note are inside the button, so the target is the whole width of the card —
+   which is what makes this work with a thumb, in a tent, in the dark. */
+.switches { display: grid; gap: 4px; }
+.switch {
+  width: 100%; display: flex; align-items: center; gap: 14px; text-align: left;
+  padding: 12px 4px; border-radius: var(--r-md);
+  transition: background .12s ease;
+}
+.switch + .switch { box-shadow: 0 -1px 0 var(--line); }
+.switch:hover { background: var(--paper-sunk); }
+.switch[disabled] { opacity: .5; pointer-events: none; }
+.switch__say { display: grid; gap: 2px; min-width: 0; flex: 1; }
+.switch__label { font-size: 15px; font-weight: 600; }
+.switch__note { color: var(--ink-soft); font-size: 12.5px; line-height: 1.45; }
+
+.switch__track {
+  flex: none; width: 46px; height: 28px; border-radius: 999px;
+  background: var(--switch-off); position: relative;
+  /* The edge of the track, so the control has an outline of its own against
+     paper as well as a knob inside it. */
+  box-shadow: inset 0 0 0 1px var(--hair);
+  transition: background .16s ease;
+}
+.switch__knob {
+  position: absolute; top: 3px; left: 3px; width: 22px; height: 22px;
+  border-radius: 50%; background: var(--switch-knob); box-shadow: var(--drop);
+  transition: transform .16s ease;
+}
+.switch[aria-checked="true"] .switch__track { background: var(--forest); }
+.switch[aria-checked="true"] .switch__knob { transform: translateX(18px); }
+
+/* Colour is never the only difference in this app, and a switch is the easiest
+   place in the world to break that rule. The knob's position says it too, and
+   for anyone who cannot see either, role="switch" says it out loud. */
+@media (prefers-reduced-motion: reduce) {
+  .switch__knob, .switch__track { transition: none; }
+}
+
 /* ---- picker rows -------------------------------------------------------- */
 
 .pick {
@@ -1822,7 +2088,7 @@ button.wx__day:hover .wx__wet, .wx__row--open .wx__wet { color: var(--ink); }
   transition: box-shadow .12s ease, background .12s ease;
 }
 .pick:hover { box-shadow: inset 0 0 0 1.5px var(--forest); }
-.pick[aria-pressed="true"] { background: #fff; box-shadow: inset 0 0 0 2px var(--forest); }
+.pick[aria-pressed="true"] { background: var(--paper-lift); box-shadow: inset 0 0 0 2px var(--forest); }
 .pick__swatch { width: 15px; height: 15px; border-radius: 4px; flex: none; }
 .pick__main { flex: 1; min-width: 0; }
 .pick__title { font-weight: 500; font-size: 15px; }
@@ -1832,7 +2098,7 @@ button.wx__day:hover .wx__wet, .wx__row--open .wx__wet { color: var(--ink); }
    when you answer it a particular way. Quiet: it is read once and then never
    again, so it must not compete with the answer above it. */
 .field__hint { margin: 7px 0 0; font-size: 12.5px; color: var(--ink-soft); line-height: 1.4; }
-.pick__tick { flex: none; width: 20px; height: 20px; color: var(--forest); opacity: 0; }
+.pick__tick { flex: none; width: 20px; height: 20px; color: var(--forest-ink); opacity: 0; }
 .pick[aria-pressed="true"] .pick__tick { opacity: 1; }
 
 /* A cost belongs to one claim, so its route sits directly under that person's
@@ -1841,7 +2107,7 @@ button.wx__day:hover .wx__wet, .wx__row--open .wx__wet { color: var(--ink); }
 .claim-row .pick { margin-bottom: 0; }
 .claim-row__cost {
   display: block; margin: 4px 12px 0 40px; padding: 3px 0;
-  font-size: 12.5px; font-weight: 600; color: var(--forest); text-align: left;
+  font-size: 12.5px; font-weight: 600; color: var(--forest-ink); text-align: left;
 }
 .claim-row__cost:hover { text-decoration: underline; text-underline-offset: 3px; }
 .expense-split {
@@ -1866,7 +2132,7 @@ button.wx__day:hover .wx__wet, .wx__row--open .wx__wet { color: var(--ink); }
 }
 .expense-person__name { min-width: 0; overflow-wrap: anywhere; }
 .expense-person__who > input {
-  flex: none; width: 18px; height: 18px; margin: 0; accent-color: var(--forest);
+  flex: none; width: 18px; height: 18px; margin: 0; accent-color: var(--forest-ink);
 }
 .expense-person__amount { display: none; }
 .expense-form[data-split="custom"] .expense-person__amount { display: block; }
@@ -1876,7 +2142,7 @@ button.wx__day:hover .wx__wet, .wx__row--open .wx__wet { color: var(--ink); }
   background: var(--paper); font-family: var(--mono); font-size: 14px; text-align: right;
   transition: border-color .12s ease, opacity .12s ease;
 }
-.expense-person__amount input:focus { border-color: var(--forest); outline-offset: 1px; }
+.expense-person__amount input:focus { border-color: var(--forest-ink); outline-offset: 1px; }
 .expense-person__amount input:disabled { opacity: .42; }
 .expense-split__total {
   display: none; min-height: 20px; margin: 9px 0 0;
@@ -1902,7 +2168,7 @@ button.wx__day:hover .wx__wet, .wx__row--open .wx__wet { color: var(--ink); }
    it: a question is not a reason to swallow "That change is not saved." */
 .ask-scrim {
   position: fixed; inset: 0 0 var(--kb); z-index: 65;
-  background: rgba(22, 36, 31, .5);
+  background: var(--scrim-deep);
   display: flex; align-items: center; justify-content: center;
   padding: 20px; padding-bottom: calc(20px + env(safe-area-inset-bottom));
   animation: fade .16s ease;
@@ -1949,7 +2215,7 @@ button.wx__day:hover .wx__wet, .wx__row--open .wx__wet { color: var(--ink); }
   position: fixed; left: 50%; bottom: calc(var(--tabbar-h) + 18px + env(safe-area-inset-bottom));
   transform: translate(-50%, 12px); z-index: 60;
   padding: 11px 17px; border-radius: 999px;
-  background: var(--forest-deep); color: #EAF0E6;
+  background: var(--forest-deep); color: var(--hero-ink);
   font-size: 14px; font-weight: 500; box-shadow: var(--shadow-lift);
   opacity: 0; pointer-events: none; transition: opacity .18s ease, transform .18s ease;
   max-width: calc(100vw - 36px);

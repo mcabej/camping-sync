@@ -600,6 +600,139 @@ For local or LAN testing without Google, set `DEV_AUTH_BYPASS=1` in `.env.local`
 and use **Continue as developer**. The bypass is opt-in and is ignored whenever
 `NODE_ENV=production`.
 
+### Faces
+
+Google hands over a photograph at sign-in, and it is what a person is drawn as:
+in the Planning Room, on the row of who is bringing a thing, on the roster. The
+initials it replaced are still the answer for everybody it has no picture of —
+somebody who joined by link and typed a name, a member added on their behalf —
+so both have to hold, usually side by side on the same row. `faceInner()` in
+`public/app.js` is the one place that decides which.
+
+The colour stays, as the ring. It is the same colour as that person's share of
+the coverage bar and their tick, and those cannot carry a face — a photograph
+tells you who somebody is but not which segment of the bar is theirs.
+
+Packed is told twice, because a face and a set of initials cannot say it the
+same way. Letters can go white on a filled circle; a photograph cannot be filled
+in without covering the person up, so it wears a tick in its bottom-right corner
+instead. That corner is why the overlapping stack puts the first face on top:
+each face hides the *left* edge of the one after it, leaving every tick clear.
+
+`getTripState` sends the picture only to a viewer who is on the trip. A link
+travels further than it was meant to, and to somebody holding a forwarded one, a
+row of faces is a set of photographs of strangers handed over for nothing — so
+it waits behind the same door the ledger does. The name they can have; that is
+what the invitation is about.
+
+### Settings
+
+One page at `/settings`, reachable from the home page and from a cog at the
+right-hand end of the trip header — the other end of the row from the fingerpost
+out of the trip, because both are doors rather than things you do to the trip.
+It rides in the header so it is one tap from every tab; at the foot of the trip
+page it was a long scroll on one tab out of five to reach something that has
+nothing to do with that page. It is deliberately not a tab of its own: the tab
+bar is four things you do on a trip, and this is not one of them.
+
+Going in pushes one history entry and coming out pops the same one, so the arrow
+in the corner and the browser's own back button do the same thing and the stack
+is the height it was before you looked. Leaving used to push the page you came
+from back on top instead, which reads identically on screen and is not the same:
+each visit left a pair of entries behind, so pressing back later climbed through
+every settings page you had opened before it reached the trip. The push survives
+for the one case that needs it — `/settings` opened cold from a bookmark or a
+home-screen icon has nothing underneath to pop, so the arrow puts the home page
+there.
+
+What it holds is split by who the answer belongs to, and the split decides where
+each thing is stored.
+
+| Setting                | Belongs to  | Kept in                              |
+| ---------------------- | ----------- | ------------------------------------ |
+| Theme                  | This device | `localStorage` (`cs.prefs`)          |
+| Feature switches       | This device | `localStorage` (`cs.prefs`)          |
+| Which trips may notify | You         | `notification_preferences`, server   |
+| Push subscription      | This device | `push_subscriptions`, server         |
+| Name, picture, session | You         | `users` / `sessions`, server         |
+
+A theme is about the screen in your hand and the light it is in — a phone in a
+tent at night and a laptop at a desk want different answers, and the one thing a
+synced theme cannot do is have two. Muting is the opposite: it is a decision
+about a trip, and it would be a bad joke to have to repeat it on every device
+you own, so it stays on the member row the Planning Room's bell already writes.
+The settings page and that bell send the same `PATCH`; `GET /api/notifications`
+is the only addition, and it reads every membership the session already proves
+rather than taking a trip id.
+
+Which is why a browser that cannot show a notification still gets the trip
+switches — an iPhone that has not been added to the home screen, a laptop where
+the site is blocked in browser settings, this app over a LAN address rather than
+`https`. Only the device switch is that browser's to answer; muting is yours,
+and the phone in your pocket will obey it. Hiding the whole card because *this*
+screen cannot ring meant the one device you had to hand could not quieten the
+one that could.
+
+Turning a device on subscribes it to every trip on the account at once, and
+those writes go together rather than one behind the other. If some of them fail
+the browser is genuinely subscribed to the rest, so the page re-reads
+`GET /api/notifications` instead of settling the switch back to off — an off
+switch on a device that is about to be notified is the one state worth going out
+of the way to avoid. A read that fails outright says so and offers *Try again*,
+rather than drawing an unsubscribed device with no trips, which is a real answer
+this app is capable of giving and would be the wrong one told calmly.
+
+There is nothing here for editing your name. Google rewrites it at every
+sign-in, so a field to change it would be a field that silently reverts. The
+name you *can* change is the one on a particular trip, which is a different name
+on purpose, and it is edited beside the people it distinguishes you from.
+
+### Themes
+
+Every colour is a custom property in `:root`, and `[data-theme="dark"]` answers
+the same names again. Values that carry an alpha keep their channels in a
+`--*-rgb` token, so a use site stays at exactly the alpha it was tuned to
+instead of rounding to the nearest shared one.
+
+Dark is not the light palette inverted. The canvas goes to a green-black rather
+than a neutral one, so the app still feels like it is outdoors at night; blaze
+is lifted, because `#DB5322` on a dark ground reads brown and blaze meaning
+"nobody has picked this up" is the one thing that cannot go quiet; and the eight
+person colours are lifted too, because at 4% lightness a plum and a brown are
+the same circle. The header and tab bar stay dark green in both themes, so
+everything named `--on-forest` is the same in both.
+
+There is no `prefers-color-scheme` block to keep in step with the dark one.
+"System" is resolved to a real light or dark by an inline script in
+`index.html` before the first paint — which is also what stops a dark app
+flashing white on the way in — and re-resolved by `applyTheme()` when the
+system flips while the app is open. Every screen here is drawn by JavaScript,
+so a palette that needed none would be a palette for a blank page.
+
+### Feature switches
+
+Five things can be turned off: Camp in the Planning Room, the forecast, the
+suggestions and camp smarts, the countdown, and the offer to add to the home
+screen. They are on until somebody says otherwise — a switch is for quietening
+an app you already use, not a checklist to fill in before it works.
+
+Each one turns off the request behind it as well as the card in front of it: the
+forecast card and `wantWeather()` go together, so a card nobody is showing does
+not keep asking a forecast service. Camp goes furthest, because it is the only
+one whose absence someone can undo by typing: with it off, `POST /messages`
+carries `invokeAssistant: false` and the server files the message as ordinary
+talk without reaching the assistant at all. Taking away the placeholder and the
+`@camp` completion only removed the invitation — the eight characters typed by
+hand still summoned an assistant in a room the settings page had promised was
+just the group. The flag is the sender's, not the room's: one person can have
+Camp switched off while everybody else keeps it, and a client that says nothing
+still gets an answer. Turning one off changes only what this
+device shows you, and never what the trip contains — everyone else's page keeps
+whatever they have turned on. Where removing something would leave a hole, the
+page is re-arranged rather than gapped: with suggestions off, an empty list
+offers *Add the first thing* as its loud button rather than leaving a link where
+a door used to be.
+
 ## Configuration
 
 | Variable           | Default             | Notes                                      |

@@ -6,6 +6,19 @@
 <title>Camping Sync</title>
 <meta name="description" content="Work out who's bringing what, what you're eating, and what you're doing — without losing the plan in a group chat.">
 <meta name="theme-color" content="#1B382E">
+<!-- The theme has to be on the page before the first paint, or a dark app opens
+     with a white flash on every visit. Reading one localStorage key inline is
+     the whole of it; app.js re-applies the same answer once it loads, and both
+     resolve "system" to a real light or dark rather than leaving it to CSS. -->
+<script>
+  try {
+    var pref = JSON.parse(localStorage.getItem('cs.prefs') || '{}').theme || 'system'
+    var dark = pref === 'dark' || (pref === 'system'
+      && matchMedia('(prefers-color-scheme: dark)').matches)
+    document.documentElement.dataset.theme = dark ? 'dark' : 'light'
+    if (dark) document.querySelector('meta[name="theme-color"]').content = '#16261F'
+  } catch (e) { document.documentElement.dataset.theme = 'light' }
+</script>
 <!-- A campsite address is a place name and a country, which iOS reads as a date,
      a phone number and an address all at once and paints in three of its own
      colours. The app already says which words are a link and which are not. -->

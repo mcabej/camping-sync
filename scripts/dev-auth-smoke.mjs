@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { rmSync } from 'node:fs'
+import { DatabaseSync } from 'node:sqlite'
 import { strict as assert } from 'node:assert'
 
 const port = 32000 + (process.pid % 1000)
@@ -119,6 +120,67 @@ try {
     participants: ['not-on-this-trip'],
   })
   assert.equal(outsiderResponse.status, 400)
+
+  // The settings page reads every trip's alerts in one answer. It takes no trip
+  // id, so the thing worth proving is that it hands back the memberships the
+  // session owns and nobody else's — and that muting from there is the same row
+  // the bell in the Planning Room writes.
+  assert.equal((await fetch(`${origin}/api/notifications`)).status, 401)
+
+  const alertsResponse = await request('/notifications', first.cookie)
+  assert.equal(alertsResponse.status, 200)
+  const alerts = await alertsResponse.json()
+  assert.deepEqual(alerts.trips.map((trip) => trip.tripId), [created.trip.id])
+  assert.equal(alerts.trips[0].name, 'Petrol test')
+  assert.equal(alerts.trips[0].muted, false)
+  assert.ok(alerts.publicKey)
+
+  const secondAlerts = await (await request('/notifications', second.cookie)).json()
+  assert.deepEqual(secondAlerts.trips.map((trip) => trip.tripId), [created.trip.id])
+
+  await request(`/trips/${created.trip.id}/notifications`, first.cookie, 'PATCH', { muted: true })
+  const mutedAlerts = await (await request('/notifications', first.cookie)).json()
+  assert.equal(mutedAlerts.trips[0].muted, true)
+  // One person muting a trip does not mute it for the rest of them.
+  const otherAlerts = await (await request('/notifications', second.cookie)).json()
+  assert.equal(otherAlerts.trips[0].muted, false)
+
+  // A face belongs to the people on the trip. The development sign-in has no
+  // picture to hand — Google is where they come from — so one is written onto
+  // the row directly: what is being tested is not where it came from but who it
+  // is given to.
+  const side = new DatabaseSync(path)
+  side.prepare('UPDATE users SET picture = ? WHERE id = ?')
+    .run('https://lh3.example/face.png', first.data.user.id)
+  side.close()
+
+  const asMember = await (await request(`/trips/${created.trip.id}`, first.cookie)).json()
+  assert.equal(asMember.members.find((m) => m.id === created.memberId).picture,
+    'https://lh3.example/face.png')
+
+  // A trip link travels further than it was meant to. A name is what the
+  // invitation is about; a row of photographs of strangers is not, so it waits
+  // behind the same door the ledger does.
+  const asStranger = await (await fetch(`${origin}/api/trips/${created.trip.id}`)).json()
+  assert.deepEqual(asStranger.members.map((m) => m.picture), ['', ''])
+  assert.deepEqual(asStranger.members.map((m) => m.name), ['Driver', 'Passenger'])
+
+  // Camp switched off in settings is a promise about the room, and the half of
+  // it that matters is here: hiding the placeholder still left @camp summoning
+  // an assistant the person had turned off. `unavailable` is this test server
+  // having no key — the point is that the first message reaches that decision at
+  // all and the second never gets near it, so it is saved as ordinary talk.
+  const say = async (clientId, extra) => (await request(
+    `/trips/${created.trip.id}/messages`, first.cookie, 'POST',
+    { clientId, text: '@camp add a tarp to the gear list', ...extra },
+  )).json()
+
+  assert.deepEqual((await say('camp-on')).assistant, { status: 'unavailable' })
+  const quiet = await say('camp-off', { invokeAssistant: false })
+  assert.equal(quiet.assistant, null)
+  assert.equal(quiet.message.body, '@camp add a tarp to the gear list')
+  assert.equal(quiet.message.role, 'member')
+
   console.log('development auth smoke passed')
 } finally {
   if (server.exitCode === null) {

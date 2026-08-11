@@ -27,23 +27,65 @@ const askButton = el()
 roots['ask-root'].querySelector = (sel) => (
   sel === '[autofocus]' && roots['ask-root'].innerHTML.includes('autofocus') ? askButton : null)
 
+// The theme is written to the root element and to the meta tag the browser
+// paints the status bar from, so both are real enough here to be read back.
+const themeMeta = { content: '' }
 globalThis.document = {
   getElementById: (id) => roots[id], addEventListener() {}, createElement: el,
-  documentElement: { style: { setProperty() {} }, classList: { toggle() {} } },
+  documentElement: { style: { setProperty() {} }, classList: { toggle() {} }, dataset: {} },
   body: { classList: { add() {}, remove() {}, toggle() {} }, style: { setProperty() {}, removeProperty() {} } },
-  hidden: false, querySelector: () => null,
+  hidden: false,
+  querySelector: (sel) => (sel === 'meta[name="theme-color"]' ? themeMeta : null),
   // Readable and writable, because the tests set it by hand to say "the cursor
   // is in the message box" and focus() sets it the way the app does.
   get activeElement() { return onFocus },
   set activeElement(node) { onFocus = node },
 }
-globalThis.matchMedia = () => ({ matches: false })
+// What the phone itself is set to, which the tests move to check that "System"
+// follows it. addEventListener is real: the app subscribes to it at load.
+let systemDark = false
+const themeWatchers = []
+globalThis.matchMedia = (query) => ({
+  get matches() { return query.includes('dark') ? systemDark : false },
+  addEventListener: (_ev, fn) => themeWatchers.push(fn),
+})
+const setSystemDark = (dark) => {
+  systemDark = dark
+  for (const fn of themeWatchers) fn()
+}
 globalThis.window = {
   scrollY: 0, scrollTo() {}, scrollBy() {}, addEventListener() {},
   innerHeight: 800, visualViewport: null, matchMedia: globalThis.matchMedia,
 }
 globalThis.location = { pathname: '/', origin: 'http://x', protocol: 'http:', host: 'x' }
-globalThis.history = { pushState() {}, replaceState() {} }
+// A real stack, because the question the settings page asks of history is not
+// "did you call pushState" but "is the trip still underneath afterwards". Two
+// empty functions answer yes to both a page that pops what it pushed and a page
+// that piles a second copy on top, and those are the bug and the fix.
+const entries = [{ state: null, path: '/' }]
+const resetHistory = (path = '/') => {
+  entries.length = 0
+  entries.push({ state: null, path })
+  globalThis.location.pathname = path
+}
+globalThis.history = {
+  get state() { return entries[entries.length - 1].state },
+  get length() { return entries.length },
+  pushState(state, _title, path) {
+    entries.push({ state, path })
+    globalThis.location.pathname = path
+  },
+  replaceState(state, _title, path) {
+    entries[entries.length - 1] = { state, path }
+    globalThis.location.pathname = path
+  },
+  // The pop only. A browser follows it with a popstate, and what the app makes
+  // of that is boot's job, tested where boot is.
+  back() {
+    if (entries.length > 1) entries.pop()
+    globalThis.location.pathname = entries[entries.length - 1].path
+  },
+}
 globalThis.WebSocket = undefined
 // A real store, so what the app remembers between visits can be tested.
 const store = new Map()
@@ -54,6 +96,17 @@ globalThis.localStorage = {
   get length() { return store.size },
   key: (i) => [...store.keys()][i] ?? null,
 }
+// Enough of the push stack to be a browser that has one: the settings page asks
+// whether notifications are possible at all before it offers any switches, and
+// that question is three — a Notification, a service worker, a PushManager.
+globalThis.Notification = { permission: 'granted', requestPermission: async () => 'granted' }
+globalThis.PushManager = function PushManager() {}
+// Node brings a navigator of its own, and it is read-only, so this replaces it
+// rather than adding to it.
+Object.defineProperty(globalThis, 'navigator', {
+  configurable: true,
+  value: { userAgent: 'node', serviceWorker: { getRegistration: async () => null } },
+})
 globalThis.fetch = async () => ({ ok: true, json: async () => ({ catalog: {}, tips: [] }) })
 globalThis.__CAMPING_SYNC_TEST__ = true
 
@@ -65,7 +118,9 @@ const hooks = ['S', 'render', 'viewTrip', 'renderSheet', 'CAMP', 'TABS',
   'clearComposer', 'watchKeyboard',
   'campMentionRange', 'completeCampMention',
   'settlement', 'customExpenseShares', 'googleSignIn', 'tripRoute', 'isEditing', 'unsaved', 'restore',
-  'ask', 'askCopy', 'closeAsk']
+  'ask', 'askCopy', 'closeAsk',
+  'loadPrefs', 'savePrefs', 'applyTheme', 'viewSettings', 'showSettings', 'leaveSettings',
+  'isSettingsRoute', 'FEATURES', 'THEMES', 'PREFS_KEY']
 new Function(`${src}\n;Object.assign(globalThis, {${hooks.map((h) => `__${h}: ${h}`).join(',')}})`)()
 
 const { __S: S, __render: render, __viewTrip: viewTrip, __renderSheet: renderSheet, __TABS: TABS,
@@ -79,7 +134,11 @@ const { __S: S, __render: render, __viewTrip: viewTrip, __renderSheet: renderShe
   __settlement: settlement, __customExpenseShares: customExpenseShares,
   __googleSignIn: googleSignIn, __tripRoute: tripRoute, __isEditing: isEditing,
   __unsaved: unsaved, __restore: restore,
-  __ask: ask, __askCopy: askCopy, __closeAsk: closeAsk } = globalThis
+  __ask: ask, __askCopy: askCopy, __closeAsk: closeAsk,
+  __loadPrefs: loadPrefs, __savePrefs: savePrefs, __applyTheme: applyTheme,
+  __viewSettings: viewSettings, __showSettings: showSettings, __leaveSettings: leaveSettings,
+  __isSettingsRoute: isSettingsRoute, __FEATURES: FEATURES, __THEMES: THEMES,
+  __PREFS_KEY: PREFS_KEY } = globalThis
 const { CATALOG } = await import('../lib/catalog.js')
 
 // A trip with a bit of everything: claimed by one, claimed by three, unclaimed,
@@ -135,6 +194,7 @@ S.expenses = [
 const find = (html, needle) => html.includes(needle)
 let bad = 0
 const check = (label, ok) => { if (!ok) { bad++; console.log(`  FAIL  ${label}`) } else console.log(`  ok    ${label}`) }
+const section = (title) => console.log(`\n${title}`)
 
 const signedAuth = S.auth
 S.auth = { ...signedAuth, clientId: '', devBypass: true, user: null }
@@ -203,6 +263,48 @@ check('a packed share is a filled face', find(eatRows, 'who__face who__face--pac
 // carry nothing on the right at all.
 check('nothing at all beside a thing nobody has', (eatRows.match(/class="who"/g) ?? []).length === 2)
 check('no + beside the faces', !find(eatRows, 'who__add') && !find(eatRows, 'who__none'))
+
+section('Faces')
+
+// Google hands a photograph over at sign-in and the app was drawing two letters
+// on top of it. The letters are still the answer for everybody it has no picture
+// of — someone who joined by link and typed a name — so both have to hold, and
+// usually side by side on the same row.
+const plainMembers = S.members
+const wasCamp = S.camp
+S.members = plainMembers.map((m) => (m.id === 'm2' || m.id === 'm3'
+  ? m
+  : { ...m, picture: `https://lh3.example/${m.id}.png?sz="96` }))
+const withFaces = viewTrip()
+check('somebody Google has a picture of is drawn as that picture',
+  find(withFaces, 'class="face__photo" src="https://lh3.example/m1.png?sz=&quot;96"'))
+// The URL is somebody else's string arriving by way of the server.
+check('and a quote in it cannot end the attribute it sits in', !find(withFaces, 'sz="96"'))
+check('whoever it has no picture of keeps their initials', find(withFaces, '>AK<'))
+check('and the person it does have one of stops wearing theirs', !find(withFaces, '>JO<'))
+// Packed used to be a filled circle, which is a thing you cannot do to a face
+// without covering the person up.
+check('a packed share still says so, in a corner the next face does not cover',
+  find(withFaces, 'class="who__tick"'))
+
+S.camp = 'room'
+const roomFaces = viewTrip()
+check('a message is signed with whoever wrote it rather than a coloured tab',
+  find(roomFaces, 'class="thread__mark thread__mark--face"') && !find(roomFaces, '<span class="thread__mark" style='))
+check('the one without a picture is signed with initials in the same place',
+  find(roomFaces, '>SA<'))
+check('and Camp keeps its own mark', find(roomFaces, '<span class="thread__mark" aria-hidden="true">'))
+
+S.camp = 'overview'
+check('the roster is the people on the trip, at the size of a face',
+  find(viewTrip(), 'class="person__face"'))
+
+S.members = plainMembers
+S.camp = wasCamp
+S.tab = 'eat'
+check('with nobody signed in through Google, every face is initials again',
+  !find(viewTrip(), 'face__photo') && find(viewTrip(), '>JO<'))
+
 S.tab = 'pack'
 
 S.filter = { kind: 'own', cat: '', hide: false, q: '' }
@@ -240,12 +342,12 @@ check('Mine has claimed food/drink', find(mine, 'Burgers') && find(mine, 'Beer')
 check('Mine has personal kit', find(mine, 'Sleeping bag') && find(mine, 'Headlamp'))
 check("Mine excludes others' claims", !find(mine, 'Cooler'))
 check('Mine excludes plans', !find(mine, 'Hike'))
-check('no badge on the tab you are on', !find(mine, 'style="background:#2F6B57">4'))
+check('no badge on the tab you are on', !find(mine, 'style="background:var(--m0)">4'))
 check('Mine has no standing paragraph', !find(mine, 'class="page__note"'))
 check('Mine filters by kind', find(mine, 'data-act="filter-kind" data-value="own"'))
 check('Mine filters by category', find(mine, 'data-act="filter-cat" data-value="Camp kitchen"'))
 check('Mine counts are all yours, none blaze',
-  !find(mine, 'class="filters__n">') && find(mine, 'class="filters__n" style="background:#2F6B57'))
+  !find(mine, 'class="filters__n">') && find(mine, 'class="filters__n" style="background:var(--m0)'))
 
 S.filter = { kind: '', cat: 'Camp kitchen', hide: false, q: '' }
 const mineKitchen = viewTrip()
@@ -374,7 +476,7 @@ check('Pack tab badge suppressed while on Pack', !find(pack, '<span class="tabba
 check('Eat tab badge shows 2', find(pack, '<span class="tabbar__flag">2<'))
 // Yours and unpacked: Tent, Burgers, Headlamp. The stove and the beer are your
 // share of them already in the car; the sleeping bag is ticked.
-check('Mine badge shows on other tabs, in your colour', find(pack, 'tabbar__flag" style="background:#2F6B57">3<'))
+check('Mine badge shows on other tabs, in your colour', find(pack, 'tabbar__flag" style="background:var(--m0)">3<'))
 check('list badges stay blaze (no inline colour)', find(pack, '<span class="tabbar__flag">2<'))
 
 // Camp is reachable from the header and lights up when you are on it.
@@ -1253,6 +1355,205 @@ check('unsigned join asks for identity', roots.root.innerHTML.includes('Sign in 
 S.auth.user = { id: 'u1', name: 'Josh', email: 'josh@example.com', picture: '' }
 render()
 check('signed-in join asks for a trip name', roots.root.innerHTML.includes('How should your name appear?'))
+
+// ---- settings ---------------------------------------------------------------
+
+section('Settings: the theme')
+
+loadPrefs()
+check('nothing kept means following the device', S.prefs.theme === 'system')
+check('and every feature on, because a switch is for quietening an app you use',
+  FEATURES.every((f) => S.prefs.features[f.id] === true))
+check('a light device resolves system to light',
+  document.documentElement.dataset.theme === 'light')
+check('and the status bar is painted to match', themeMeta.content === '#1B382E')
+
+setSystemDark(true)
+check('the phone going dark takes the app with it, with no visit in between',
+  document.documentElement.dataset.theme === 'dark' && themeMeta.content === '#16261F')
+
+S.prefs.theme = 'light'
+applyTheme()
+check('choosing light overrules the device', document.documentElement.dataset.theme === 'light')
+setSystemDark(false)
+S.prefs.theme = 'dark'
+applyTheme()
+check('and choosing dark overrules it the other way',
+  document.documentElement.dataset.theme === 'dark' && themeMeta.content === '#16261F')
+
+savePrefs()
+S.prefs = { theme: 'system', features: {} }
+loadPrefs()
+check('the theme survives the next visit', S.prefs.theme === 'dark')
+check('and is on the page before anything is drawn',
+  document.documentElement.dataset.theme === 'dark')
+
+store.set(PREFS_KEY, '{ not json')
+loadPrefs()
+check('a corrupted store falls back rather than failing to start',
+  S.prefs.theme === 'system' && FEATURES.every((f) => S.prefs.features[f.id] === true))
+
+section('Settings: the page')
+
+S.view = 'settings'
+S.auth.user = null
+S.alerts = null
+const signedOut = viewSettings()
+check('signed out, the account card offers a way in',
+  find(signedOut, 'Account') && !find(signedOut, 'data-act="sign-out"'))
+check('the theme has three answers',
+  THEMES.every((t) => find(signedOut, `data-act="theme" data-value="${t.id}"`)))
+check('and exactly one of them is pressed',
+  (signedOut.match(/aria-pressed="true"\s+data-act="theme"/g) ?? []).length === 1)
+check('signed out, notifications say what signing in would buy',
+  find(signedOut, 'Sign in to see which trips can reach you'))
+check('every feature has a switch', FEATURES.every((f) => find(signedOut, `data-act="feature" data-id="${f.id}"`)))
+check('a switch says what it is to a screen reader, not just in colour',
+  find(signedOut, 'role="switch" aria-checked="true"'))
+
+S.auth.user = { id: 'u1', name: 'Josh McCabe', email: 'josh@example.com', picture: '' }
+S.auth.memberships = [{ tripId: 't1', memberId: 'm1' }]
+const signedIn = viewSettings()
+check('signed in, the account card is who you are',
+  find(signedIn, 'Josh McCabe') && find(signedIn, 'josh@example.com'))
+check('with no picture, the initials stand in', find(signedIn, 'account__face--none'))
+check('and signing out is here rather than beside your name on the home page',
+  find(signedIn, 'data-act="sign-out"'))
+const namedAwkwardly = { id: 'u1', name: 'Josh & Sam', email: '', picture: '' }
+const wasUser = S.auth.user
+S.auth.user = namedAwkwardly
+check('a name with an ampersand in it is escaped', find(viewSettings(), 'Josh &amp; Sam'))
+S.auth.user = wasUser
+
+S.alerts = {
+  loading: false, busy: false, error: '', permission: 'granted',
+  publicKey: 'k', subscribed: true,
+  trips: [{ tripId: 't1', name: 'Wasdale Weekend', muted: true, unread: 0 }],
+}
+const withAlerts = viewSettings()
+check('this device and which trips are two questions, asked separately',
+  find(withAlerts, 'data-act="device-alerts"') && find(withAlerts, 'data-act="trip-alerts" data-id="t1"'))
+check('a muted trip reads as off', find(withAlerts, 'aria-checked="false"') && find(withAlerts, 'Muted'))
+
+S.alerts = { ...S.alerts, permission: 'denied' }
+const blocked = viewSettings()
+check('a browser-level block says so, and offers no switch that would lie',
+  find(blocked, 'blocked for this site') && !find(blocked, 'data-act="device-alerts"'))
+// Which trips may reach you is an account setting your phone obeys, so it is
+// still yours to change from the laptop that has blocked notifications — and
+// from the iPhone that cannot show one until it is on the home screen.
+check('but which trips may reach you is still yours to set from here',
+  find(blocked, 'data-act="trip-alerts" data-id="t1"'))
+
+S.alerts = { ...S.alerts, permission: 'unsupported', subscribed: false }
+const unsupported = viewSettings()
+check('a browser that cannot notify says why rather than offering a dead switch',
+  find(unsupported, 'cannot show notifications') && !find(unsupported, 'data-act="device-alerts"'))
+check('and keeps the trip switches its other devices obey',
+  find(unsupported, 'data-act="trip-alerts" data-id="t1"'))
+
+// A request that never arrived is not the answer "off, and no trips". Drawn as
+// switches it would be the wrong settings in the voice of the right ones.
+S.alerts = {
+  loading: false, busy: false, permission: '', publicKey: '', subscribed: false, trips: [],
+  error: 'Your notification settings could not be loaded.',
+}
+const alertsFailed = viewSettings()
+check('a failed read says so rather than drawing settings nobody confirmed',
+  find(alertsFailed, 'could not be loaded') && !find(alertsFailed, 'data-act="device-alerts"')
+  && !find(alertsFailed, 'No trips to be notified about yet'))
+check('and offers the one thing worth doing about it',
+  find(alertsFailed, 'data-act="retry-alerts"'))
+
+section('Settings: what the switches turn off')
+
+S.view = 'trip'
+S.alerts = null
+S.camp = 'overview'
+S.trip = { ...S.trip, start_date: '2099-09-04', end_date: '2099-09-06' }
+// With a last message to show, the room door shows it rather than what the room
+// is for — and it is the "what it is for" line that mentions @camp, so both of
+// the checks below would otherwise be reading a door that says neither.
+S.notify = { ...S.notify, tripId: 't1', latest: null }
+loadPrefs()
+const everything = viewTrip()
+check('with everything on, the trip page has the lot',
+  find(everything, 'countdown__n') && find(everything, '<h3>Weather</h3>')
+  && find(everything, 'Camp smarts') && find(everything, '<span class="mono">@camp</span>'))
+// The cog rides in the header rather than at the foot of the trip page, so it
+// is one tap from every tab instead of a scroll on one of them.
+check('and the way to settings is in the header', find(everything, 'class="topbar__cog"'))
+for (const tab of ['pack', 'eat', 'do', 'mine']) {
+  S.camp = false
+  S.tab = tab
+  check(`settings is reachable from ${tab}`, find(viewTrip(), 'data-act="settings"'))
+}
+S.camp = 'overview'
+S.tab = 'pack'
+
+S.prefs.features = { countdown: false, weather: false, suggestions: false, assistant: false, install: false }
+const quietened = viewTrip()
+check('the countdown goes, and takes its empty state with it',
+  !find(quietened, 'countdown__n') && !find(quietened, 'No dates yet'))
+check('the forecast card goes', !find(quietened, '<h3>Weather</h3>'))
+check('camp smarts goes', !find(quietened, 'Camp smarts'))
+check('and the room door stops advertising an assistant that is off',
+  !find(quietened, '<span class="mono">@camp</span>'))
+check('but the trip itself is untouched — the switches are yours, not the group\'s',
+  find(quietened, 'Wasdale Weekend') && find(quietened, 'Planning room'))
+
+S.camp = false
+S.tab = 'pack'
+S.filter = { day: '', kind: '', cat: '', hide: false, q: '' }
+const listNoSuggest = viewTrip()
+check('"What am I missing?" goes from the foot of the list',
+  !find(listNoSuggest, 'data-act="suggest"') && find(listNoSuggest, 'data-act="add"'))
+
+S.items = []
+const emptyNoSuggest = viewTrip()
+check('and an empty list offers writing your own as the loud button, not a leftover link',
+  find(emptyNoSuggest, 'btn--blaze" data-act="add"') && !find(emptyNoSuggest, 'data-act="suggest"'))
+
+S.camp = 'room'
+S.chat = { ...S.chat, assistantAvailable: true }
+const roomNoCamp = viewTrip()
+check('the room drops the @camp completion when Camp is off',
+  !find(roomNoCamp, 'id="chat-mention"') && !find(roomNoCamp, 'aria-controls="chat-mention"'))
+check('and the placeholder stops offering it', find(roomNoCamp, 'placeholder="Write a message…"'))
+
+S.prefs.features.assistant = true
+const roomWithCamp = viewTrip()
+check('turned back on, the completion comes back', find(roomWithCamp, 'id="chat-mention"'))
+
+section('Settings: the route')
+
+check('/settings is not a trip', tripRoute('/settings') === null)
+check('but it is a route this app knows', isSettingsRoute('/settings') && isSettingsRoute('/settings/'))
+check('and an ordinary path is not', !isSettingsRoute('/t/pine-camp'))
+
+resetHistory('/t/pine-camp/room')
+showSettings('/t/pine-camp/room')
+check('opening settings from a trip keeps the way back to that trip',
+  S.view === 'settings' && S.settingsBack === '/t/pine-camp/room')
+check('and the back arrow points at it', find(roots.root.innerHTML, 'href="/t/pine-camp/room"'))
+check('and it is one entry deep', history.length === 2 && location.pathname === '/settings')
+
+// The bug this replaced: leaving pushed the trip back on rather than popping
+// settings off, so every visit left the stack two entries taller than it found
+// it. Press back afterwards and you were in settings again — and after a few
+// visits the way out ran through every one of them before reaching the trip.
+await leaveSettings()
+check('leaving settings takes its own entry back off the stack', history.length === 1)
+check('and leaves you standing on the trip you opened it from',
+  location.pathname === '/t/pine-camp/room')
+
+// Opened cold: a bookmark, a home-screen icon, the first page of the visit.
+// There is nothing underneath to pop, so the arrow has to push somewhere.
+resetHistory('/settings')
+showSettings('/settings')
+check('opening settings on settings does not point back at itself',
+  S.settingsBack === '/')
+check('and knows there is nothing behind it to go back to', S.settingsPushed === false)
 
 console.log(bad ? `\n${bad} FAILED` : '\nall passed')
 process.exit(bad ? 1 : 0)
