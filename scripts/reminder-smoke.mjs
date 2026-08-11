@@ -9,7 +9,7 @@ process.env.DB_PATH = path
 
 try {
   const { db, now } = await import('../lib/db.js')
-  const { dueReminders, markReminderSent } = await import('../lib/reminders.js')
+  const { dueReminders, markReminderSent, runReminders } = await import('../lib/reminders.js')
   const ts = now()
 
   // Local time throughout, because a nine o'clock nudge is nine o'clock where
@@ -70,6 +70,31 @@ try {
   assert.equal(lead[0].payload.body, 'Three days to go — 2 things nobody has claimed.')
   assert.equal(lead[0].payload.url, '/t/trip')
   assert.equal(lead[0].payload.tag, 'reminder-unclaimed-trip')
+
+  // A slow push must not leave the reminder visible to the next scan. In
+  // production the startup scan and interval (or two instances) can overlap.
+  let sends = 0
+  let finishSending
+  const sending = new Promise((resolve) => { finishSending = resolve })
+  const send = async () => {
+    sends += 1
+    await sending
+    return true
+  }
+  const firstScan = runReminders(at(20, 9, 30), send)
+  await Promise.resolve()
+  const secondScan = runReminders(at(20, 9, 30), send)
+  finishSending()
+  await Promise.all([firstScan, secondScan])
+  assert.equal(sends, 1, 'overlapping scans claim a reminder before sending it')
+  db.prepare('DELETE FROM reminders_sent').run()
+
+  let attempts = 0
+  await runReminders(at(20, 9, 30), async () => { attempts += 1; return false })
+  await runReminders(at(20, 9, 30), async () => { attempts += 1; return true })
+  await runReminders(at(20, 9, 30), async () => { attempts += 1; return true })
+  assert.equal(attempts, 2, 'a failed delivery releases its claim for retry')
+  db.prepare('DELETE FROM reminders_sent').run()
 
   // Said once. The scan runs every quarter of an hour and the server may be
   // restarted between two of them; neither is a second notification.
