@@ -378,10 +378,23 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 /* Name over facts: the name is what you read, the place and the date are what
    you check. Stacking them lets the name have the width it wants instead of
    trading it away to a date on the same line. */
-.topbar__trip {
-  display: flex; flex-direction: column; gap: 1px; width: 100%;
-  max-width: 720px; margin: 0 auto; padding: 1px 0 2px;
+.topbar__row {
+  display: flex; align-items: center; gap: 6px;
+  width: 100%; max-width: 720px; margin: 0 auto;
 }
+.topbar__trip {
+  display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1;
+  padding: 1px 0 2px;
+}
+/* The way out of the trip. A 36px target needs the thumb room, so it hangs into
+   the header's own padding rather than taking it out of the trip name. */
+.topbar__home {
+  flex: none; width: 36px; height: 36px; margin-left: -10px;
+  display: grid; place-items: center;
+  border-radius: 50%; color: rgba(244, 248, 240, .75); text-decoration: none;
+}
+.topbar__home:hover { background: rgba(244, 248, 240, .1); color: #F4F8F0; }
+.topbar__home svg { width: 21px; height: 21px; display: block; }
 /* One line, ellipsised. The header is a label for where you are, not a summary
    of the trip — the trip page still holds the address and the who. */
 .topbar__title {
@@ -412,7 +425,7 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 
 /* The Camp tab has no bar under the title, so the header needs its own floor. */
 .topbar--bare { padding-bottom: 12px; }
-.topbar--trip .topbar__trip { max-width: 1040px; }
+.topbar--trip .topbar__row { max-width: 1040px; }
 
 /* Focused destinations navigate back and name the task instead of repeating
    the trip summary. Equal side columns keep the title centred. */
@@ -1119,8 +1132,75 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 .clamp.is-open { display: block; overflow: visible; }
 
 /* When it happens, on the card that says where — read together, the night
-   before somebody drives. */
-.card > p.when { margin: 0 0 8px; color: var(--ink); font-size: 15px; font-weight: 600; }
+   before somebody drives.
+
+   The strip is sunk into the card rather than drawn on it: it is the one block
+   of facts here you read at a glance instead of act on, and the two buttons
+   below need to keep the surface. */
+.stay {
+  background: var(--paper-sunk); border-radius: var(--r-md);
+  padding: 12px 14px;
+}
+.stay__row { display: flex; align-items: center; gap: 10px; }
+.stay__end { display: flex; flex-direction: column; min-width: 0; }
+/* The far end faces back down the line it arrived on. */
+.stay__end--out { align-items: flex-end; text-align: right; }
+.stay__cap {
+  font-family: var(--mono); font-size: 9.5px; font-weight: 600;
+  letter-spacing: .12em; text-transform: uppercase; color: var(--ink-faint);
+}
+/* Tabular numerals so a 11→18 and a 9→24 hang the same, and the month rides the
+   number's baseline rather than sitting on a line of its own. */
+.stay__date {
+  display: flex; align-items: baseline; gap: 4px; margin-top: 2px;
+  font-family: var(--display); font-weight: 600; font-size: 14px;
+  letter-spacing: -0.01em; color: var(--forest-deep);
+}
+.stay__date b {
+  font-weight: 800; font-size: 25px; line-height: 1;
+  letter-spacing: -0.035em; font-variant-numeric: tabular-nums;
+}
+.stay__dow { margin-top: 2px; font-size: 12px; color: var(--ink-soft); }
+
+/* The line between the two ends carries the number the dates are really asked
+   for. It is a route, so it is dotted and pinned at both ends. */
+.stay__span {
+  flex: 1; min-width: 34px; display: flex; flex-direction: column;
+  align-items: center; gap: 5px; padding-bottom: 12px;
+}
+.stay__nights {
+  font-family: var(--mono); font-size: 10.5px; font-weight: 600;
+  letter-spacing: .04em; color: var(--ink-soft); white-space: nowrap;
+}
+.stay__rule {
+  position: relative; width: 100%; height: 0;
+  border-top: 2px dotted var(--line-strong);
+}
+.stay__rule::before, .stay__rule::after {
+  content: ''; position: absolute; top: -3px; width: 4px; height: 4px;
+  border-radius: 50%; background: var(--line-strong);
+}
+.stay__rule::before { left: 0; }
+.stay__rule::after { right: 0; }
+
+/* One date, and the tag that says the two were the same day. */
+.stay--one { display: flex; align-items: flex-end; gap: 10px; }
+.stay__tag {
+  padding: 3px 9px; border-radius: 999px; background: var(--paper);
+  border: 1px solid var(--line);
+  font-family: var(--mono); font-size: 10px; font-weight: 600;
+  letter-spacing: .1em; text-transform: uppercase; color: var(--ink-soft);
+}
+.card > p.stay--ask { margin: 0; padding: 13px 14px; font-size: 15px; }
+
+/* The address wears the pin the map button wears, so the two read as one
+   answer — this is the place, and that is the way to it. It leads the card:
+   the trip name and the dates are already up in the header on every screen,
+   and the address is the one thing on the trip that is only written here. */
+.card > p.where { display: flex; align-items: baseline; gap: 7px; margin: 0 0 12px; }
+.where__pin { flex: none; color: var(--ink-faint); transform: translateY(2px); }
+.where__pin svg { display: block; width: 15px; height: 15px; }
+
 .when__ask {
   font: inherit; font-weight: 600; color: var(--forest);
   text-decoration: underline; text-decoration-color: var(--line-strong); text-underline-offset: 3px;

@@ -79,6 +79,11 @@ const ICONS = {
   camp: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.6 20.5 14 3.8"/><path d="M20.4 20.5 10 3.8"/><path d="M15.5 20.5 12 14.6l-3.5 5.9"/><path d="M2.2 20.5h19.6"/></svg>',
   room: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 5.5h13a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H11l-4.8 3v-3h-.7a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2Z"/><path d="M7.5 9.5h9M7.5 13.5h6"/></svg>',
   back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>',
+  // A trail fingerpost, for the one move that leaves the trip entirely. A
+  // chevron would have said "up one level", which is what the Planning Room's
+  // own back arrow says — and the two are not the same move. The board points
+  // the way you are going, the stub arm points at the trip you are standing in.
+  signpost: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 3v18"/><path d="M14.5 6H7l-3 3 3 3h7.5"/><path d="M14.5 15.5H18"/><path d="M11.5 21h6"/></svg>',
   send: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h13M13 6l6 6-6 6"/></svg>',
   bell: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg>',
   bellOff: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M13.7 5.25A6 6 0 0 0 6 9c0 2.1-.27 3.55-.68 4.58M18 9c0 7 3 7 3 9H9M10 21h4M3 3l18 18"/></svg>',
@@ -2279,12 +2284,20 @@ function topbar() {
   // The trip name is app furniture rather than a page heading — what the page
   // is actually about is the section you are in, which had no heading at all
   // until now. So the h1 says both, out loud, to whoever is listening.
+  // The signpost beside the name is the way out of the trip. The tabs move you
+  // around inside one, and the browser's own back button is not on screen in an
+  // installed app — so without this, opening a trip was a one-way door.
   return `
     <header class="topbar${under ? '' : ' topbar--bare'}${S.camp ? ' topbar--trip' : ''}">
       <h1 class="sr-only">${esc(S.trip.name)} — ${esc(S.camp === 'room' ? ROOM.title : S.camp ? CAMP.title : tabTitle(tab))}</h1>
-      <div class="topbar__trip">
-        <span class="topbar__title">${esc(S.trip.name)}</span>
-        ${meta ? `<span class="topbar__meta">${meta}</span>` : ''}
+      <div class="topbar__row">
+        <a class="topbar__home" href="/" data-act="home" aria-label="Back to your trips" title="Your trips">
+          <span aria-hidden="true">${ICONS.signpost}</span>
+        </a>
+        <div class="topbar__trip">
+          <span class="topbar__title">${esc(S.trip.name)}</span>
+          ${meta ? `<span class="topbar__meta">${meta}</span>` : ''}
+        </div>
       </div>
       ${under}
     </header>`
@@ -2912,12 +2925,70 @@ function whenWhereCard() {
         <h3>When and where</h3>
         <button class="btn btn--sm" data-act="edit-where">Edit</button>
       </div>
-      <p class="when">${when ? esc(when)
-        : '<button class="when__ask" data-act="set-dates">Add the dates</button>'}</p>
-      <p class="card__body notes">${esc(where)}</p>
+      <p class="where">
+        <span class="where__pin" aria-hidden="true">${ICONS.pin}</span>
+        <span class="notes">${esc(where)}</span>
+      </p>
+      ${stayStrip(when)}
       <div class="where__go">
         ${link ? `<a class="btn btn--primary" href="${esc(link)}" target="_blank" rel="noopener noreferrer">${ICONS.pin} Open in maps</a>` : ''}
         <button class="btn" data-act="copy-where">Copy address</button>
+      </div>
+    </div>`
+}
+
+// The stay, drawn as the two ends it actually has: the day you arrive, the day
+// you leave, and the nights in between on the line that joins them. It was one
+// line of text — "Fri, Sep 11 – Fri, Sep 18" — which made you count on your
+// fingers for the one number the whole thing is about, and put the answer to
+// "which weekend is this?" in the same weight as the address under it.
+//
+// The two ends face each other rather than both starting at the left margin.
+// Nothing else in the card is a pair, so the mirroring is what says these two
+// dates are the same fact read from either side.
+function stayStrip(sentence) {
+  const at = (s) => (isDayString(s) ? dayAt(s) : null)
+  const a = at(S.trip.start_date)
+  const b = at(S.trip.end_date)
+  if (!a && !b) {
+    return `<p class="stay stay--ask">
+      <button class="when__ask" data-act="set-dates">Add the dates</button>
+    </p>`
+  }
+
+  const end = (d, cap, side) => `
+    <div class="stay__end stay__end--${side}">
+      <span class="stay__cap">${cap}</span>
+      <span class="stay__date">
+        <b>${d.getDate()}</b>${esc(d.toLocaleDateString(undefined, { month: 'short' }))}
+      </span>
+      <span class="stay__dow">${esc(d.toLocaleDateString(undefined, { weekday: 'long' }))}</span>
+    </div>`
+
+  // One date is a real answer to give — a trip booked before anyone knows which
+  // day they are driving home has a start and nothing else — so it gets the end
+  // it has and no line off into nowhere.
+  if (!a || !b || +a === +b) {
+    const only = a ?? b
+    return `
+      <div class="stay stay--one">
+        <span class="sr-only">${esc(sentence)}</span>
+        <div aria-hidden="true">${end(only, a && b ? 'The day' : a ? 'Arrive' : 'Leave', 'in')}</div>
+        ${a && b ? '<span class="stay__tag" aria-hidden="true">day trip</span>' : ''}
+      </div>`
+  }
+
+  const nights = Math.round((b - a) / 86400000)
+  return `
+    <div class="stay">
+      <span class="sr-only">${esc(sentence)}, ${nights} ${nights === 1 ? 'night' : 'nights'}</span>
+      <div class="stay__row" aria-hidden="true">
+        ${end(a, 'Arrive', 'in')}
+        <span class="stay__span">
+          <span class="stay__nights">${nights} ${nights === 1 ? 'night' : 'nights'}</span>
+          <span class="stay__rule"></span>
+        </span>
+        ${end(b, 'Leave', 'out')}
       </div>
     </div>`
 }
@@ -4756,6 +4827,15 @@ document.addEventListener('click', async (ev) => {
 
     case 'open-trip':
       await goToTrip(el.dataset.id)
+      window.scrollTo(0, 0)
+      break
+
+    // Leaving a trip is a push rather than a back(), because you can arrive on
+    // a trip from a shared link with nothing behind you in the history.
+    case 'home':
+      S.camp = false
+      history.pushState({}, '', '/')
+      await showLanding()
       window.scrollTo(0, 0)
       break
 

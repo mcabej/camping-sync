@@ -177,6 +177,7 @@ check('unfiltered Pack shows group kit', find(both, 'Tent') && find(both, 'Firew
 check('unfiltered Pack shows personal kit', find(both, 'Sleeping bag'))
 check('personal rows say so when mixed in', find(both, 'personal kit · only you see this'))
 check('the header switch is gone', !find(both, 'class="switch"'))
+check('the header carries the way back to your trips', find(both, 'class="topbar__home" href="/" data-act="home"'))
 check('the filters carry both kinds', find(both, 'data-act="filter-kind" data-value="own"'))
 check('the filters carry categories', find(both, 'data-act="filter-cat" data-value="Camp kitchen"'))
 check('open count rides the group chip', find(both, '<span class="filters__n">1</span>'))
@@ -386,6 +387,11 @@ check('trip page still renders its cards', find(campPageHtml, "Who's coming") &&
 // elsewhere on the page holding the other half of the same trip.
 check('when and where is one card', (campPageHtml.match(/data-act="save-trip"/g) ?? []).length <= 1
   && !find(campPageHtml, 'Trip details'))
+// The dates are the two ends of the stay and the nights between them, not one
+// line of text you have to count on your fingers.
+check('the stay strip draws both ends', find(campPageHtml, '>Arrive<') && find(campPageHtml, '>Leave<'))
+check('the stay strip counts the nights for you', find(campPageHtml, '2 nights'))
+check('and says the whole of it out loud once', find(campPageHtml, 'class="sr-only">Fri'))
 // Every bar you are carrying something on, including the one that is not a list.
 check('the status card counts your own load too', find(campPageHtml, 'data-act="tab" data-tab="mine"'))
 check('one place is current at a time', (campPageHtml.match(/aria-current="page"/g) ?? []).length === 1)
