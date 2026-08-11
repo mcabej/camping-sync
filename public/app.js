@@ -545,11 +545,35 @@ function setChatConnection(state) {
 function showChatChanges() {
   if (S.camp !== 'room') return
   if (document.activeElement?.id === 'chat-text') {
+    // Keep the textarea itself in place while an IME owns it, but refresh its
+    // sibling thread immediately. Replacing the focused textarea can lose a
+    // composing word or dismiss the phone keyboard.
     chatNeedsRender = true
+    drawChatThread()
     return
   }
   chatNeedsRender = false
-  render()
+  render({ chatBottom: true })
+}
+
+function followChat(body = root.querySelector?.('.chat__body')) {
+  if (body) body.scrollTop = body.scrollHeight
+}
+
+function drawChatThread() {
+  const body = root.querySelector?.('.chat__body')
+  if (!body) return
+  let thread = body.querySelector?.('.thread')
+  if (!thread) {
+    const empty = body.querySelector?.('.chat__empty')
+    if (!empty) return
+    thread = document.createElement('ol')
+    thread.className = 'thread'
+    thread.setAttribute('aria-label', 'Planning messages')
+    empty.replaceWith(thread)
+  }
+  thread.innerHTML = chatRows()
+  followChat(body)
 }
 
 function receiveAssistantEvent(data) {
@@ -577,6 +601,7 @@ function receiveAssistantEvent(data) {
   const status = row.querySelector?.('[data-assistant-status]')
   if (answer) answer.innerHTML = assistantHtml(current.body || current.error || 'Thinking…')
   if (status) status.textContent = current.state === 'failed' ? 'Could not answer' : 'Writing…'
+  followChat()
 }
 
 async function syncNewMessages(tripId) {
@@ -2912,12 +2937,8 @@ function roomDoor() {
     </a>`
 }
 
-function chatCard() {
-  const chat = S.chat
-  const waiting = chat.tripId !== S.trip.id || chat.loading
-  const messages = chat.messages
-  const streams = Object.values(chat.streams)
-  const messageRows = messages.map((message) => {
+function chatRows() {
+  const messageRows = S.chat.messages.map((message) => {
     const member = memberById(message.member_id)
     const when = new Date(message.created_at)
     const assistant = message.role === 'assistant'
@@ -2933,7 +2954,7 @@ function chatCard() {
         </div>
       </li>`
   }).join('')
-  const streamRows = streams.map((stream) => `
+  const streamRows = Object.values(S.chat.streams).map((stream) => `
     <li class="thread__message thread__message--assistant thread__message--streaming"
       data-assistant-stream="${esc(stream.runId)}" data-state="${esc(stream.state)}"
       aria-busy="${stream.state === 'failed' ? 'false' : 'true'}">
@@ -2946,6 +2967,13 @@ function chatCard() {
         <div class="assistant-copy" data-assistant-body>${assistantHtml(stream.body || stream.error || 'Thinking…')}</div>
       </div>
     </li>`).join('')
+  return messageRows + streamRows
+}
+
+function chatCard() {
+  const chat = S.chat
+  const waiting = chat.tripId !== S.trip.id || chat.loading
+  const rows = chatRows()
 
   return `
     <section class="chat-card chat-card--page" aria-labelledby="planning-room-title" aria-busy="${waiting}">
@@ -2954,21 +2982,22 @@ function chatCard() {
       <p class="sr-only" id="chat-help">${chat.assistantAvailable
         ? 'Keep decisions with the trip. Start with <span class="mono">@camp</span> for help using its details and lists.'
         : 'Keep decisions with the trip, where everybody can find them later.'}</p>
-      ${waiting ? '<div class="skel" aria-label="Loading messages"></div>' : chat.error ? `
-        <div class="chat__error" role="alert">
-          <p>${esc(chat.error)}</p>
-          <button class="btn btn--sm" data-act="chat-retry">Try again</button>
-        </div>` : `
-        ${chat.hasMore ? `<button class="chat__older" data-act="chat-older"
-          ${chat.loadingOlder ? 'disabled' : ''}>${chat.loadingOlder ? 'Loading…' : 'Earlier messages'}</button>` : ''}
-        ${messages.length || streams.length ? `
-          <ol class="thread" aria-label="Planning messages">
-            ${messageRows}${streamRows}
-          </ol>` : `
-          <div class="chat__empty">
-            <strong>No messages yet</strong>
-            <span>Start with the decision the group needs to make next.</span>
-        </div>`}
+      <div class="chat__body">
+        ${waiting ? '<div class="skel" aria-label="Loading messages"></div>' : chat.error ? `
+          <div class="chat__error" role="alert">
+            <p>${esc(chat.error)}</p>
+            <button class="btn btn--sm" data-act="chat-retry">Try again</button>
+          </div>` : `
+          ${chat.hasMore ? `<button class="chat__older" data-act="chat-older"
+            ${chat.loadingOlder ? 'disabled' : ''}>${chat.loadingOlder ? 'Loading…' : 'Earlier messages'}</button>` : ''}
+          ${rows ? `
+            <ol class="thread" aria-label="Planning messages">${rows}</ol>` : `
+            <div class="chat__empty">
+              <strong>No messages yet</strong>
+              <span>Start with the decision the group needs to make next.</span>
+            </div>`}`}
+      </div>
+      ${waiting || chat.error ? '' : `
         <form class="chat__composer" data-act="send-message">
           <label class="sr-only" for="chat-text">${chat.assistantAvailable ? 'Message the group or @camp' : 'Message the group'}</label>
           ${chat.assistantAvailable ? `
@@ -3777,7 +3806,7 @@ function acceptCampMention(box) {
 
 function render({ chatBottom = false } = {}) {
   const y = window.scrollY
-  const oldChat = root.querySelector?.('.chat-card--page')
+  const oldChat = root.querySelector?.('.chat__body')
   const oldChatTop = oldChat?.scrollTop ?? 0
   const chatWasAtBottom = oldChat
     ? oldChat.scrollHeight - oldChat.scrollTop - oldChat.clientHeight < 96
@@ -3793,7 +3822,7 @@ function render({ chatBottom = false } = {}) {
   const views = { landing: viewLanding, join: viewJoin, trip: viewTrip }
   root.innerHTML = views[S.view]?.() ?? '<div class="page"><p>Loading…</p></div>'
   fitChatBox(root.querySelector?.('#chat-text'))
-  const nextChat = root.querySelector?.('.chat-card--page')
+  const nextChat = root.querySelector?.('.chat__body')
   if (nextChat) {
     nextChat.scrollTop = chatBottom || !oldChat || chatWasAtBottom
       ? nextChat.scrollHeight
@@ -4884,8 +4913,8 @@ document.addEventListener('input', (ev) => {
 
 window.addEventListener('resize', () => fitChatBox(root.querySelector?.('#chat-text')))
 
-// Incoming rows are stored while somebody is typing but the composer is not
-// rebuilt under their cursor. The first blur catches the visible thread up.
+// Incoming rows are painted beside the focused composer, without rebuilding
+// it under the keyboard. The first blur catches the rest of the room UI up.
 document.addEventListener('focusout', (ev) => {
   if (ev.target.id !== 'chat-text') return
   setTimeout(() => {
