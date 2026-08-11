@@ -10,6 +10,7 @@ import { WebSocket, WebSocketServer } from 'ws'
 import {
   db, uid, now, newTripCode, bumpRev, logEvent, getTripState, nextPosition,
 } from './lib/db.js'
+import { dueReminders, markReminderSent } from './lib/reminders.js'
 import { CATALOG, TIPS, WEATHER_ADVICE, catalogEntry } from './lib/catalog.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -443,6 +444,28 @@ function activeRoomMembers(tripId) {
   return active
 }
 
+// One way out to the push services, for both the things this app sends. A
+// 404 or 410 means the browser has permanently retired this endpoint, which is
+// the one error worth acting on rather than logging.
+async function sendPush(subscriptions, payload, { ttl = 3600, urgency = 'normal' } = {}) {
+  await Promise.allSettled(subscriptions.map(async (sub) => {
+    try {
+      await webpush.sendNotification({
+        endpoint: sub.endpoint,
+        keys: { p256dh: sub.p256dh, auth: sub.auth },
+      }, payload, { TTL: ttl, urgency })
+    } catch (err) {
+      // One endpoint is one browser subscription, so every trip mapping on it
+      // is stale together.
+      if (err?.statusCode === 404 || err?.statusCode === 410) {
+        db.prepare('DELETE FROM push_subscriptions WHERE endpoint = ?').run(sub.endpoint)
+      } else {
+        console.error('Push notification failed:', err?.message ?? 'unknown error')
+      }
+    }
+  }))
+}
+
 async function notifyMessage(tripId, message, { onlyMemberId = '' } = {}) {
   const trip = db.prepare('SELECT name FROM trips WHERE id = ?').get(tripId)
   if (!trip) return
@@ -467,22 +490,32 @@ async function notifyMessage(tripId, message, { onlyMemberId = '' } = {}) {
     messageId: message.id,
   })
 
-  await Promise.allSettled(subscriptions.map(async (sub) => {
-    try {
-      await webpush.sendNotification({
-        endpoint: sub.endpoint,
-        keys: { p256dh: sub.p256dh, auth: sub.auth },
-      }, payload, { TTL: 3600, urgency: 'normal' })
-    } catch (err) {
-      // 404/410 means the browser has permanently retired this endpoint. One
-      // endpoint is one browser subscription, so every trip mapping is stale.
-      if (err?.statusCode === 404 || err?.statusCode === 410) {
-        db.prepare('DELETE FROM push_subscriptions WHERE endpoint = ?').run(sub.endpoint)
-      } else {
-        console.error('Push notification failed:', err?.message ?? 'unknown error')
-      }
-    }
-  }))
+  await sendPush(subscriptions, payload)
+}
+
+// ---- reminders --------------------------------------------------------------
+
+// The quarter hour is about how late a nine o'clock nudge is allowed to be, not
+// about how often there is anything to say: the scan is two indexed reads on a
+// database with no trips starting today, which is most days.
+const REMINDER_SCAN_MS = 15 * 60 * 1000
+
+// Longer than a message's hour, because these are worth waiting for a phone to
+// come back on: the morning-of nudge is still true at lunchtime. Low urgency
+// says what it is — nothing here is a person waiting for an answer.
+const REMINDER_TTL = 6 * 3600
+
+async function runReminders(at = new Date()) {
+  for (const reminder of dueReminders(at)) {
+    const subscriptions = db.prepare(`SELECT endpoint, p256dh, auth FROM push_subscriptions
+                                      WHERE trip_id = ? AND member_id = ?`)
+      .all(reminder.tripId, reminder.memberId)
+    if (!subscriptions.length) continue
+    await sendPush(subscriptions, JSON.stringify(reminder.payload), {
+      ttl: REMINDER_TTL, urgency: 'low',
+    })
+    markReminderSent(reminder)
+  }
 }
 
 // ---- Camp assistant --------------------------------------------------------
@@ -1070,9 +1103,9 @@ const latestMessageId = (tripId) => Number(db.prepare(
 
 function ensureNotificationPreference(tripId, memberId) {
   db.prepare(`INSERT OR IGNORE INTO notification_preferences
-    (member_id, trip_id, muted, last_read_message_id, updated_at)
-    VALUES (?, ?, 0, ?, ?)`).run(memberId, tripId, latestMessageId(tripId), now())
-  return db.prepare(`SELECT muted, last_read_message_id FROM notification_preferences
+    (member_id, trip_id, muted, reminders, last_read_message_id, updated_at)
+    VALUES (?, ?, 0, 0, ?, ?)`).run(memberId, tripId, latestMessageId(tripId), now())
+  return db.prepare(`SELECT muted, reminders, last_read_message_id FROM notification_preferences
                      WHERE member_id = ? AND trip_id = ?`).get(memberId, tripId)
 }
 
@@ -1110,7 +1143,8 @@ function notificationState(tripId, memberId, endpoint = '') {
     WHERE endpoint = ? AND trip_id = ? AND member_id = ?`).get(endpoint, tripId, memberId)
   return {
     available: true, publicKey: vapid.publicKey, subscribed: !!subscribed,
-    muted: !!pref.muted, unread: Number(unread), latest: latestMessage(tripId),
+    muted: !!pref.muted, reminders: !!pref.reminders,
+    unread: Number(unread), latest: latestMessage(tripId),
   }
 }
 
@@ -1139,11 +1173,12 @@ app.get('/api/trips/:id/notifications', (req, res) => {
   res.json(notificationState(trip.id, memberId, clean(req.query.endpoint, 2048)))
 })
 
-// Every trip's alerts in one answer, for the settings page. Muting belongs to
-// the member and the trip, so this is a read across the memberships the session
-// already proves — it takes no trip id and grants no access to a trip the
-// signed-in user is not on. Changing one still goes through the per-trip PATCH
-// above rather than a second way to write the same row.
+// Every trip's alerts in one answer, for the settings page. Muting and asking
+// to be reminded both belong to the member and the trip, so this is a read
+// across the memberships the session already proves — it takes no trip id and
+// grants no access to a trip the signed-in user is not on. Changing either one
+// still goes through the per-trip PATCH above rather than a second way to write
+// the same row.
 app.get('/api/notifications', (req, res) => {
   const user = requireUser(req, res)
   if (!user) return
@@ -1157,7 +1192,8 @@ app.get('/api/notifications', (req, res) => {
     trips: rows.map(({ memberId, tripId, name }) => {
       const state = notificationState(tripId, memberId, endpoint)
       return {
-        tripId, name, muted: state.muted, unread: state.unread, subscribed: state.subscribed,
+        tripId, name, muted: state.muted, reminders: state.reminders,
+        unread: state.unread, subscribed: state.subscribed,
       }
     }),
   })
@@ -1201,13 +1237,19 @@ app.patch('/api/trips/:id/notifications', (req, res) => {
   if (!trip) return
   const memberId = requireMember(req, res, trip.id)
   if (!memberId) return
-  if (typeof req.body?.muted !== 'boolean') {
-    return res.status(400).json({ error: 'Choose whether this trip is muted.' })
+  // Two switches, written one at a time: the bell in the Planning Room sends
+  // `muted` and knows nothing about reminders, and the settings page sends
+  // whichever one was pressed. A body carrying neither is a request that means
+  // nothing rather than one that means "leave it as it is".
+  const wanted = ['muted', 'reminders'].filter((f) => req.body?.[f] !== undefined)
+  if (!wanted.length || wanted.some((f) => typeof req.body[f] !== 'boolean')) {
+    return res.status(400).json({ error: 'Choose what this trip may send you.' })
   }
   ensureNotificationPreference(trip.id, memberId)
-  db.prepare(`UPDATE notification_preferences SET muted = ?, updated_at = ?
+  db.prepare(`UPDATE notification_preferences
+              SET ${wanted.map((f) => `${f} = ?`).join(', ')}, updated_at = ?
               WHERE member_id = ? AND trip_id = ?`)
-    .run(req.body.muted ? 1 : 0, now(), memberId, trip.id)
+    .run(...wanted.map((f) => (req.body[f] ? 1 : 0)), now(), memberId, trip.id)
   res.json(notificationState(trip.id, memberId, clean(req.body?.endpoint, 2048)))
 })
 
@@ -2222,3 +2264,14 @@ const heartbeat = setInterval(() => {
 }, 30000)
 heartbeat.unref()
 server.on('close', () => clearInterval(heartbeat))
+
+// The reminder scan runs on the way up as well as on the clock, so a deploy at
+// five past nine still gets the morning out. Sending twice is what the sent
+// table is for; sending nothing until quarter past is not recoverable.
+const remind = () => void runReminders().catch(
+  (err) => console.error('Reminder scan failed:', err?.message ?? 'unknown error'),
+)
+const reminders = setInterval(remind, REMINDER_SCAN_MS)
+reminders.unref()
+server.on('close', () => clearInterval(reminders))
+remind()

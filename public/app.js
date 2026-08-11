@@ -205,7 +205,7 @@ const S = {
   },
   notify: {
     tripId: '', loading: false, available: false, subscribed: false,
-    muted: false, unread: 0, publicKey: '', busy: false,
+    muted: false, reminders: false, unread: 0, publicKey: '', busy: false,
     // The last thing said in the room, for the door on the trip page:
     // `{ author, assistant, body, at }` or null. See latestMessage on the server.
     latest: null,
@@ -541,7 +541,7 @@ async function wantNotificationState() {
     }
     S.notify = {
       tripId, loading: false, available: pushSupported() && !!state.available,
-      subscribed: !!state.subscribed, muted: !!state.muted,
+      subscribed: !!state.subscribed, muted: !!state.muted, reminders: !!state.reminders,
       unread: Number(state.unread) || 0, publicKey: String(state.publicKey ?? ''), busy: false,
       latest: state.latest ?? null,
     }
@@ -630,7 +630,7 @@ async function wantAlerts() {
       subscribed: supported && (data.trips ?? []).some((t) => t.subscribed),
       trips: (data.trips ?? []).map((t) => ({
         tripId: String(t.tripId), name: String(t.name ?? 'Trip'),
-        muted: !!t.muted, unread: Number(t.unread) || 0,
+        muted: !!t.muted, reminders: !!t.reminders, unread: Number(t.unread) || 0,
       })),
     }
   } catch (err) {
@@ -717,9 +717,13 @@ async function toggleDeviceAlerts() {
   }
 }
 
-// Muting one trip from the settings page. The same PATCH the bell in its
-// Planning Room sends, so the two never drift apart.
-async function toggleAlertsFor(tripId) {
+// One of a trip's two switches, from the settings page. Messages go through the
+// same PATCH the bell in its Planning Room sends, so the two never drift apart,
+// and reminders are the same row written the same way.
+//
+// Both answers come back from the server rather than from the switch that was
+// pressed, because the row holds two of them and only one was asked about.
+async function toggleAlertsFor(tripId, field = 'muted') {
   const a = S.alerts
   if (!a || a.busy) return
   const trip = a.trips.find((t) => t.tripId === tripId)
@@ -728,12 +732,23 @@ async function toggleAlertsFor(tripId) {
   render()
   try {
     const subscription = await currentPushSubscription()
+    // The switch on screen asks whether the trip may reach you. `muted` is that
+    // question upside down, which is why one of these is negated and the other
+    // is the switch itself.
+    const wanted = field === 'reminders' ? { reminders: !trip.reminders } : { muted: !trip.muted }
     const state = await api(`/trips/${tripId}/notifications`, {
-      method: 'PATCH', body: { muted: !trip.muted, endpoint: subscription?.endpoint ?? '' },
+      method: 'PATCH', body: { ...wanted, endpoint: subscription?.endpoint ?? '' },
     })
     trip.muted = !!state.muted
-    if (S.notify.tripId === tripId) S.notify = { ...S.notify, muted: trip.muted }
-    toast(trip.muted ? `${trip.name} is muted.` : `${trip.name} can notify you.`)
+    trip.reminders = !!state.reminders
+    if (S.notify.tripId === tripId) {
+      S.notify = { ...S.notify, muted: trip.muted, reminders: trip.reminders }
+    }
+    if (field === 'reminders') {
+      toast(trip.reminders ? `${trip.name} will remind you.` : `Reminders are off for ${trip.name}.`)
+    } else {
+      toast(trip.muted ? `${trip.name} is muted.` : `${trip.name} can notify you.`)
+    }
   } catch (err) {
     toast(err.message)
   } finally {
@@ -2596,25 +2611,41 @@ function settingsNotifications() {
         : `${toggleRow({
             act: 'device-alerts', on: false, busy: a.busy,
             label: 'Notify me on this device',
-            note: 'Planning Room messages, while the app is closed.',
+            note: 'Whatever your trips below are allowed to send, while the app is closed.',
           })}`
 
+  // Two things a trip can send, and they are two questions rather than one:
+  // the room is other people talking, and a reminder is this app talking. Muting
+  // a chat that has run all week is not a reason to be let down about the tent,
+  // so neither switch is allowed to answer for the other.
   const trips = a.trips.length
-    ? a.trips.map((t) => toggleRow({
-        act: 'trip-alerts', id: t.tripId, on: !t.muted, busy: a.busy,
-        label: t.name, note: t.muted ? 'Muted' : 'Planning Room messages',
-      })).join('')
+    ? a.trips.map((t) => `
+        <section class="alert-trip">
+          <h4 class="alert-trip__name">${esc(t.name)}</h4>
+          <div class="switches">
+            ${toggleRow({
+              act: 'trip-alerts', id: t.tripId, on: !t.muted, busy: a.busy,
+              label: 'Planning Room messages',
+              note: t.muted ? 'Muted' : 'What people say while you are not reading',
+            })}
+            ${toggleRow({
+              act: 'trip-reminders', id: t.tripId, on: t.reminders, busy: a.busy,
+              label: 'Reminders',
+              note: 'Two: three days out, what nobody has claimed. The morning of, what you have not ticked.',
+            })}
+          </div>
+        </section>`).join('')
     : '<p class="set-note">No trips to be notified about yet.</p>'
 
   return `
     <section class="card set-card">
       <h2>Notifications</h2>
       ${device}
-      <h3 class="set-sub">Trips that can notify you</h3>
+      <h3 class="set-sub">What each trip may send you</h3>
       ${a.trips.length
-        ? '<p class="set-note">Kept with your account rather than this browser: mute a trip here and it is muted on your other devices too.</p>'
+        ? '<p class="set-note">Kept with your account rather than this browser: answer here and your other devices obey it too.</p>'
         : ''}
-      <div class="switches">${trips}</div>
+      <div class="alert-trips">${trips}</div>
     </section>`
 }
 
@@ -5534,6 +5565,10 @@ document.addEventListener('click', async (ev) => {
 
     case 'trip-alerts':
       await toggleAlertsFor(el.dataset.id)
+      break
+
+    case 'trip-reminders':
+      await toggleAlertsFor(el.dataset.id, 'reminders')
       break
 
     // Leaving a trip is a push rather than a back(), because you can arrive on

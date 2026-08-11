@@ -93,15 +93,30 @@ each time. "Start from a previous trip" copies the items and their kinds and
 drops the claims. Trivial, given one `items` table — and it is the strongest
 reason anyone has to come back a second year.
 
-### 6. Reminders
+### 6. Reminders — **built**
 
-The service worker is already registered, so Web Push is a short step. Three
-days out: "4 things nobody has claimed." The morning of: "you haven't ticked your
-sleeping bag." A planner that nudges gets used; one that doesn't gets filled in
-once and forgotten.
+Two per trip, and the number is the design. Three days out: "4 things nobody has
+claimed" — the last point at which somebody can still buy, borrow or dig the
+thing out. The morning of: "you have not ticked Sleeping bag", which is the one
+list nobody else can see is unfinished. A planner that nudges gets used; one
+that doesn't gets filled in once and forgotten, and one that nudges every day
+gets turned off — a notification switch is only ever turned off once.
 
-Caveat worth respecting: this app has no accounts, so a push subscription is the
-first thing it would store that outlives a `localStorage` wipe.
+Asking for them is its own switch, per trip, off until somebody says otherwise.
+Muting the Planning Room deliberately does not answer for it: the room is other
+people talking and a reminder is the app itself, and quietening a chat that ran
+all week is not a request to be let down about the tent. Neither is sent with
+nothing to say, and each is said once — `reminders_sent` keys on the day the
+reminder is about rather than the day it went out, so a scan every quarter of an
+hour, a restart before lunch and a trip whose dates move all behave.
+
+The caveat this entry was written with — no accounts, so a push subscription
+would be the first thing outliving a `localStorage` wipe — was answered before
+this landed rather than by it. Sign-in came first, and the subscription the
+Planning Room needed is the same one a reminder goes out over: same handle, same
+opt-in, same switch to throw it away.
+
+See the README's *Reminders* section.
 
 ### 7. Dietary needs and allergies — **built**
 

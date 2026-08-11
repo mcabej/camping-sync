@@ -78,6 +78,10 @@ lost in a separate group chat.
   messages, grouped per trip. Senders and members actively reading the room are
   skipped; each member can mute a trip, and unread counts remain visible in the
   app when push is unavailable or disabled.
+- **Reminders** — two per trip, and no more than two: three days out, how many
+  things nobody has claimed; the morning of, what is still unticked on your own
+  kit list. Off until somebody asks for them, per trip, and a separate answer
+  from muting the Planning Room.
 - **`@camp` assistant** — signed-in members can ask a trip-aware assistant about
   the details, lists, people and recent planning thread. Replies stream through
   the existing WebSocket and become durable messages when complete. Explicit
@@ -542,6 +546,67 @@ number, rather than quietly reporting a figure that is only most of the answer.
 None of it reaches the activity feed: a pack-down is fifty ticks in ten minutes,
 and a feed of them would bury the trip they belong to.
 
+### Reminders
+
+Two per trip, and the number is the design. A planner that says something useful
+twice gets opened; one that says something every day gets turned off, and a
+notification switch is only ever turned off once.
+
+| When              | What it says                             | Who gets it            |
+| ----------------- | ---------------------------------------- | ---------------------- |
+| Three days out    | how many things nobody has claimed       | everyone who opted in  |
+| The morning of    | what is still unticked on your own kit   | the person it is about |
+
+Both are questions the trip can already answer without asking anybody. Three
+days is the gap that still has a weekend in it — two days out, "nobody has
+claimed a stove" usually means nobody is going to. The unclaimed count is the
+same one the Trip tab reports as *still needs someone*: group items with no
+name on them, plans excluded, because nobody brings a hike. The morning-of
+count has to be per person, since personal kit is private — and legacy `own`
+rows with no `owner_id` are left out of it, as telling four people a sleeping
+bag is unticked would be telling three of them about somebody else's list.
+
+Neither is sent with nothing to say. A trip where everything is claimed gets no
+three-days-out nudge at all, rather than one reporting zero, and that is not
+recorded as said either: a list that fills up at four in the afternoon is still
+worth a word before the day is out.
+
+**Asking for them is its own switch.** The Planning Room's mute and this are two
+questions that read as one and are not — the room is other people talking, a
+reminder is the app itself. Somebody who has quietened a chat that ran all week
+has not asked to be let down about the tent, so neither switch answers for the
+other, and `reminders` on `notification_preferences` starts at `0`. It is off
+for every membership that already existed, because defaulting it on would read
+an answer to the Planning Room as an answer to a question nobody was asked, and
+the first they would hear of it is their phone going off at nine in the morning.
+
+Nine in the morning, in the server's timezone — set `TZ` to the one the group is
+camping in. The trip has coordinates, but a longitude is not a timezone, and a
+nudge landing at 04:00 because a campsite sits west of a meridian is worse than
+one landing an hour off. `server.js` scans every fifteen minutes and once on the
+way up, so a deploy at five past nine still gets the morning out; a day that has
+been and gone is not caught up on, since a server that was down all Thursday
+should not spend Friday talking about Thursday.
+
+Each nudge is said once, and `reminders_sent` is what makes that true across a
+scan that runs four times an hour, a restart before lunch and a phone that was
+off all morning. Its key is the day the reminder is *about* — the trip's own
+start date — rather than the day it went out, so moving the dates makes both
+kinds due again, which is right: that is a different three days out, and the
+group deserves telling about the new one. The row is written after the attempt
+rather than after a delivery, because "delivered" is not something a push
+service reports; a phone that was off gets the nudge when it next reaches its
+push service, which is what the six-hour TTL is for.
+
+Nothing here stores anything new about a device. A reminder goes out over the
+push subscription the Planning Room already needed, so the durable handle a
+no-accounts app keeps on a phone is the same one, created by the same explicit
+opt-in and thrown away by the same switch.
+
+`lib/reminders.js` decides and sends nothing; `server.js` sends and stores
+nothing about what is due. Which is what makes the deciding testable —
+`scripts/reminder-smoke.mjs` hands it a particular Thursday in August.
+
 ### Installing it
 
 `manifest.webmanifest` and `public/sw.js` are what make it an app you can add
@@ -653,6 +718,7 @@ each thing is stored.
 | Theme                  | This device | `localStorage` (`cs.prefs`)          |
 | Feature switches       | This device | `localStorage` (`cs.prefs`)          |
 | Which trips may notify | You         | `notification_preferences`, server   |
+| Which trips may remind | You         | `notification_preferences`, server   |
 | Push subscription      | This device | `push_subscriptions`, server         |
 | Name, picture, session | You         | `users` / `sessions`, server         |
 
@@ -664,6 +730,15 @@ you own, so it stays on the member row the Planning Room's bell already writes.
 The settings page and that bell send the same `PATCH`; `GET /api/notifications`
 is the only addition, and it reads every membership the session already proves
 rather than taking a trip id.
+
+Each trip therefore asks two questions rather than one, and its name is a
+heading over the pair instead of the label on a switch: *Planning Room messages*
+and *Reminders*. That grouping is the order somebody arrives in — they came here
+about a particular trip — and it keeps the two from being read as one setting.
+The `PATCH` takes either field or both, and a body carrying neither is refused:
+a request that names no switch means nothing, rather than meaning "leave them
+as they are". Whichever one is pressed, both answers are read back off the
+response, because the row holds two and only one was asked about.
 
 Which is why a browser that cannot show a notification still gets the trip
 switches — an iPhone that has not been added to the home screen, a laptop where
@@ -746,6 +821,7 @@ a door used to be.
 | `VAPID_PUBLIC_KEY` | generated in DB     | Optional fixed Web Push application key.    |
 | `VAPID_PRIVATE_KEY`| generated in DB     | Pair with `VAPID_PUBLIC_KEY`; keep secret.   |
 | `VAPID_SUBJECT`    | app notification email | Web Push contact URI (`mailto:` or URL).  |
+| `TZ`               | the host's zone     | The clock reminders go out on; see *Reminders*. |
 
 ## Deploying
 

@@ -2075,6 +2075,16 @@ button.wx__day:hover .wx__wet, .wx__row--open .wx__wet { color: var(--ink); }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
+/* Each trip asks two questions, so the trip's name is a heading over its own
+   pair rather than the label on one of them. Grouped like this the page reads
+   down the trips first and the two answers second, which is the order somebody
+   arrives with: they came here about a particular trip. */
+.alert-trips { display: grid; gap: 18px; }
+.alert-trip__name {
+  font-size: 15px; font-weight: 700; margin: 0 0 2px; padding: 0 4px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
 /* A switch is a row you press, not a track you have to hit. The label and the
    note are inside the button, so the target is the whole width of the card —
    which is what makes this work with a thumb, in a tent, in the dark. */

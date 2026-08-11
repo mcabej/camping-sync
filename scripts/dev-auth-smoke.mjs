@@ -145,6 +145,25 @@ try {
   const otherAlerts = await (await request('/notifications', second.cookie)).json()
   assert.equal(otherAlerts.trips[0].muted, false)
 
+  // Reminders are the second answer on that row and a separate question. The
+  // switch that quietened the room must not have answered it, and answering it
+  // must not un-quieten the room.
+  assert.equal(mutedAlerts.trips[0].reminders, false)
+  const reminding = await (await request(`/trips/${created.trip.id}/notifications`, first.cookie,
+    'PATCH', { reminders: true })).json()
+  assert.equal(reminding.reminders, true)
+  assert.equal(reminding.muted, true)
+  const remindingAlerts = await (await request('/notifications', first.cookie)).json()
+  assert.equal(remindingAlerts.trips[0].reminders, true)
+  assert.equal((await (await request('/notifications', second.cookie)).json()).trips[0].reminders, false)
+
+  // A body carrying neither switch is a request that means nothing, rather than
+  // one that means "leave both as they are".
+  assert.equal((await request(`/trips/${created.trip.id}/notifications`, first.cookie,
+    'PATCH', { endpoint: 'https://push.example/nothing' })).status, 400)
+  assert.equal((await request(`/trips/${created.trip.id}/notifications`, first.cookie,
+    'PATCH', { reminders: 'yes' })).status, 400)
+
   // A face belongs to the people on the trip. The development sign-in has no
   // picture to hand — Google is where they come from — so one is written onto
   // the row directly: what is being tested is not where it came from but who it

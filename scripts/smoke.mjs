@@ -1509,12 +1509,26 @@ S.auth.user = wasUser
 S.alerts = {
   loading: false, busy: false, error: '', permission: 'granted',
   publicKey: 'k', subscribed: true,
-  trips: [{ tripId: 't1', name: 'Wasdale Weekend', muted: true, unread: 0 }],
+  trips: [{ tripId: 't1', name: 'Wasdale Weekend', muted: true, reminders: false, unread: 0 }],
 }
 const withAlerts = viewSettings()
 check('this device and which trips are two questions, asked separately',
   find(withAlerts, 'data-act="device-alerts"') && find(withAlerts, 'data-act="trip-alerts" data-id="t1"'))
 check('a muted trip reads as off', find(withAlerts, 'aria-checked="false"') && find(withAlerts, 'Muted'))
+// The room is other people talking and a reminder is the app talking, so the
+// trip's name is a heading over two switches rather than the label on one.
+check('a trip names itself over both of its answers',
+  find(withAlerts, 'Wasdale Weekend') && find(withAlerts, 'Planning Room messages')
+  && find(withAlerts, 'data-act="trip-reminders" data-id="t1"'))
+check('and reminders start off, because nobody has asked for them',
+  find(withAlerts, 'aria-checked="false" data-act="trip-reminders"'))
+
+S.alerts = { ...S.alerts, trips: [{ ...S.alerts.trips[0], muted: true, reminders: true }] }
+const remindingWhileMuted = viewSettings()
+check('muting the room does not answer for the reminders',
+  find(remindingWhileMuted, 'aria-checked="true" data-act="trip-reminders"')
+  && find(remindingWhileMuted, 'aria-checked="false" data-act="trip-alerts"'))
+S.alerts = { ...S.alerts, trips: [{ ...S.alerts.trips[0], muted: true, reminders: false }] }
 
 S.alerts = { ...S.alerts, permission: 'denied' }
 const blocked = viewSettings()
