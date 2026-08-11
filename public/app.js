@@ -2558,9 +2558,9 @@ function settingsNotifications() {
     <section class="card set-card">
       <h2>Notifications</h2>
       ${device}
-      <h3 class="set-sub">Which trips</h3>
-      ${unsupported || blocked
-        ? '<p class="set-note">These belong to you rather than to this browser: muting a trip here mutes it on the devices that can reach you.</p>'
+      <h3 class="set-sub">Trips that can notify you</h3>
+      ${a.trips.length
+        ? '<p class="set-note">Kept with your account rather than this browser: mute a trip here and it is muted on your other devices too.</p>'
         : ''}
       <div class="switches">${trips}</div>
     </section>`

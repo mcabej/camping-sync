@@ -2021,14 +2021,17 @@ button.wx__day:hover .wx__wet, .wx__row--open .wx__wet { color: var(--ink); }
 .set-card > p.card__body { margin: 0 0 14px; }
 .set-card .segmented { grid-template-columns: repeat(3, 1fr); margin-bottom: 12px; }
 
-/* The heading inside a card, for the one card with two halves to it. */
+/* The heading inside a card, for the one card with two halves to it. A quieter
+   sibling of the card's own h2 rather than a mono eyebrow: it sits under body
+   prose, where the spaced-out capitals read as a label for the whole card. */
 .set-sub {
-  font-family: var(--mono); font-size: 11px; font-weight: 600;
-  letter-spacing: .14em; text-transform: uppercase; color: var(--ink-faint);
+  font-family: var(--display); font-size: 13.5px; font-weight: 700;
+  letter-spacing: -0.01em; color: var(--ink-soft);
   margin: 20px 0 8px;
 }
 
 .set-note { margin: 0; color: var(--ink-soft); font-size: 13px; line-height: 1.5; }
+.set-sub + .set-note { margin-bottom: 12px; }
 .set-note--warn { color: var(--blaze); }
 .set-card .set-note + .btn { margin-top: 14px; }
 
