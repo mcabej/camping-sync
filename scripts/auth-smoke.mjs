@@ -25,9 +25,25 @@ try {
   assert.throws(() => db.prepare(`INSERT INTO members (id, trip_id, user_id, name, created_at)
                                   VALUES (?, ?, ?, ?, ?)`).run('duplicate', 'trip', 'user', 'Other Sam', ts))
 
+  db.prepare(`INSERT INTO items (id, trip_id, list, title, created_at, updated_at)
+              VALUES ('wood', 'trip', 'gear', 'Firewood', ?, ?)`).run(ts, ts)
+  db.prepare(`INSERT INTO claims (item_id, member_id) VALUES ('wood', 'legacy')`).run()
+  db.prepare(`INSERT INTO expenses
+    (id, trip_id, item_id, claim_member_id, description, amount, paid_by, created_at, updated_at)
+    VALUES ('wood-cost', 'trip', 'wood', 'legacy', 'Firewood', 1001, 'legacy', ?, ?)`)
+    .run(ts, ts)
+  db.prepare(`INSERT INTO expense_participants (expense_id, member_id)
+              VALUES ('wood-cost', 'legacy')`).run()
+  assert(db.prepare('PRAGMA table_info(expense_participants)').all().some((column) => column.name === 'share_amount'))
+
   const state = getTripState('trip', 'legacy')
   assert.equal(state.viewer_id, 'legacy')
   assert.equal(state.members[0].user_id, undefined)
+  assert.equal(state.trip.currency, 'GBP')
+  assert.deepEqual(state.expenses.map(({ description, amount, paid_by, participants }) => (
+    { description, amount, paid_by, participants }
+  )), [{ description: 'Firewood', amount: 1001, paid_by: 'legacy', participants: ['legacy'] }])
+  assert.equal(state.expenses[0].shares, null)
 
   db.prepare(`INSERT INTO sessions (token_hash, user_id, expires_at, created_at)
               VALUES ('hash', 'user', ?, ?)`).run(new Date(Date.now() + 60000).toISOString(), ts)

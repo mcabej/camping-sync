@@ -33,6 +33,7 @@ const TABS = [
 // that counts, badges or filters a list would have to special-case it.
 const CAMP = { id: 'camp', lists: [], label: 'Trip', title: 'The trip' }
 const ROOM = { id: 'room', title: 'Planning room' }
+const SETTLE = { id: 'settle', title: 'Settle up' }
 
 const tabById = (id) => TABS.find((t) => t.id === id) ?? TABS[0]
 const currentTab = () => tabById(S.tab)
@@ -108,16 +109,16 @@ const S = {
   tab: 'pack',
   // A list tab, the trip overview, or the planning room nested under it. The
   // room gets its own URL and screen without taking a sixth slot in the bar.
-  camp: false,       // false | overview | room
+  camp: false,       // false | overview | room | settle
   // How the list on screen is narrowed: which day of the trip, who brings it,
   // what kind of thing it is, whether to bother with what is already handled,
   // and whatever you typed into the search box. All empty means everything,
   // which is where every tab starts — and where it goes back to when you leave.
   filter: { day: '', kind: '', cat: '', hide: false, q: '' },
-  trip: null, members: [], items: [], events: [],
+  trip: null, members: [], items: [], expenses: [], events: [],
   // Google proves one user across devices; a member is still their place on one
   // particular trip. Unlinked local members remain usable while they migrate.
-  auth: { loaded: false, clientId: '', user: null, memberships: [] },
+  auth: { loaded: false, clientId: '', devBypass: false, user: null, memberships: [] },
   authBusy: false,
   // Messages are paged and polled on their own cursor. They are durable server
   // state, but not part of the large trip payload or its revision counter.
@@ -279,6 +280,7 @@ function absorb(state) {
   if (Object.hasOwn(state, 'viewer_id')) S.me = state.viewer_id
   S.members = state.members
   S.items = state.items
+  S.expenses = state.expenses ?? []
   S.events = state.events
   S.rev = state.trip.rev
   render()
@@ -762,6 +764,85 @@ const isPlan = (it) => it.list === 'activities'
 const claimsOn = (it) => it.claims ?? []
 const myClaim = (it) => (S.me ? claimsOn(it).find((c) => c.member_id === S.me) : null) ?? null
 const isClaimed = (it) => claimsOn(it).length > 0
+
+const tripCurrency = () => String(S.trip?.currency || 'GBP').toUpperCase()
+
+function moneyText(minor) {
+  try {
+    return new Intl.NumberFormat('en', {
+      style: 'currency', currency: tripCurrency(), currencyDisplay: 'narrowSymbol',
+      minimumFractionDigits: 2, maximumFractionDigits: 2,
+    }).format(minor / 100)
+  } catch {
+    return `${tripCurrency()} ${(minor / 100).toFixed(2)}`
+  }
+}
+
+function minorFromInput(raw) {
+  const match = String(raw ?? '').trim().match(/^(\d{1,7})(?:\.(\d{1,2}))?$/)
+  if (!match) return null
+  return Number(match[1]) * 100 + Number((match[2] ?? '').padEnd(2, '0'))
+}
+
+const minorInput = (minor) => (minor / 100).toFixed(2)
+
+const expenseForClaim = (itemId, memberId) => S.expenses.find((expense) => (
+  expense.item_id === itemId && expense.claim_member_id === memberId
+)) ?? null
+
+// Each expense says who shared it. A custom split carries exact shares; an
+// equal one divides integer minor units and gives leftover pennies to the
+// first names in the trip's stable order. The card says so.
+function settlement(expenses = S.expenses, members = S.members) {
+  if (!members.length) return { expenses: 0, total: 0, rounded: false, transfers: [] }
+  const known = new Map(members.map((m) => [m.id, m]))
+  const balances = new Map(members.map((m) => [m.id, 0]))
+  let count = 0, total = 0, rounded = false
+
+  for (const expense of expenses) {
+    const amount = Number(expense.amount)
+    const payerId = expense.paid_by
+    const sharing = new Set(expense.participants ?? [])
+    const participants = members.filter((member) => sharing.has(member.id))
+    if (!Number.isSafeInteger(amount) || amount <= 0 || !known.has(payerId) || !participants.length) continue
+
+    const custom = expense.shares !== null && expense.shares !== undefined
+    let portions
+    if (custom) {
+      portions = participants.map((member) => Number(expense.shares?.[member.id]))
+      if (portions.some((share) => !Number.isSafeInteger(share) || share <= 0)
+          || portions.reduce((sum, share) => sum + share, 0) !== amount) continue
+    } else {
+      const share = Math.floor(amount / participants.length)
+      const remainder = amount % participants.length
+      if (remainder) rounded = true
+      portions = participants.map((_, i) => share + (i < remainder ? 1 : 0))
+    }
+
+    count++
+    total += amount
+    balances.set(payerId, balances.get(payerId) + amount)
+    participants.forEach((member, i) => {
+      balances.set(member.id, balances.get(member.id) - portions[i])
+    })
+  }
+
+  const debtors = members.map((member) => ({ member, amount: -(balances.get(member.id) ?? 0) }))
+    .filter((x) => x.amount > 0)
+  const creditors = members.map((member) => ({ member, amount: balances.get(member.id) ?? 0 }))
+    .filter((x) => x.amount > 0)
+  const transfers = []
+  let owing = 0, owed = 0
+  while (owing < debtors.length && owed < creditors.length) {
+    const amount = Math.min(debtors[owing].amount, creditors[owed].amount)
+    transfers.push({ from: debtors[owing].member, to: creditors[owed].member, amount })
+    debtors[owing].amount -= amount
+    creditors[owed].amount -= amount
+    if (!debtors[owing].amount) owing++
+    if (!creditors[owed].amount) owed++
+  }
+  return { expenses: count, total, rounded, transfers }
+}
 
 // The same list with the people filled in, and anyone who has left the trip
 // dropped: a name nobody can put a face to is not an answer to "who has this".
@@ -1686,11 +1767,15 @@ function joinBlock() {
 }
 
 function googleSignIn(note = 'Your account keeps your name and trips together across devices.') {
+  const dev = S.auth.devBypass
+    ? '<button class="btn btn--wide auth__dev" data-act="dev-sign-in">Continue as developer</button>'
+    : ''
   if (!S.auth.clientId) {
-    return `<p class="auth__unavailable">Google sign-in has not been configured on this server yet.</p>`
+    return dev || '<p class="auth__unavailable">Google sign-in has not been configured on this server yet.</p>'
   }
   return `<div class="auth" aria-busy="${S.authBusy}">
             <div class="auth__google" data-google></div>
+            ${dev}
             ${note ? `<p class="auth__note">${esc(note)}</p>` : ''}
           </div>`
 }
@@ -1707,6 +1792,7 @@ function applyAuth(data) {
   S.auth = {
     loaded: true,
     clientId: String(data?.clientId ?? S.auth.clientId ?? ''),
+    devBypass: !!data?.devBypass,
     user: data?.user ?? null,
     memberships: Array.isArray(data?.memberships) ? data.memberships : [],
   }
@@ -1795,6 +1881,10 @@ function createBlock(folded) {
           <label class="field"><span>Arrive</span><input type="date" name="start_date"></label>
           <label class="field"><span>Leave</span><input type="date" name="end_date"></label>
         </div>
+        <label class="field"><span>Currency</span>
+          <input name="currency" value="GBP" maxlength="3" pattern="[A-Za-z]{3}" required
+                 list="currency-codes" autocomplete="off" autocapitalize="characters" spellcheck="false">
+          <datalist id="currency-codes"><option value="GBP"><option value="EUR"><option value="USD"><option value="CAD"><option value="AUD"><option value="NZD"></datalist></label>
         <button class="btn btn--primary btn--wide" type="submit">Create the trip</button>
       </form>
     </section>`
@@ -1961,16 +2051,19 @@ function roomNotificationButton() {
 }
 
 function topbar() {
-  if (S.camp === 'room') {
+  if (S.camp === 'room' || S.camp === 'settle') {
+    const settling = S.camp === 'settle'
     return `
-      <header class="topbar topbar--bare topbar--room">
+      <header class="topbar topbar--bare topbar--focus">
         <div class="roombar">
           <a class="roombar__back" href="/t/${encodeURIComponent(S.trip.id)}" data-act="camp">
             <span aria-hidden="true">${ICONS.back}</span>
             <span class="sr-only">Back to trip overview</span>
           </a>
-          <h1 class="roombar__title" id="planning-room-title">Planning Room</h1>
-          ${roomNotificationButton()}
+          <h1 class="roombar__title" id="${settling ? 'settle-up-title' : 'planning-room-title'}">${settling ? 'Settle up' : 'Planning Room'}</h1>
+          ${settling
+            ? `<button class="roombar__currency mono" data-act="currency" aria-label="Change trip currency">${esc(tripCurrency())}</button>`
+            : roomNotificationButton()}
         </div>
       </header>`
   }
@@ -2856,7 +2949,81 @@ function homeCard() {
         <button class="btn btn--quiet" data-act="home-off">Back to packing</button>
       </div>
       <p class="invite__note">Other people's personal kit is private, so it is not in that count — only the group's things and your own.</p>
-    </div>`
+  </div>`
+}
+
+function settleDoor() {
+  const settled = settlement()
+  const next = settled.transfers[0]
+  const detail = !settled.expenses
+    ? 'No expenses yet. Add petrol, pitch fees or anything else the group shares.'
+    : next
+      ? `${next.from.name} owes ${next.to.name} ${moneyText(next.amount)}`
+      : 'Everything recorded so far is square.'
+  return `
+    <a class="settle-door" href="/t/${encodeURIComponent(S.trip.id)}/settle" data-act="settle">
+      <span class="settle-door__copy"><strong>Settle up</strong><span>${esc(detail)}</span></span>
+      ${settled.expenses ? `<span class="settle-door__total mono">${moneyText(settled.total)}</span>` : ''}
+      <span class="settle-door__go" aria-hidden="true">→</span>
+    </a>`
+}
+
+function settlePage() {
+  const settled = settlement()
+  if (!settled.expenses) {
+    return `
+      <main class="page settle-page" aria-labelledby="settle-up-title">
+        <section class="settle-empty">
+          <h2>No expenses yet</h2>
+          <p>Add petrol, the pitch fee or anything else people on this trip need to share.</p>
+          <button class="btn btn--primary" data-act="new-expense">Add the first expense</button>
+        </section>
+      </main>`
+  }
+
+  return `
+    <main class="page settle-page" aria-labelledby="settle-up-title">
+      <div class="settle-page__intro">
+        <p><b>${moneyText(settled.total)}</b> recorded across ${settled.expenses} ${settled.expenses === 1 ? 'expense' : 'expenses'}.</p>
+        <button class="btn btn--primary" data-act="new-expense">${ICONS.plus} Add expense</button>
+      </div>
+
+      <section class="settle-section" aria-labelledby="settle-payments-title">
+        <div class="settle-section__head">
+          <h2 id="settle-payments-title">To settle</h2>
+          <span>${settled.transfers.length} ${settled.transfers.length === 1 ? 'payment' : 'payments'}</span>
+        </div>
+        ${settled.transfers.length ? `
+          <ul class="settle">
+            ${settled.transfers.map((move) => `
+              <li class="settle__row">
+                <span><b>${esc(move.from.name)}</b> owes <b>${esc(move.to.name)}</b></span>
+                <strong class="mono">${moneyText(move.amount)}</strong>
+              </li>`).join('')}
+          </ul>` : '<p class="settle__square">Everyone is square.</p>'}
+        ${settled.rounded ? '<p class="settle__round">Rounding is to the penny. Any extra penny shares go to the first names shown under Who’s coming.</p>' : ''}
+      </section>
+
+      <section class="settle-section" aria-labelledby="settle-expenses-title">
+        <div class="settle-section__head">
+          <h2 id="settle-expenses-title">Expenses</h2>
+          <span>${esc(tripCurrency())}</span>
+        </div>
+        <ul class="expenses">
+          ${S.expenses.map((expense) => {
+            const payer = memberById(expense.paid_by)
+            const people = (expense.participants ?? []).length
+            const split = expense.shares ? `custom split between ${people}` : `shared equally by ${people}`
+            return `<li>
+              <button class="expense-row" data-act="expense" data-expense="${expense.id}">
+                <span><b>${esc(expense.description)}</b><small>Paid by ${esc(payer?.name || 'someone')} · ${split}</small></span>
+                <strong class="mono">${moneyText(expense.amount)}</strong>
+              </button>
+            </li>`
+          }).join('')}
+        </ul>
+      </section>
+    </main>`
 }
 
 function peopleCard() {
@@ -3062,6 +3229,7 @@ function campPage() {
         </div>
         <div class="trip-stack">
           ${peopleCard()}
+          ${settleDoor()}
 
           <div class="card">
             <h3>Recent changes</h3>
@@ -3144,8 +3312,11 @@ function authNudge() {
 
 function viewTrip() {
   const tab = currentTab()
-  const page = S.camp === 'room' ? roomPage() : S.camp ? campPage() : tab.id === 'mine' ? minePage() : listPage()
+  const page = S.camp === 'room' ? roomPage()
+    : S.camp === 'settle' ? settlePage()
+      : S.camp ? campPage() : tab.id === 'mine' ? minePage() : listPage()
   if (S.camp === 'room') return `<div class="app app--room">${topbar()}${page}</div>`
+  if (S.camp === 'settle') return `<div class="app app--focus">${topbar()}${page}</div>`
   return `<div class="app">${topbar()}${authNudge()}${page}</div>${tabbar()}`
 }
 
@@ -3219,14 +3390,19 @@ function sheetItem(s) {
   const on = new Map(claimsOn(item).map((c) => [c.member_id, c]))
   const rows = S.members.map((m) => {
     const claim = on.get(m.id)
+    const expense = claim ? expenseForClaim(item.id, m.id) : null
     return `
-      <button class="pick" data-act="claim" data-id="${item.id}" data-member="${m.id}"
-              aria-pressed="${!!claim}">
-        <span class="pick__swatch" style="background:${colorOf(m)}"></span>
-        <span class="pick__main"><span class="pick__title">${esc(m.name)}${m.id === S.me ? ' (you)' : ''}</span>
-          ${claim ? `<span class="pick__note">${claim.packed ? 'Packed theirs.' : 'Not packed yet.'}</span>` : ''}</span>
-        <span class="pick__tick">${ICONS.tickGreen}</span>
-      </button>`
+      <div class="claim-row">
+        <button class="pick" data-act="claim" data-id="${item.id}" data-member="${m.id}"
+                aria-pressed="${!!claim}">
+          <span class="pick__swatch" style="background:${colorOf(m)}"></span>
+          <span class="pick__main"><span class="pick__title">${esc(m.name)}${m.id === S.me ? ' (you)' : ''}</span>
+            ${claim ? `<span class="pick__note">${claim.packed ? 'Packed theirs.' : 'Not packed yet.'}</span>` : ''}</span>
+          <span class="pick__tick">${ICONS.tickGreen}</span>
+        </button>
+        ${claim ? `<button class="claim-row__cost" data-act="expense" data-id="${item.id}" data-member="${m.id}"${expense ? ` data-expense="${expense.id}"` : ''}>
+          ${expense ? `${moneyText(expense.amount)} · paid by ${esc(memberById(expense.paid_by)?.name || m.name)}` : 'Add what it cost'}</button>` : ''}
+      </div>`
   }).join('')
 
   // Putting your name to Saturday dinner is the moment what somebody cannot eat
@@ -3493,6 +3669,188 @@ function sheetDiet(s) {
   })
 }
 
+function sheetExpense(s) {
+  const expense = s.expenseId ? S.expenses.find((row) => row.id === s.expenseId) : null
+  if (s.expenseId && !expense) return ''
+  const item = s.id ? S.items.find((row) => row.id === s.id) : null
+  const carrier = s.member ? memberById(s.member) : null
+  const claim = item && carrier ? claimsOn(item).find((row) => row.member_id === carrier.id) : null
+  if (!expense && (s.id || s.member) && (!item || !carrier || !claim)) return ''
+  const description = expense?.description || item?.title || ''
+  const payer = expense?.paid_by || carrier?.id || S.me || S.members[0]?.id
+  const value = expense ? (expense.amount / 100).toFixed(2) : ''
+  const sharing = new Set(expense?.participants ?? S.members.map((member) => member.id))
+  const split = expense?.shares ? 'custom' : 'equal'
+  const equalValues = new Map()
+  if (expense && !expense.shares && sharing.size) {
+    const people = S.members.filter((member) => sharing.has(member.id))
+    const each = Math.floor(expense.amount / people.length)
+    const remainder = expense.amount % people.length
+    people.forEach((member, i) => equalValues.set(member.id, each + (i < remainder ? 1 : 0)))
+  }
+
+  return sheetShell({
+    title: expense ? `Edit ${expense.description}` : item ? `Cost of ${item.title}` : 'Add expense',
+    blurb: item && carrier
+      ? `${carrier.name} is bringing this. Choose who paid and who shares the cost.`
+      : 'Choose only the people who share this cost — for petrol, that may be one car rather than the whole trip.',
+    body: `
+      <form class="expense-form" data-act="save-expense" data-split="${split}"${expense ? ` data-expense="${expense.id}"` : ''}${item ? ` data-id="${item.id}"` : ''}${carrier ? ` data-member="${carrier.id}"` : ''}>
+        <label class="field"><span>What was it for?</span>
+          <input name="description" value="${esc(description)}" maxlength="120" required
+                 ${description ? '' : 'autofocus '}placeholder="Petrol"></label>
+        <label class="field"><span>Cost (${esc(tripCurrency())})</span>
+          <input name="amount" value="${esc(value)}" ${description ? 'autofocus ' : ''}inputmode="decimal"
+                 required placeholder="0.00" pattern="[0-9]+([.][0-9]{1,2})?"></label>
+        <label class="field"><span>Paid by</span>
+          <select name="paidBy">
+            ${S.members.map((m) => `<option value="${m.id}"${m.id === payer ? ' selected' : ''}>${esc(m.name)}</option>`).join('')}
+          </select></label>
+        <fieldset class="expense-split">
+          <legend>How should it be split?</legend>
+          <input type="hidden" name="splitMode" value="${split}">
+          <div class="segmented expense-split__modes">
+            <button type="button" class="segmented__btn" data-act="expense-split" data-value="equal"
+                    aria-pressed="${split === 'equal'}">Equal</button>
+            <button type="button" class="segmented__btn" data-act="expense-split" data-value="custom"
+                    aria-pressed="${split === 'custom'}">Custom amounts</button>
+          </div>
+          <p class="field__hint" id="expense-share-help" data-share-help>${split === 'custom'
+            ? 'Enter each person’s share. Leave one blank to give them the remainder.'
+            : 'The cost is divided evenly between everyone selected below.'}</p>
+        </fieldset>
+        <fieldset class="expense-people">
+          <legend>Who shares it?</legend>
+          ${S.members.map((member) => {
+            const selected = sharing.has(member.id)
+            const share = expense?.shares?.[member.id] ?? equalValues.get(member.id)
+            return `<div class="expense-person">
+              <label class="expense-person__who">
+                <input type="checkbox" name="participantIds" value="${member.id}"${selected ? ' checked' : ''}>
+                <span class="pick__swatch" style="background:${colorOf(member)}"></span>
+                <span class="expense-person__name">${esc(member.name)}${member.id === S.me ? ' (you)' : ''}</span>
+              </label>
+              <label class="expense-person__amount">
+                <span class="sr-only">${esc(member.name)}’s share (${esc(tripCurrency())})</span>
+                <input name="share:${member.id}" value="${share ? minorInput(share) : ''}"
+                       inputmode="decimal" placeholder="0.00" pattern="[0-9]+([.][0-9]{1,2})?"
+                       aria-describedby="expense-share-help"${split !== 'custom' || !selected ? ' disabled' : ''}>
+              </label>
+            </div>`
+          }).join('')}
+          <p class="expense-split__total" data-share-total aria-live="polite">${split === 'custom'
+            ? `Shares add up to ${moneyText(expense.amount)}.` : ''}</p>
+        </fieldset>
+        <button class="btn btn--primary btn--wide" type="submit">Save expense</button>
+      </form>`,
+    foot: expense
+      ? `<button class="btn btn--quiet btn--wide" data-act="delete-expense" data-expense="${expense.id}">Remove expense</button>`
+      : '',
+  })
+}
+
+function expenseRows(form) {
+  return [...form.querySelectorAll('.expense-person')].map((row) => ({
+    person: row.querySelector('input[name="participantIds"]'),
+    share: row.querySelector('input[name^="share:"]'),
+  }))
+}
+
+function updateExpenseShareTotal(form) {
+  const output = form.querySelector('[data-share-total]')
+  if (!output || form.dataset.split !== 'custom') return
+  const total = minorFromInput(form.elements.namedItem('amount')?.value)
+  const picked = expenseRows(form).filter(({ person }) => person.checked)
+  if (!picked.length) { output.textContent = 'Choose at least one person.'; return }
+  if (!total) { output.textContent = 'Enter the cost, then assign each share.'; return }
+
+  let assigned = 0, blanks = 0, invalid = false
+  for (const { share } of picked) {
+    const raw = share.value.trim()
+    if (!raw) { blanks++; continue }
+    const amount = minorFromInput(raw)
+    if (!amount) invalid = true
+    else assigned += amount
+  }
+  if (invalid) { output.textContent = 'Use positive amounts with no more than two decimal places.'; return }
+
+  const left = total - assigned
+  if (blanks === 1 && left > 0) output.textContent = `${moneyText(left)} will go to the remaining person.`
+  else if (blanks > 1) output.textContent = `${moneyText(Math.max(left, 0))} left to assign across ${blanks} people.`
+  else if (left === 0) output.textContent = `Shares add up to ${moneyText(total)}.`
+  else if (left > 0) output.textContent = `${moneyText(left)} left to assign.`
+  else output.textContent = `${moneyText(-left)} over the cost.`
+}
+
+function setExpenseSplit(form, split) {
+  form.dataset.split = split
+  form.elements.namedItem('splitMode').value = split
+  for (const button of form.querySelectorAll('[data-act="expense-split"]')) {
+    button.setAttribute('aria-pressed', button.dataset.value === split)
+  }
+  const rows = expenseRows(form)
+  for (const { person, share } of rows) share.disabled = split !== 'custom' || !person.checked
+
+  if (split === 'custom') {
+    const picked = rows.filter(({ person }) => person.checked)
+    const total = minorFromInput(form.elements.namedItem('amount')?.value)
+    if (total && picked.length && picked.every(({ share }) => !share.value.trim())) {
+      const each = Math.floor(total / picked.length)
+      const remainder = total % picked.length
+      picked.forEach(({ share }, i) => { share.value = minorInput(each + (i < remainder ? 1 : 0)) })
+    }
+  }
+
+  const help = form.querySelector('[data-share-help]')
+  if (help) help.textContent = split === 'custom'
+    ? 'Enter each person’s share. Leave one blank to give them the remainder.'
+    : 'The cost is divided evenly between everyone selected below.'
+  updateExpenseShareTotal(form)
+}
+
+function customExpenseShares(form, participants, rawTotal) {
+  const total = minorFromInput(rawTotal)
+  if (!total) return { error: 'Enter a cost greater than zero.' }
+  if (!participants.length) return { error: 'Choose at least one person to share this expense.' }
+  const shares = {}, blank = []
+  let assigned = 0
+  for (const memberId of participants) {
+    const input = form.elements.namedItem(`share:${memberId}`)
+    const raw = String(input?.value ?? '').trim()
+    if (!raw) { blank.push({ memberId, input }); continue }
+    const amount = minorFromInput(raw)
+    if (!amount) return { error: 'Every custom share must be greater than zero and use no more than two decimal places.' }
+    shares[memberId] = minorInput(amount)
+    assigned += amount
+  }
+  if (blank.length > 1) return { error: 'Enter each share, or leave only one person blank for the remainder.' }
+  if (blank.length === 1) {
+    const remainder = total - assigned
+    if (remainder <= 0) return { error: 'There is no positive remainder for the blank share.' }
+    shares[blank[0].memberId] = minorInput(remainder)
+    if (blank[0].input) blank[0].input.value = shares[blank[0].memberId]
+    assigned += remainder
+  }
+  if (assigned !== total) return { error: `The shares must add up to ${moneyText(total)}.` }
+  return { shares }
+}
+
+function sheetCurrency() {
+  return sheetShell({
+    title: 'Trip currency',
+    blurb: 'One currency covers every cost on this trip.',
+    body: `
+      <form data-act="save-currency">
+        <label class="field"><span>Three-letter code</span>
+          <input name="currency" value="${esc(tripCurrency())}" maxlength="3" pattern="[A-Za-z]{3}"
+                 required autofocus list="currency-codes" autocomplete="off" autocapitalize="characters" spellcheck="false">
+          <datalist id="currency-codes"><option value="GBP"><option value="EUR"><option value="USD"><option value="CAD"><option value="AUD"><option value="NZD"></datalist>
+          <p class="field__hint">Changing this relabels existing costs. It does not convert them.</p></label>
+        <button class="btn btn--primary btn--wide" type="submit">Save currency</button>
+      </form>`,
+  })
+}
+
 function sheetAdd(s) {
   const tab = tabById(s.tab)
   const cats = catsOn(tab)
@@ -3677,9 +4035,13 @@ function restore(sheet, typed, at) {
 
 function renderSheet() {
   if (!S.sheet) { sheetRoot.innerHTML = ''; sheetSig = null; return }
-  const map = { item: sheetItem, edit: sheetEdit, add: sheetAdd, suggest: sheetSuggest, place: sheetPlace, when: sheetWhen, diet: sheetDiet, diets: sheetDiets }
+  const map = {
+    item: sheetItem, edit: sheetEdit, add: sheetAdd, suggest: sheetSuggest,
+    place: sheetPlace, when: sheetWhen, diet: sheetDiet, diets: sheetDiets,
+    expense: sheetExpense, currency: sheetCurrency,
+  }
   const html = map[S.sheet.kind]?.(S.sheet) ?? ''
-  const sig = `${S.sheet.kind}:${S.sheet.id ?? ''}`
+  const sig = `${S.sheet.kind}:${S.sheet.expenseId ?? S.sheet.id ?? ''}:${S.sheet.member ?? ''}`
   const open = sheetRoot.querySelector('.sheet')
 
   // The same sheet, saying something new, keeps its own element: throwing it
@@ -3883,6 +4245,7 @@ function render({ chatBottom = false } = {}) {
 
 const meKey = (tripId) => `cs.me.${tripId}`
 const TRIPS_KEY = 'cs.trips'
+const DEV_USER_KEY = 'cs.dev-user'
 const foldsKey = (tripId) => `cs.folds.${tripId}`
 
 // Packing happens over a week and a dozen visits, not in one sitting, so a
@@ -4019,6 +4382,11 @@ function tripCodeFrom(raw) {
   return decodeURIComponent(m ? m[1] : s).trim().toLowerCase().replace(/\s+/g, '-')
 }
 
+function tripRoute(pathname = location.pathname) {
+  const match = String(pathname).match(/^\/t\/([^/]+)(?:\/(room|settle))?\/?$/)
+  return match ? { code: decodeURIComponent(match[1]), view: match[2] || '' } : null
+}
+
 async function goToTrip(code) {
   S.camp = false
   history.pushState({ tripView: false }, '', `/t/${encodeURIComponent(code)}`)
@@ -4026,7 +4394,7 @@ async function goToTrip(code) {
 }
 
 function pushTripView(view) {
-  const suffix = view === 'room' ? '/room' : ''
+  const suffix = view === 'room' ? '/room' : view === 'settle' ? '/settle' : ''
   history.pushState({ tripView: view }, '', `/t/${encodeURIComponent(S.trip.id)}${suffix}`)
 }
 
@@ -4104,6 +4472,27 @@ document.addEventListener('click', async (ev) => {
       break
     }
 
+    case 'dev-sign-in': {
+      if (S.authBusy) break
+      S.authBusy = true
+      const tripId = S.trip?.id
+      try {
+        let devId = localStorage.getItem(DEV_USER_KEY)
+        if (!devId) {
+          devId = newMessageId()
+          localStorage.setItem(DEV_USER_KEY, devId)
+        }
+        applyAuth(await api('/auth/dev', {
+          method: 'POST', body: { devId, legacyMemberships: legacyMemberships() },
+        }))
+        toast('Signed in for development.')
+        if (tripId) await openTrip(tripId)
+        else await showLanding()
+      } catch (err) { toast(err.message) }
+      finally { S.authBusy = false; render() }
+      break
+    }
+
     case 'open-trip':
       await goToTrip(el.dataset.id)
       window.scrollTo(0, 0)
@@ -4171,6 +4560,13 @@ document.addEventListener('click', async (ev) => {
     case 'room':
       if (S.camp !== 'room') pushTripView('room')
       S.camp = 'room'
+      render()
+      window.scrollTo(0, 0)
+      break
+
+    case 'settle':
+      if (S.camp !== 'settle') pushTripView('settle')
+      S.camp = 'settle'
       render()
       window.scrollTo(0, 0)
       break
@@ -4280,6 +4676,35 @@ document.addEventListener('click', async (ev) => {
       renderSheet()
       break
 
+    case 'expense':
+      S.sheet = {
+        kind: 'expense', expenseId: el.dataset.expense || '',
+        id: el.dataset.id || '', member: el.dataset.member || '',
+      }
+      renderSheet()
+      break
+
+    case 'new-expense':
+      S.sheet = { kind: 'expense' }
+      renderSheet()
+      break
+
+    case 'currency':
+      S.sheet = { kind: 'currency' }
+      renderSheet()
+      break
+
+    case 'delete-expense': {
+      const expense = S.expenses.find((row) => row.id === el.dataset.expense)
+      if (expense && confirm(`Remove "${expense.description}" from Settle up?`)
+          && await mutate(() => api(`/expenses/${expense.id}`, { method: 'DELETE' }))) {
+        S.sheet = null
+        renderSheet()
+        toast('Expense removed.')
+      }
+      break
+    }
+
     // Both land straight away and leave the sheet open, the same as the
     // shared/own switch: there is nothing to type, so seeing the chip come on is
     // the whole of the confirmation.
@@ -4318,7 +4743,10 @@ document.addEventListener('click', async (ev) => {
       }
 
       const spoken = there.filter(isClaimed)
-      if (spoken.length && !confirm(`${namesOn(spoken[0])} put their name to ${day ? dayFull(day) : 'the undated one'}. Take that day off anyway?`)) break
+      const ids = new Set(there.map((row) => row.id))
+      const linked = S.expenses.filter((expense) => ids.has(expense.item_id))
+      const costNote = linked.length ? ` Its ${linked.length === 1 ? 'expense' : 'expenses'} will stay in Settle up.` : ''
+      if (spoken.length && !confirm(`${namesOn(spoken[0])} put their name to ${day ? dayFull(day) : 'the undated one'}.${costNote} Take that day off anyway?`)) break
       // The sheet is open on one of these rows, so if that is the one going, it
       // is pointed at another before it goes and stays open on the same thing.
       if (there.some((i) => i.id === S.sheet?.id)) {
@@ -4354,6 +4782,12 @@ document.addEventListener('click', async (ev) => {
       const where = String(S.trip.location ?? '').trim()
       try { await navigator.clipboard.writeText(where); toast('Address copied.') }
       catch { prompt('Copy the address:', where) }
+      break
+    }
+
+    case 'expense-split': {
+      const form = el.closest('form[data-act="save-expense"]')
+      if (form) setExpenseSplit(form, el.dataset.value === 'custom' ? 'custom' : 'equal')
       break
     }
 
@@ -4524,7 +4958,9 @@ document.addEventListener('click', async (ev) => {
 
     case 'kill': {
       const it = S.items.find((i) => i.id === el.dataset.id)
-      if (it && confirm(`Remove "${it.title}" from the list?`)) {
+      const linked = it ? S.expenses.filter((expense) => expense.item_id === it.id) : []
+      const costNote = linked.length ? ` Its ${linked.length === 1 ? 'expense' : 'expenses'} will stay in Settle up.` : ''
+      if (it && confirm(`Remove "${it.title}" from the list?${costNote}`)) {
         S.sheet = null
         renderSheet()
         mutate(() => api(`/items/${it.id}`, { method: 'DELETE' }))
@@ -4865,6 +5301,36 @@ document.addEventListener('submit', async (ev) => {
         : 'Removed.')
       break
     }
+
+    case 'save-expense': {
+      const expenseId = form.dataset.expense
+      const participants = new FormData(form).getAll('participantIds')
+      const split = f.splitMode === 'custom' ? 'custom' : 'equal'
+      const body = {
+        description: f.description, amount: f.amount, paidBy: f.paidBy, participants, split,
+        ...(form.dataset.id ? { itemId: form.dataset.id, claimMemberId: form.dataset.member } : {}),
+      }
+      if (split === 'custom') {
+        const custom = customExpenseShares(form, participants, f.amount)
+        if (custom.error) { toast(custom.error); break }
+        body.shares = custom.shares
+      }
+      const path = expenseId ? `/expenses/${expenseId}` : `/trips/${S.trip.id}/expenses`
+      if (!await mutate(() => api(path, { method: expenseId ? 'PATCH' : 'POST', body }))) break
+      S.sheet = null
+      renderSheet()
+      toast('Expense saved.')
+      break
+    }
+
+    case 'save-currency':
+      if (!await mutate(() => api(`/trips/${S.trip.id}`, {
+        method: 'PATCH', body: { currency: f.currency },
+      }))) break
+      S.sheet = null
+      renderSheet()
+      toast(`Trip currency is ${tripCurrency()}.`)
+      break
   }
 })
 
@@ -4906,6 +5372,15 @@ document.addEventListener('input', (ev) => {
     S.chat.draft = ev.target.value
     fitChatBox(ev.target)
     syncCampMention(ev.target)
+  }
+  const expenseForm = ev.target.closest?.('form[data-act="save-expense"]')
+  if (expenseForm) {
+    if (ev.target.name === 'participantIds') {
+      const row = ev.target.closest('.expense-person')
+      const share = row?.querySelector('input[name^="share:"]')
+      if (share) share.disabled = expenseForm.dataset.split !== 'custom' || !ev.target.checked
+    }
+    updateExpenseShareTotal(expenseForm)
   }
   const box = ev.target.closest?.('[data-find]')
   if (box && !ev.isComposing) typedFind(box)
@@ -5547,7 +6022,7 @@ function installBlock() {
 async function boot() {
   await Promise.all([
     api('/auth').then(applyAuth, () => {
-      S.auth = { loaded: true, clientId: '', user: null, memberships: [] }
+      S.auth = { loaded: true, clientId: '', devBypass: false, user: null, memberships: [] }
     }),
     api('/catalog').then(({ catalog, tips }) => {
       S.catalog = catalog
@@ -5555,11 +6030,11 @@ async function boot() {
     }, () => { /* the app still works without suggestions */ }),
   ])
 
-  const m = location.pathname.match(/^\/t\/([^/]+)(?:\/(room))?\/?$/)
-  if (m) {
-    const route = m[2] === 'room' ? 'room' : history.state?.tripView
-    S.camp = route === 'room' || route === 'overview' ? route : false
-    await openTrip(decodeURIComponent(m[1]))
+  const found = tripRoute()
+  if (found) {
+    const route = found.view || history.state?.tripView
+    S.camp = route === 'room' || route === 'settle' || route === 'overview' ? route : false
+    await openTrip(found.code)
   }
   else await showLanding()
 

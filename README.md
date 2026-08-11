@@ -52,6 +52,12 @@ lost in a separate group chat.
 - **Dietary needs** — one line per person, shown at the top of the food list and
   again at the moment somebody takes on Saturday dinner, rather than buried on a
   page about people.
+- **Settle up** — record petrol, pitch fees or the cost of a claimed item, say
+  who paid, and choose exactly who shares it — one car's occupants or the whole
+  trip. Its own page nets everything into a short, deterministic list of "Sam
+  owes Alex £12" payments; the Trip tab keeps only the total and the next move.
+  Each trip has one explicit currency, and odd pennies are assigned visibly in
+  the trip's member order.
 - **Going home** — flip the trip round on the last morning and every list starts
   asking the other question: not *who is bringing this* but *is it back in the
   car*. Whatever nobody ticks back in is what gets left in the grass.
@@ -131,6 +137,14 @@ can never be half-claimed and half-one-each. Plans (`activities`) are always
 shared and never show the orange unclaimed chip — nobody "brings" a hike, so
 they're measured by votes and can take an optional organiser instead. Trips created before this split are migrated on boot: the column is
 added and known one-each titles are flipped over, using the catalogue.
+
+An expense carries a description, an integer-minor-unit amount, a payer and the
+members sharing it. It can optionally point back to a claimed item, but petrol
+and pitch fees stand on their own. The trip's three-letter `currency` labels
+every expense. Settlement splits each one only across its participants without
+floating-point arithmetic; indivisible pennies go to those participants in the
+same stable member order used everywhere else, and the UI says when that rule
+was needed.
 
 Items carry the same trio as a trip — `place`, `lat`, `lon` — filled in by the
 same search. Only plans offer it in the UI, since a place on a bag of sausages
@@ -558,6 +572,10 @@ development, usually `http://localhost:3000`) and set `GOOGLE_CLIENT_ID` in the
 ignored `.env.local` file. Production gets the same variable from Railway. No
 client secret is used by the Google Identity Services ID-token flow.
 
+For local or LAN testing without Google, set `DEV_AUTH_BYPASS=1` in `.env.local`
+and use **Continue as developer**. The bypass is opt-in and is ignored whenever
+`NODE_ENV=production`.
+
 ## Configuration
 
 | Variable           | Default             | Notes                                      |
@@ -565,6 +583,7 @@ client secret is used by the Google Identity Services ID-token flow.
 | `PORT`             | `3000`              | Set by Railway automatically.              |
 | `DB_PATH`          | `./data/camping.db` | Point at a mounted volume in prod.         |
 | `GOOGLE_CLIENT_ID` | empty               | OAuth web client id; required for sign-in. |
+| `DEV_AUTH_BYPASS`  | `0`                 | Set to `1` for development-only sign-in.   |
 | `OPENAI_API_KEY`   | empty               | Enables `@camp`; keep it server-side.       |
 | `OPENAI_MODEL`     | `gpt-5.6-luna`      | Responses API model used by `@camp`.        |
 | `VAPID_PUBLIC_KEY` | generated in DB     | Optional fixed Web Push application key.    |

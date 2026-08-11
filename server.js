@@ -55,6 +55,9 @@ webpush.setVapidDetails(
 
 const GOOGLE_CLIENT_ID = clean(process.env.GOOGLE_CLIENT_ID, 300)
 const google = GOOGLE_CLIENT_ID ? new OAuth2Client(GOOGLE_CLIENT_ID) : null
+// Deliberately opt-in as well as non-production: an unset NODE_ENV must never
+// turn authentication off by accident on a real deployment.
+const DEV_AUTH_BYPASS = process.env.DEV_AUTH_BYPASS === '1' && process.env.NODE_ENV !== 'production'
 const SESSION_COOKIE = 'cs_session'
 const SESSION_DAYS = 60
 
@@ -112,6 +115,7 @@ function membershipsFor(userId) {
 function authState(req) {
   return {
     clientId: GOOGLE_CLIENT_ID,
+    devBypass: DEV_AUTH_BYPASS,
     user: publicUser(req.user),
     memberships: membershipsFor(req.user?.id),
   }
@@ -164,6 +168,26 @@ function claimLegacyMemberships(userId, raw) {
 
 app.get('/api/auth', (req, res) => res.json(authState(req)))
 
+app.post('/api/auth/dev', (req, res) => {
+  if (!DEV_AUTH_BYPASS) return res.status(404).json({ error: 'Development sign-in is disabled.' })
+  if (!sameOrigin(req)) return res.status(403).json({ error: 'Sign-in must start from this app.' })
+
+  const browserId = clean(req.body?.devId, 64)
+  if (!/^[a-z0-9-]{8,64}$/i.test(browserId)) {
+    return res.status(400).json({ error: 'This browser could not create a development identity.' })
+  }
+  const id = `development-user:${browserId}`
+  const name = `Developer ${browserId.slice(-6)}`
+  const ts = now()
+  db.prepare(`INSERT INTO users (id, name, email, picture, created_at, updated_at)
+              VALUES (?, ?, '', '', ?, ?)
+              ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at`).run(id, name, ts, ts)
+  claimLegacyMemberships(id, req.body?.legacyMemberships)
+  setSession(req, res, id)
+  req.user = db.prepare('SELECT id, name, email, picture FROM users WHERE id = ?').get(id)
+  res.json(authState(req))
+})
+
 app.post('/api/auth/google', async (req, res) => {
   if (!google) return res.status(503).json({ error: 'Google sign-in is not configured yet.' })
   if (!sameOrigin(req)) return res.status(403).json({ error: 'Sign-in must start from this app.' })
@@ -206,7 +230,8 @@ app.post('/api/auth/google', async (req, res) => {
 app.post('/api/auth/logout', (req, res) => {
   if (!sameOrigin(req)) return res.status(403).json({ error: 'Sign-out must start from this app.' })
   clearSession(req, res)
-  res.json({ user: null, memberships: [], clientId: GOOGLE_CLIENT_ID })
+  req.user = null
+  res.json(authState(req))
 })
 
 app.delete('/api/notifications', (req, res) => {
@@ -234,11 +259,28 @@ function mapUrl(raw) {
 
 // Where the trip is gets more room than its name: it is one field holding a real
 // place, and a full one runs to a site, a village, a postcode and a country.
-const TRIP_FIELDS = ['name', 'location', 'map_url', 'start_date', 'end_date', 'notes']
+const TRIP_FIELDS = ['name', 'location', 'map_url', 'start_date', 'end_date', 'notes', 'currency']
 const TRIP_LIMITS = { notes: 4000, location: 200 }
 // A place on an item is the same kind of answer as a place on the trip.
 const PLACE_MAX = TRIP_LIMITS.location
-const tripField = (f, v) => (f === 'map_url' ? mapUrl(v) : clean(v, TRIP_LIMITS[f] ?? 120))
+const currencyField = (v) => {
+  const code = clean(v, 3).toUpperCase()
+  return /^[A-Z]{3}$/.test(code) ? code : null
+}
+const tripField = (f, v) => (f === 'map_url' ? mapUrl(v)
+  : f === 'currency' ? currencyField(v)
+  : clean(v, TRIP_LIMITS[f] ?? 120))
+
+// Costs arrive as ordinary decimal strings and become integer minor units at
+// the boundary. Empty or zero clears a cost; anything with half a penny or an
+// implausibly large value is refused instead of rounded silently.
+function money(raw) {
+  const value = String(raw ?? '').trim()
+  if (!value) return 0
+  const match = value.match(/^(\d{1,7})(?:\.(\d{1,2}))?$/)
+  if (!match) return null
+  return Number(match[1]) * 100 + Number((match[2] ?? '').padEnd(2, '0'))
+}
 
 // The pin that comes with a searched-for place. Both halves or neither: half a
 // coordinate is a point in the sea. An empty box is not a zero, so blanks stay
@@ -327,7 +369,7 @@ function viewerId(req, tripId, fallbackId = '') {
 
 function requireUser(req, res) {
   if (req.user) return req.user
-  res.status(401).json({ error: 'Sign in with Google first.' })
+  res.status(401).json({ error: 'Sign in first.' })
   return null
 }
 
@@ -938,10 +980,11 @@ app.post('/api/trips', (req, res) => {
   const ts = now()
 
   const [lat, lon] = coords(req.body)
-  db.prepare(`INSERT INTO trips (id, name, location, lat, lon, map_url, start_date, end_date, notes, created_at)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', ?)`)
+  db.prepare(`INSERT INTO trips (id, name, location, lat, lon, map_url, start_date, end_date, notes, currency, created_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?)`)
     .run(id, name, tripField('location', req.body?.location), lat, lon,
-      mapUrl(req.body?.map_url), clean(req.body?.start_date, 20), clean(req.body?.end_date, 20), ts)
+      mapUrl(req.body?.map_url), clean(req.body?.start_date, 20), clean(req.body?.end_date, 20),
+      currencyField(req.body?.currency) ?? 'GBP', ts)
 
   let memberId = null
   if (organiser) {
@@ -1287,6 +1330,9 @@ app.patch('/api/trips/:id', (req, res) => {
   const trip = requireTrip(req, res)
   if (!trip) return
   if (!requireMember(req, res, trip.id)) return
+  if (req.body?.currency !== undefined && !currencyField(req.body.currency)) {
+    return res.status(400).json({ error: 'Use a three-letter currency code, such as GBP or EUR.' })
+  }
   const sets = [], vals = [], touched = []
   for (const f of TRIP_FIELDS) {
     if (req.body?.[f] !== undefined) {
@@ -1324,6 +1370,145 @@ app.patch('/api/trips/:id', (req, res) => {
   }
   bumpRev(trip.id)
   res.json(getTripState(trip.id, viewerId(req, trip.id)))
+})
+
+// ---- expenses --------------------------------------------------------------
+
+function expenseFields(body, tripId, res) {
+  const description = clean(body?.description, 120)
+  if (!description) {
+    res.status(400).json({ error: 'Say what this expense was for.' })
+    return null
+  }
+  const amount = money(body?.amount)
+  if (!amount) {
+    res.status(400).json({ error: amount === null
+      ? 'Enter a cost with no more than two decimal places.'
+      : 'Enter a cost greater than zero.' })
+    return null
+  }
+  const paidBy = clean(body?.paidBy, 64)
+  const participantIds = [...new Set(Array.isArray(body?.participants)
+    ? body.participants.map((id) => clean(id, 64)).filter(Boolean)
+    : [])]
+  if (!participantIds.length) {
+    res.status(400).json({ error: 'Choose at least one person to share this expense.' })
+    return null
+  }
+  const members = db.prepare('SELECT id FROM members WHERE trip_id = ?').all(tripId)
+  const known = new Set(members.map((member) => member.id))
+  if (!known.has(paidBy)) {
+    res.status(400).json({ error: 'Choose somebody on this trip as the payer.' })
+    return null
+  }
+  if (participantIds.some((id) => !known.has(id))) {
+    res.status(400).json({ error: 'Every person sharing this expense must be on the trip.' })
+    return null
+  }
+
+  const split = body?.split === undefined || body.split === 'equal' ? 'equal' : body.split
+  if (split !== 'custom') {
+    if (split !== 'equal') {
+      res.status(400).json({ error: 'Choose an equal or custom split.' })
+      return null
+    }
+    return {
+      description, amount, paidBy,
+      participants: participantIds.map((memberId) => ({ memberId, shareAmount: null })),
+    }
+  }
+
+  const rawShares = body?.shares
+  if (!rawShares || typeof rawShares !== 'object' || Array.isArray(rawShares)) {
+    res.status(400).json({ error: 'Enter a share for everyone in the custom split.' })
+    return null
+  }
+  const participants = participantIds.map((memberId) => ({
+    memberId,
+    shareAmount: money(rawShares[memberId]),
+  }))
+  if (participants.some(({ shareAmount }) => !shareAmount)) {
+    res.status(400).json({ error: 'Every custom share must be greater than zero and use no more than two decimal places.' })
+    return null
+  }
+  if (participants.reduce((sum, row) => sum + row.shareAmount, 0) !== amount) {
+    res.status(400).json({ error: `Custom shares must add up to ${(amount / 100).toFixed(2)}.` })
+    return null
+  }
+  return { description, amount, paidBy, participants }
+}
+
+function writeExpense(expenseId, participants, write) {
+  const remove = db.prepare('DELETE FROM expense_participants WHERE expense_id = ?')
+  const add = db.prepare(`INSERT INTO expense_participants (expense_id, member_id, share_amount)
+                          VALUES (?, ?, ?)`)
+  db.exec('BEGIN')
+  try {
+    write()
+    remove.run(expenseId)
+    for (const { memberId, shareAmount } of participants) add.run(expenseId, memberId, shareAmount)
+    db.exec('COMMIT')
+  } catch (err) {
+    db.exec('ROLLBACK')
+    throw err
+  }
+}
+
+app.post('/api/trips/:id/expenses', (req, res) => {
+  const trip = requireTrip(req, res)
+  if (!trip) return
+  if (!requireMember(req, res, trip.id)) return
+  const fields = expenseFields(req.body, trip.id, res)
+  if (!fields) return
+
+  let itemId = null, claimMemberId = null
+  if (req.body?.itemId !== undefined || req.body?.claimMemberId !== undefined) {
+    itemId = clean(req.body?.itemId, 64)
+    claimMemberId = clean(req.body?.claimMemberId, 64)
+    const claim = db.prepare(`SELECT 1 FROM claims c JOIN items i ON i.id = c.item_id
+      WHERE c.item_id = ? AND c.member_id = ? AND i.trip_id = ?`)
+      .get(itemId, claimMemberId, trip.id)
+    if (!claim) return res.status(400).json({ error: 'That cost is no longer attached to a claimed item.' })
+    if (db.prepare('SELECT 1 FROM expenses WHERE item_id = ? AND claim_member_id = ?').get(itemId, claimMemberId)) {
+      return res.status(409).json({ error: 'That claimed item already has an expense.' })
+    }
+  }
+
+  const id = uid(), ts = now()
+  const insert = db.prepare(`INSERT INTO expenses
+    (id, trip_id, item_id, claim_member_id, description, amount, paid_by, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+  writeExpense(id, fields.participants, () => insert.run(
+    id, trip.id, itemId, claimMemberId, fields.description, fields.amount, fields.paidBy, ts, ts,
+  ))
+  logEvent(trip.id, actorName(trip.id, req), `recorded ${fields.description}`)
+  bumpRev(trip.id)
+  res.status(201).json(getTripState(trip.id, viewerId(req, trip.id)))
+})
+
+app.patch('/api/expenses/:id', (req, res) => {
+  const expense = db.prepare('SELECT * FROM expenses WHERE id = ?').get(req.params.id)
+  if (!expense) return res.status(404).json({ error: 'That expense is already gone.' })
+  if (!requireMember(req, res, expense.trip_id)) return
+  const fields = expenseFields(req.body, expense.trip_id, res)
+  if (!fields) return
+  const update = db.prepare(`UPDATE expenses SET description = ?, amount = ?, paid_by = ?, updated_at = ? WHERE id = ?`)
+  writeExpense(expense.id, fields.participants, () => update.run(
+    fields.description, fields.amount, fields.paidBy, now(), expense.id,
+  ))
+  logEvent(expense.trip_id, actorName(expense.trip_id, req), `updated ${fields.description}`)
+  bumpRev(expense.trip_id)
+  res.json(getTripState(expense.trip_id, viewerId(req, expense.trip_id)))
+})
+
+app.delete('/api/expenses/:id', (req, res) => {
+  const expense = db.prepare('SELECT * FROM expenses WHERE id = ?').get(req.params.id)
+  if (!expense) return res.status(404).json({ error: 'That expense is already gone.' })
+  if (!requireMember(req, res, expense.trip_id)) return
+  db.prepare('DELETE FROM expenses WHERE id = ?').run(expense.id)
+  logEvent(expense.trip_id, actorName(expense.trip_id, req), `removed ${expense.description}`)
+  bumpRev(expense.trip_id)
+  res.json(getTripState(expense.trip_id, viewerId(req, expense.trip_id)))
 })
 
 // ---- members ----------------------------------------------------------------
@@ -1428,8 +1613,18 @@ app.delete('/api/trips/:id/members/:mid', (req, res) => {
   if (!requireMember(req, res, trip.id)) return
   const m = db.prepare('SELECT * FROM members WHERE id = ? AND trip_id = ?').get(req.params.mid, trip.id)
   if (m) {
+    const costs = db.prepare(`SELECT COUNT(DISTINCT e.id) AS n FROM expenses e
+      LEFT JOIN expense_participants p ON p.expense_id = e.id
+      WHERE e.trip_id = ? AND (e.paid_by = ? OR p.member_id = ?)`)
+      .get(trip.id, m.id, m.id).n
+    if (costs) {
+      return res.status(400).json({ error: `Clear or move ${m.name}'s recorded costs before removing them.` })
+    }
     // What they had put their name to goes back to nobody — claims cascade with
-    // the member, and each carried that person's own packed tick with it.
+    // the member, and each carried that person's own packed tick with it. An
+    // expense survives as a free-standing row once its item shortcut is gone.
+    db.prepare(`UPDATE expenses SET item_id = NULL, claim_member_id = NULL
+                WHERE claim_member_id = ?`).run(m.id)
     db.prepare('DELETE FROM members WHERE id = ?').run(m.id)
     closeMemberSockets(trip.id, m.id)
     logEvent(trip.id, actorName(trip.id, req), `removed ${m.name} from the trip`)
@@ -1528,7 +1723,8 @@ app.patch('/api/items/:id', (req, res) => {
 
   // Switching between shared and own resets the other model's state, so it is
   // handled on its own rather than alongside who is bringing it.
-  const newKind = req.body?.kind !== undefined ? kindOf(clean(req.body.kind, 10), item.list) : null
+  const requestedKind = req.body?.kind !== undefined ? kindOf(clean(req.body.kind, 10), item.list) : null
+  const newKind = requestedKind && requestedKind !== item.kind ? requestedKind : null
   if (newKind === 'own' && !me) {
     return res.status(400).json({ error: 'Join the trip before taking something onto your own list.' })
   }
@@ -1538,6 +1734,7 @@ app.patch('/api/items/:id', (req, res) => {
     // the trip; moving it back to the group hands it to everyone again. Either
     // way the names on it stop meaning what they meant.
     push('owner_id', newKind === 'own' ? me : null)
+    db.prepare('UPDATE expenses SET item_id = NULL, claim_member_id = NULL WHERE item_id = ?').run(item.id)
     db.prepare('DELETE FROM claims WHERE item_id = ?').run(item.id)
     if (newKind === 'shared') db.prepare('DELETE FROM own_checks WHERE item_id = ?').run(item.id)
   }
@@ -1589,6 +1786,7 @@ app.delete('/api/items/:id', (req, res) => {
   const me = requireMember(req, res, item.trip_id)
   if (!me) return
   if (!mayTouch(item, me)) return res.status(403).json({ error: "That's on somebody else's personal list." })
+  db.prepare('UPDATE expenses SET item_id = NULL, claim_member_id = NULL WHERE item_id = ?').run(item.id)
   db.prepare('DELETE FROM items WHERE id = ?').run(item.id)
   // Crossing something off your own list is not an announcement.
   if (!isPrivate(item)) logEvent(item.trip_id, actorName(item.trip_id, req), `removed ${item.title}`)
@@ -1619,7 +1817,11 @@ app.post('/api/items/:id/claim', (req, res) => {
   const { item, member } = found
 
   const has = db.prepare('SELECT 1 FROM claims WHERE item_id = ? AND member_id = ?').get(item.id, member.id)
-  if (has) db.prepare('DELETE FROM claims WHERE item_id = ? AND member_id = ?').run(item.id, member.id)
+  if (has) {
+    db.prepare(`UPDATE expenses SET item_id = NULL, claim_member_id = NULL
+                WHERE item_id = ? AND claim_member_id = ?`).run(item.id, member.id)
+    db.prepare('DELETE FROM claims WHERE item_id = ? AND member_id = ?').run(item.id, member.id)
+  }
   else db.prepare('INSERT INTO claims (item_id, member_id) VALUES (?, ?)').run(item.id, member.id)
 
   // Named, because a claim taken off by somebody else is the one change on this

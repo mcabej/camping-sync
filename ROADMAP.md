@@ -12,17 +12,24 @@ issue numbers.
 
 ## Features
 
-### 1. Money: who paid, what it cost, who owes who
+### 1. Money: who paid, what it cost, who owes who — **built**
 
-The biggest hole. The app already knows the one thing a bill-splitter has to ask
-for: who claimed what. Put `cost` on the `claims` row and net it down to "Sam
-owes Alex £12" on the Camp tab. Firewood, the pitch fee, the big shop — every
+The biggest hole. The app already knows who claimed what, but not every expense
+is cargo and not every cost belongs to the whole trip: petrol may belong only to
+one car. Record free-standing or item-linked expenses and net them down to "Sam
+owes Alex £12" on a focused Settle up page. Firewood, the pitch fee, the big shop — every
 trip ends in an awkward group-chat thread about this, and closing it here means
 nobody opens a second app. *Camp smarts already tells people to sort this before
 they go; this is the app taking its own advice.*
 
-Touches: `claims`, a settle-up panel, possibly `paid_by` for the person who put
-the card in when somebody else carried the thing.
+Each expense has a description, payer and selected participants; an optional
+item link keeps "add what it cost" beside a claim without making claims the
+money model. One explicit currency lives on the trip, and the Settle up page
+nets the exact minor-unit balances into payments while the Trip tab keeps a
+compact summary. Odd pennies are allocated in stable member order and called
+out wherever rounding was needed.
+
+See the README's *Settle up* bullet and data-model section.
 
 ### 2. Days — **built**
 
