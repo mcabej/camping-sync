@@ -127,7 +127,10 @@
   --paper-veil:  rgba(24, 33, 29, .97);
   --ink:         #E3EAE4;
   --ink-soft:    #A2AFA7;
-  --ink-faint:   #828F87;
+  /* Bright enough to clear 4.5:1 on the raised paper as well as the flat kind:
+     #828F87 was 4.40 on --paper-lift, which is under the line for the 9.5-13px
+     metadata this token is mostly spent on. */
+  --ink-faint:   #909D95;
   --ink-rgb:     227 234 228;
   --forest:      #437C67;
   --forest-deep: #16261F;
@@ -443,7 +446,10 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 }
 .trip-card:hover .trip-card__forget, .trip-card__forget:focus-visible { opacity: 1; }
 .trip-card__forget:hover { background: var(--blaze-soft); color: var(--blaze); }
-@media (hover: none) { .trip-card__forget { opacity: .55; } }
+/* Nothing on a touch screen ever hovers, so .55 was not a resting state on the
+   way to a visible one — it was the only state, and a faint mark at 55% is
+   1.7:1 against the card. Full strength in a quieter ink instead. */
+@media (hover: none) { .trip-card__forget { opacity: 1; color: var(--ink-soft); } }
 
 /* How far off it is, in the one unit anyone asks in. */
 .when { flex: none; display: flex; flex-direction: column; align-items: center; line-height: 1; }
