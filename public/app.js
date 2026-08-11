@@ -1193,9 +1193,11 @@ function barParts(tab, section) {
 // The same bar for the one list that is not a list: your own load, wherever on
 // the trip it came from. Your colour for what is in the car, blaze for what is
 // not — which is the same promise the bar makes everywhere else.
-// The chips narrow the bar with the page, the same as they do on a list.
-function mineParts() {
-  const load = myLoad().filter((it) => inKind(it, activeFilter().kind))
+//
+// It takes the load rather than fetching it, because the two places that draw
+// this bar want different loads: the header narrows with the chips on screen,
+// and the Trip tab has no chips and must not inherit yesterday's.
+function loadParts(load) {
   if (!load.length) return { empty: 'nothing yours yet', say: 'Nothing has your name on it.', aria: 'nothing on your list' }
   const home = goingHome()
   const done = load.filter(tickedForMe).length
@@ -1209,6 +1211,9 @@ function mineParts() {
     aria: `you have ${home ? 'found' : 'packed'} ${done} of ${load.length}`,
   }
 }
+
+// The chips narrow the bar with the page, the same as they do on a list.
+const mineParts = () => loadParts(myLoad().filter((it) => inKind(it, activeFilter().kind)))
 
 // One bar, one line, for whichever section is on screen. It reads left to right:
 // how much is handled, then how much is not.
@@ -2222,30 +2227,90 @@ function countdown(trip) {
   return { word: 'Back home' }
 }
 
-// Every other tab shows you one list. This is the only place you can see all
-// four at once, which is what the tab is for.
-function readyRow(tab) {
-  const p = barParts(tab, 'shared')
+// What the trip is still waiting on, as one number and one place to go.
+//
+// "Open" means here what the blaze means on every list: nobody has picked this
+// up. An idea with no vote is unfinished in a different sense — it is waiting on
+// an opinion rather than on a person — so it is the line you get once the lists
+// are covered rather than a number added into them. Counting the two together
+// would also be the one thing the bar never does, which is add up things people
+// have to act on differently.
+function openWork() {
+  const lists = TABS.filter((t) => t.lists.length && !isPlanTab(t))
+    .map((t) => ({ tab: t, n: statsFor(itemsOn(t)).open }))
+  const need = lists.reduce((sum, x) => sum + x.n, 0)
+
+  if (need) {
+    // The button goes to whichever list is worst off. A tie goes to the earlier
+    // tab, which is the order the rows underneath already read in.
+    const worst = lists.reduce((best, x) => (x.n > best.n ? x : best))
+    return {
+      say: `<b>${need}</b> ${need === 1 ? 'thing still needs' : 'things still need'} someone`,
+      go: worst.tab.label, to: worst.tab.id,
+    }
+  }
+
+  const plan = TABS.find(isPlanTab)
+  const ideas = statsFor(itemsOn(plan))
+  const rest = ideas.ideas - ideas.wanted
+  if (rest) {
+    return {
+      say: `<b>${rest}</b> ${rest === 1 ? 'idea is' : 'ideas are'} waiting on a vote`,
+      go: plan.label, to: plan.id,
+    }
+  }
+
+  // Covered and empty are different answers, and only one of them is good news.
+  return S.items.some((it) => !isOwn(it))
+    ? { say: 'Everything is covered.' }
+    : { say: 'Nothing on the lists yet.', go: 'Pack', to: 'pack' }
+}
+
+// Every other tab shows you one list. This is the only place you can see all of
+// them at once, which is what the tab is for.
+//
+// It takes where the row goes and what to call it rather than a tab, because one
+// of the rows is your own load — which is not a list, has no tab object to read
+// a title off, and would otherwise be the fourth bar people have to go and find.
+function readyRow({ label, title, to, parts: p }) {
   return `
-    <button class="ready__row" data-act="tab" data-tab="${tab.id}">
-      <span class="ready__name">${tab.label}</span>
-      <span class="ready__track" role="img" aria-label="${tab.title}: ${p.aria}">${p.empty ? '' : p.segs}</span>
+    <button class="ready__row" data-act="tab" data-tab="${to}">
+      <span class="ready__name">${label}</span>
+      <span class="ready__track" role="img" aria-label="${title}: ${p.aria}">${p.empty ? '' : p.segs}</span>
       <span class="ready__say">${p.empty ? '<span class="ready__none">nothing yet</span>' : (p.short ?? p.say)}</span>
     </button>`
 }
 
 function statusCard() {
   const c = countdown(S.trip)
-  const mine = statsFor(S.items)
+  const work = openWork()
+  const rows = [
+    ...TABS.filter((t) => t.lists.length)
+      .map((t) => ({ label: t.label, title: tabTitle(t), to: t.id, parts: barParts(t, 'shared') })),
+    // Unfiltered on purpose: this bar is the whole of what you are carrying, and
+    // a chip left on a list two taps ago has no business shrinking it.
+    { label: 'Yours', title: tabTitle(tabById('mine')), to: 'mine', parts: loadParts(myLoad()) },
+  ]
+
   return `
     <section class="card status" aria-label="How the trip is looking">
       <span class="eyebrow">How it's looking</span>
-      <p class="countdown">
-        ${c?.n ? `<span class="countdown__n">${c.n}</span><span class="countdown__word">${c.word}</span>`
-               : `<span class="countdown__word countdown__word--alone">${c ? c.word : 'No dates yet'}</span>`}
-      </p>
-      <div class="ready">${TABS.filter((t) => t.lists.length).map(readyRow).join('')}</div>
-      ${mine.own ? `<p class="status__mine">Your own kit: <b>${mine.mine} of ${mine.own}</b> packed. Nobody else can see this.</p>` : ''}
+      ${c ? `
+        <p class="countdown">
+          ${c.n ? `<span class="countdown__n">${c.n}</span><span class="countdown__word">${c.word}</span>`
+                : `<span class="countdown__word countdown__word--alone">${c.word}</span>`}
+        </p>`
+      : `
+        <button class="countdown countdown--ask" data-act="set-dates">
+          <span class="countdown__word countdown__word--alone">No dates yet</span>
+          <span class="countdown__go">Set them</span>
+        </button>`}
+      <div class="status__work">
+        <p class="status__say">${work.say}</p>
+        ${work.to ? `<button class="btn btn--sm" data-act="tab" data-tab="${work.to}">${work.go}</button>` : ''}
+      </div>
+      <div class="ready">${rows.map(readyRow).join('')}</div>
+      ${S.items.some(isOwn) ? `<p class="status__mine">Yours is what you have claimed plus your own kit. Nobody else can see the personal half.</p>` : ''}
     </section>`
 }
 
@@ -4163,6 +4228,17 @@ document.addEventListener('click', async (ev) => {
     case 'set-meal':
       await mutate(() => api(`/items/${el.dataset.id}`, { method: 'PATCH', body: { category: el.dataset.cat } }))
       break
+
+    // The dates are already on this page, further down it. Nothing to open, then
+    // — just take somebody who has said they want them to the field that holds
+    // them, rather than making them hunt for the form they were promised.
+    case 'set-dates': {
+      const field = document.querySelector('form[data-act="save-trip"] [name="start_date"]')
+      if (!field) break
+      field.scrollIntoView({ block: 'center', behavior: 'smooth' })
+      field.focus({ preventScroll: true })
+      break
+    }
 
     case 'edit-notes':
       S.editNotes = true

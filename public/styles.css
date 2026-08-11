@@ -1103,7 +1103,23 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 /* ---- the whole trip, in five lines --------------------------------------- */
 
 .status > .eyebrow { display: block; }
-.countdown { display: flex; align-items: baseline; gap: 10px; margin: 5px 0 15px; }
+.countdown { display: flex; align-items: baseline; gap: 10px; margin: 5px 0 10px; }
+/* A trip with no dates has nothing to count down to, so the number's slot
+   carries the question instead of a shrug. */
+.countdown--ask { width: 100%; text-align: left; }
+.countdown__go { font-size: 13px; font-weight: 600; color: var(--forest); }
+.countdown--ask:hover .countdown__go { text-decoration: underline; }
+
+/* What the trip is waiting on, above the four bars it is spread across. The
+   bars say how each list is doing; this says which one to open, so that the
+   answer to "does anything need me?" is read rather than assembled. */
+.status__work {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 12px 0 13px; border-top: 1px solid var(--line);
+}
+.status__say { margin: 0; font-size: 14.5px; color: var(--ink-soft); }
+.status__say b { color: var(--ink); font-weight: 700; }
+.status__work .btn { flex: none; }
 .countdown__n {
   font-family: var(--display); font-weight: 800; font-size: 46px; line-height: .9;
   letter-spacing: -0.035em; font-variant-numeric: tabular-nums; color: var(--forest-deep);
