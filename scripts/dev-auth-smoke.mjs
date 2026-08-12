@@ -208,6 +208,71 @@ try {
   assert.equal(quiet.message.body, '@camp add a tarp to the gear list')
   assert.equal(quiet.message.role, 'member')
 
+  // ---- the pin, of which there is one -------------------------------------------
+
+  {
+    const pin = (cookie, messageId) => request(
+      `/trips/${created.trip.id}/pin`, cookie, 'PUT', { messageId },
+    )
+    const firstMessage = quiet.message.id
+    const secondMessage = (await say('pin-target', {
+      text: 'Saturday morning it is, then',
+    })).message.id
+
+    // Nothing is pinned until somebody pins something.
+    const before = await (await request(`/trips/${created.trip.id}`, first.cookie)).json()
+    assert.equal(before.pinned, null)
+
+    const pinned = await (await pin(first.cookie, firstMessage)).json()
+    assert.equal(pinned.pinned.id, firstMessage)
+    assert.equal(pinned.pinned.author, 'Driver')
+    assert.equal(pinned.pinned.assistant, false)
+    assert.equal(pinned.pinned.body, '@camp add a tarp to the gear list')
+    assert.ok(pinned.trip.rev > before.trip.rev, 'pinning did not move the trip on')
+    assert.equal(pinned.events[0].text, 'pinned “@camp add a tarp to the gear list”',
+      JSON.stringify(pinned.events[0]))
+    assert.equal(pinned.events[0].actor, 'Driver')
+
+    // Pinning a second message does not give the trip two. It replaces, and the
+    // feed says what it cost so the person who pinned the first one can see
+    // where it went.
+    const swapped = await (await pin(second.cookie, secondMessage)).json()
+    assert.equal(swapped.pinned.id, secondMessage)
+    assert.equal(swapped.events[0].actor, 'Passenger')
+    assert.ok(swapped.events[0].text.startsWith('replaced the pin '), swapped.events[0].text)
+    assert.ok(swapped.events[0].text.includes('“Saturday morning it is, then”'), swapped.events[0].text)
+
+    // Pinning what is already pinned changed nothing, so it is not something
+    // that happened: no second feed line, and the trip does not move on.
+    const again = await (await pin(first.cookie, secondMessage)).json()
+    assert.equal(again.trip.rev, swapped.trip.rev)
+    assert.equal(again.events.length, swapped.events.length)
+
+    // Naming a message from another trip is how a pin would become a way to
+    // read that trip, so it is looked up in this one and simply not found.
+    const elsewhere = await request('/trips', second.cookie, 'POST', { name: 'Another', organiser: 'Nobody' })
+    const otherTrip = (await elsewhere.json()).trip.id
+    const foreign = (await (await request(`/trips/${otherTrip}/messages`, second.cookie, 'POST',
+      { clientId: 'far-away', text: 'Private plans' })).json()).message.id
+    assert.equal((await pin(first.cookie, foreign)).status, 400)
+    assert.equal((await pin(first.cookie, 0)).status, 400)
+    assert.equal((await pin(first.cookie, 'seven')).status, 400)
+
+    // Null is the way back to nothing pinned. There is no "unpin that one",
+    // because there is only ever one.
+    const cleared = await (await pin(first.cookie, null)).json()
+    assert.equal(cleared.pinned, null)
+    assert.ok(cleared.events[0].text.startsWith('unpinned '), cleared.events[0].text)
+
+    // The room is the trip's, and so is the pin: a stranger with the link can
+    // neither set one nor be the one who did.
+    assert.equal((await fetch(`${origin}/api/trips/${created.trip.id}/pin`, {
+      method: 'PUT',
+      headers: { origin, 'content-type': 'application/json' },
+      body: JSON.stringify({ messageId: secondMessage }),
+    })).status, 401)
+  }
+
   console.log('development auth smoke passed')
 } finally {
   if (server.exitCode === null) {

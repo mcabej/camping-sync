@@ -1540,6 +1540,44 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
   -webkit-overflow-scrolling: touch;
 }
 
+/* The pin sits above the scrolling thread rather than inside it, because a
+   headline that scrolls away is not a headline. It is one row and stays one row:
+   the point of a single pin is that the room has one thing at the top of it, and
+   a block that grew with the message would start to be the room. */
+.pinned {
+  flex: none; display: grid; grid-template-columns: minmax(0, 1fr) 30px;
+  align-items: center; gap: 4px;
+  padding: 8px var(--chat-pad-x, 18px);
+  background: var(--tint); box-shadow: 0 1px 0 var(--hair);
+}
+.pinned__jump {
+  display: grid; grid-template-columns: 18px minmax(0, 1fr); align-items: center;
+  gap: 9px; width: 100%; min-width: 0; margin: 0; padding: 2px 0;
+  border: 0; border-radius: 6px; background: none; text-align: left;
+  font: inherit; color: inherit;
+}
+.pinned__jump:not(.pinned__jump--away) { cursor: pointer; }
+.pinned__mark { display: grid; place-items: center; color: var(--forest-ink); }
+.pinned__copy { min-width: 0; }
+.pinned__copy small, .pinned__copy > span { display: block; }
+.pinned__copy small {
+  font-size: 10.5px; color: var(--ink-soft);
+  font-family: var(--mono); letter-spacing: .04em; text-transform: uppercase;
+}
+.pinned__copy small b { font-weight: 600; color: var(--forest-ink); }
+.pinned__copy > span {
+  font-size: 13px; line-height: 1.4; color: var(--ink);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.pinned__jump:is(:hover, :focus-visible):not(.pinned__jump--away) .pinned__copy > span {
+  color: var(--forest-ink);
+}
+.pinned__drop {
+  display: grid; place-items: center; width: 30px; height: 30px; padding: 0;
+  border: 0; border-radius: 8px; background: none; color: var(--ink-soft); cursor: pointer;
+}
+.pinned__drop:hover, .pinned__drop:focus-visible { background: var(--paper-sunk); color: var(--ink); }
+
 .chat__connection { display: inline-flex; align-items: center; gap: 6px; }
 .chat__connection::before {
   content: ''; width: 7px; height: 7px; border-radius: 50%;
@@ -1562,10 +1600,33 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 .chat__older[disabled] { opacity: .5; cursor: default; }
 
 .thread { list-style: none; margin: 0; padding: 0; }
+/* pan-y hands the vertical back to the browser and keeps the horizontal for the
+   reply swipe. Without it the room scrolls diagonally while a message is being
+   dragged, and native scrolling is the one thing in here worth not reimplementing. */
 .thread__message {
+  position: relative;
   display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 10px;
   padding: 12px 0;
+  touch-action: pan-y;
 }
+/* Only while a finger is going back: during the drag the message is under the
+   finger and has to keep up with it, and a transition there is lag. */
+.thread__message--snapping { transition: transform .18s cubic-bezier(.2, .8, .3, 1); }
+/* Something is happening, said before it happens. A press that gave no sign
+   until it fired would be indistinguishable from a tap that missed. */
+.thread__message--holding { transition: transform .32s ease; transform: scale(.985); }
+
+/* What the message slides off to reveal. It is behind the message rather than
+   beside it, so nothing in the room moves aside to make room for a gesture that
+   most of the time is not happening. */
+.thread__swipe {
+  position: absolute; left: 2px; top: 50%;
+  display: grid; place-items: center; width: 30px; height: 30px;
+  margin-top: -15px; border-radius: 50%;
+  background: var(--tint); color: var(--ink-faint); opacity: 0;
+  transition: background-color .12s, color .12s;
+}
+.thread__swipe--ready { background: var(--forest-ink); color: var(--on-forest); }
 .thread__message:first-child { padding-top: 3px; }
 .thread__message:last-child { border-bottom: 0; }
 /* Who said it, at the top of the message so a long one stays anchored to them.
@@ -1581,6 +1642,80 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 .thread__meta { display: flex; align-items: baseline; gap: 10px; }
 .thread__meta strong { flex: 1; min-width: 0; font-size: 14px; overflow-wrap: anywhere; }
 .thread__meta time { flex: none; font-size: 10.5px; color: var(--ink-faint); }
+
+/* Always drawn, never on hover: half the room is holding a phone, where there
+   is no hover to reveal it and a control that appears on touch appears too
+   late. So it is quiet instead of hidden — faint until it is wanted, and the
+   full target underneath it whether or not it looks like one. */
+.thread__reply {
+  flex: none; align-self: center; display: grid; place-items: center;
+  width: 24px; height: 24px; margin: -4px -5px -4px 0; padding: 0;
+  border: 0; border-radius: 6px; background: none; cursor: pointer;
+  color: var(--ink-faint); opacity: .6; transition: opacity .12s, color .12s;
+}
+.thread__reply:hover, .thread__reply:focus-visible { opacity: 1; color: var(--forest-ink); }
+.thread__message--mine .thread__reply { order: -1; margin: -4px 0 -4px -5px; }
+
+/* The pin button, quiet next to the reply arrow for the same reason and at the
+   same size. Pinned, it stops being quiet: the one message being held up should
+   look held up wherever you meet it, not only in the banner. */
+.thread__pin {
+  flex: none; align-self: center; display: grid; place-items: center;
+  width: 24px; height: 24px; margin: -4px -4px -4px -6px; padding: 0;
+  border: 0; border-radius: 6px; background: none; cursor: pointer;
+  color: var(--ink-faint); opacity: .6; transition: opacity .12s, color .12s;
+}
+.thread__pin:hover, .thread__pin:focus-visible { opacity: 1; color: var(--forest-ink); }
+.thread__pin--on { opacity: 1; color: var(--forest-ink); }
+.thread__message--mine .thread__pin { order: -2; margin: -4px -6px -4px 0; }
+
+/* Held up, wherever you meet it. Drawn as a ring around the message rather than
+   a border or a background on it: three kinds of message pass through here — a
+   bubble, one of your own, one of Camp's — each with its own background and
+   padding already, and an outline is the one mark that costs none of them
+   anything and moves nothing on the page. */
+.thread__message--pinned .thread__content {
+  outline: 1.5px solid rgb(var(--forest-rgb) / .38); outline-offset: 3px;
+  border-radius: var(--r-md);
+}
+
+/* What a reply is answering, above what it says. The rule down the side is the
+   quoting mark: it reads as borrowed text at a glance, without the block having
+   to be loud enough to compete with the message it belongs to. */
+.thread__quote {
+  display: block; width: 100%; margin: 6px 0 0; padding: 4px 0 4px 9px;
+  border: 0; border-left: 2px solid var(--line-strong); border-radius: 0;
+  background: none; text-align: left; font: inherit; color: var(--ink-soft);
+}
+.thread__quote:not(.thread__quote--away) { cursor: pointer; }
+.thread__quote:is(:hover, :focus-visible):not(.thread__quote--away) {
+  border-left-color: var(--forest-ink); color: var(--ink);
+}
+.thread__quote b { font-size: 11.5px; font-weight: 600; color: var(--ink-soft); }
+.thread__quote-said {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+  overflow: hidden; font-size: 13px; line-height: 1.45; overflow-wrap: anywhere;
+}
+.thread__message--assistant .thread__quote { border-left-color: var(--forest-ink); }
+
+/* Where a quote just sent you. It is drawn round the message rather than in it,
+   so a bubble that already has a background of its own keeps it. Long enough to
+   catch the eye landing, gone before it is something to wait out. */
+.thread__message--found {
+  outline: 2px solid transparent; outline-offset: 3px;
+  border-radius: var(--r-md); animation: found 1.6s ease-out;
+}
+@keyframes found {
+  0%, 45% { outline-color: var(--forest-ink); }
+  100% { outline-color: transparent; }
+}
+/* The blanket rule at the bottom of this file turns every animation off, which
+   would take the mark away from the readers who most need telling where a jump
+   landed. They get it without the fade instead: script holds it for the same
+   moment either way and then removes it. See showMessage. */
+@media (prefers-reduced-motion: reduce) {
+  .thread__message--found { outline-color: var(--forest-ink); }
+}
 .thread__content > p {
   margin: 3px 0 0; white-space: pre-wrap; overflow-wrap: anywhere;
   color: var(--ink); font-size: 14.5px; line-height: 1.5;
@@ -1683,6 +1818,33 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 .chat__mention-copy strong { font-family: var(--display); font-size: 15px; }
 .chat__mention-copy small { margin-top: 1px; color: var(--ink-soft); font-size: 12px; }
 .chat__mention-handle { color: var(--forest-ink); font-size: 12px; font-weight: 600; }
+/* What the next message will be answering, standing on the box it will be
+   written in. Attached to the composer rather than floating over the thread,
+   because it is part of the message being written and has to stay visible with
+   a keyboard up and the room scrolled away underneath. */
+.chat__replying {
+  display: grid; grid-template-columns: 18px minmax(0, 1fr) 30px;
+  align-items: center; gap: 9px; margin-bottom: 8px; padding: 7px 8px 7px 10px;
+  border-left: 2px solid var(--forest-ink); border-radius: 0 8px 8px 0;
+  background: var(--tint);
+}
+.chat__replying-mark { display: grid; place-items: center; color: var(--forest-ink); }
+.chat__replying-copy { min-width: 0; }
+.chat__replying-copy small, .chat__replying-copy span { display: block; }
+.chat__replying-copy small { font-size: 11px; color: var(--ink-soft); }
+.chat__replying-copy small b { font-weight: 600; color: var(--forest-ink); }
+.chat__replying-copy > span {
+  font-size: 13px; line-height: 1.4; color: var(--ink-soft);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.chat__replying-drop {
+  display: grid; place-items: center; width: 30px; height: 30px; padding: 0;
+  border: 0; border-radius: 8px; background: none; color: var(--ink-soft); cursor: pointer;
+}
+.chat__replying-drop:hover, .chat__replying-drop:focus-visible {
+  background: var(--paper-sunk); color: var(--ink);
+}
+
 .chat__write {
   position: relative; border: 1.5px solid var(--line-strong); border-radius: var(--r-lg);
   background: var(--paper); transition: border-color .12s ease;

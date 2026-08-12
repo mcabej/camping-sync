@@ -73,7 +73,11 @@ lost in a separate group chat.
   and for legacy profiles until Google links their membership.
 - **Planning room** — a durable, member-attributed trip thread with paginated
   history and safe retries. Its own delivery cursor keeps conversation from
-  making every client refetch the packing lists.
+  making every client refetch the packing lists. Any message can be answered
+  with a quoted reply, which keeps the room one list instead of branching it
+  into threads. One message — exactly one — can be pinned above the room as what
+  the trip is currently waiting on. On a phone, swipe a message right to reply to
+  it or hold it to pin it; both have visible buttons too.
 - **Message notifications** — optional Web Push alerts for Planning Room
   messages, grouped per trip. Senders and members actively reading the room are
   skipped; each member can mute a trip, and unread counts remain visible in the
@@ -82,7 +86,8 @@ lost in a separate group chat.
   nobody has claimed; the morning of, what is still unticked on your own kit
   list. Two switches on your account, off until you ask, applying to every trip
   you are on — and nothing to do with muting a Planning Room.
-- **`@camp` assistant** — signed-in members can ask a trip-aware assistant about
+- **`@camp` assistant** — signed-in members can ask a trip-aware assistant (by
+  the handle, or by replying to something it said) about
   the trip: its dates and days, the people and what they can eat, every list
   with who is bringing and who has packed what, the shared notes, the ledger and
   its balances, the forecast, and what has changed lately. It can act as well as answer — adding,
@@ -140,8 +145,10 @@ scripts/           make-icons.mjs (regenerates public/icons)
 One `items` table with a `list` discriminator (`gear` / `food` / `drinks` /
 `activities`), plus `trips`, `members`, `votes`, `stows`, `events` and durable
 `messages`. Each trip carries a `rev` counter bumped on list and trip writes —
-that's what the clients poll. Messages use their own increasing cursor and a
-`role` that distinguishes member posts from durable Camp replies.
+that's what the clients poll. Messages use their own increasing cursor, a
+`role` that distinguishes member posts from durable Camp replies, and an
+optional `reply_to` naming the one message a reply answers. See *Quoted
+replies*.
 
 An item's `kind` decides how it's tracked, and the two are mutually exclusive:
 
@@ -555,6 +562,123 @@ waiting on. It says out loud that other people's personal kit is not in that
 number, rather than quietly reporting a figure that is only most of the answer.
 None of it reaches the activity feed: a pack-down is fifty ticks in ten minutes,
 and a feed of them would bury the trip they belong to.
+
+### Quoted replies
+
+A message can answer one earlier message, and carries a quote of it. `reply_to`
+on `messages` points at the message being answered; the room reads it back with
+a self join, so the quote is never a second copy of a body that could drift from
+the first. Nothing walks the pointer more than one step: a reply to a reply
+shows the message it answered and stops, which keeps the room one list rather
+than a tree of them.
+
+That is the whole design decision. Threads were the other answer to "the room
+gets long and people lose the thread", and they solve the wrong problem — they
+exist to separate conversations happening at once, which is a thing that happens
+in a channel of two hundred and not in a group of six planning one weekend.
+What a trip actually loses is a decision made three weeks ago, and a decision
+filed inside a collapsed reply is harder to find, not easier. A quote keeps the
+room linear: one delivery cursor, one `last_read_message_id`, one thirty-message
+slice for Camp, and a phone that shows the same order everybody else sees.
+
+The quote is cut to 140 characters on the way out rather than clamped in CSS. A
+page is fifty messages, and fifty full second copies of other messages is a
+payload paid for over exactly the signal this app is meant to survive. The
+message itself is a tap away: a quote whose original is on screen is a button
+that jumps to it and marks it for a moment on arrival, and one whose original is
+further back than the loaded page is drawn as plain text instead — a control
+that only works half the time is worse than one that admits which half it is in.
+
+The reply pointer is validated against the trip it is sent to, not merely
+checked for existing. A quote is a way to read a message, so being able to name
+a message from a trip you are not on would be a way to read that trip. It is
+also part of what a message says, which means the idempotency key covers it: the
+same `client_id` arriving with a different `reply_to` is the same conflict as one
+arriving with different text.
+
+Camp quotes the question it is answering. It thinks for long enough that the
+room can move on underneath it, and an answer that lands four messages below
+what it was about reads as a comment on whatever it happens to sit under. Camp
+also reads the quotes in its context window, since "no, Saturday" is not an
+answer to anything without the message above it.
+
+Replying to Camp asks Camp. `asksCamp` in `lib/camp.js` is the whole rule: the
+handle at the start of a message, or a reply whose quoted message is one of
+Camp's. "Are you sure about Sunday?" written underneath its answer is already
+addressed to it, and requiring the handle to say so again is a tax on something
+the room can already see. Only Camp's own messages count — replying to a person
+is replying to a person, and does not become a question for the assistant by
+sitting near one. The reply arrives at the model attached to what it answers,
+in the same turn rather than several messages back in the transcript, because
+"are you sure?" needs its subject to mean anything. A bare `yes` under a
+proposed deletion works for the same reason, and through the same confirmation
+path as `@camp yes`.
+
+### One pin
+
+A trip can pin one message, and one is the whole design rather than a limit to
+be raised later. `pinned_message_id` is a column on `trips`, so there is no state
+in which a trip has two and no cap to enforce on top of one — pinning something
+else overwrites the slot.
+
+The cap is the feature. A room that can hold ten decisions is a room people plan
+in, and the plan belongs in the lists, days and notes, where it can be filtered,
+ticked, assigned and packed. A message saying "we agreed on the Saturday pitch"
+cannot be any of those things; it can only be read, and only by somebody who
+scrolls to it. Ten pins nobody prunes is the same lost decision with extra steps.
+One slot means pinning costs the last pin, which is the question worth making
+somebody answer: is this more important than the thing the group is already
+holding up? Most of the time the answer is no, and the room stays a room.
+
+So the replacement is shown rather than mentioned. The pin button on a message
+says whose message it would displace, and on the way to replacing one the app
+quotes what comes down and asks. A tooltip would not have done: half the room is
+holding a phone, where there is no hover to read one off. The feed records the
+swap in both directions — `replaced the pin “…” with “…”` — because a pin that
+was quietly overwritten is a decision somebody else spent without being seen to.
+
+Pinning bumps `rev` where sending a message deliberately does not. A message is
+conversation and there is a great deal of it; a pin is the trip changing its mind
+about what it is waiting on, which is trip state, belongs in the activity feed,
+and happens rarely enough to be worth a refetch everywhere. The pinned message is
+resolved into trip state rather than left as an id, so the room draws its
+headline on arrival instead of a request later.
+
+The message is named inside its own trip, the same check a quoted reply makes and
+for the same reason: pinning puts a message in front of everybody, so being able
+to name one from a room you are not in would be a way to read that room. Deleting
+a pinned message unpins the trip rather than taking the trip with it, and a
+pinned trip still deletes — the two tables point at each other, and the cascade
+has to be able to walk that.
+
+### Two gestures, one finger
+
+Dragging a message to the right replies to it; holding it still pins it. They are
+told apart by the thing that distinguishes them anyway — movement, and the
+absence of it — so the first thing either gesture does is rule the other out. A
+finger that has moved is no longer pressing, and a press that has fired lets go
+of the finger before it can also be a swipe.
+
+Down the page wins, always. `touch-action: pan-y` on a message hands the vertical
+back to the browser and keeps only the horizontal, so the room scrolls natively
+while a swipe is still possible; and once a finger has committed to the vertical
+the gesture is abandoned outright rather than watched, so a scroll can never turn
+into a reply halfway down. Native scrolling in a long room is the one thing here
+worth not reimplementing.
+
+Mice are left out. A drag with a mouse is a text selection and a long press with
+one is somebody reading, and neither should quietly become an action. Both
+gestures are also shortcuts and nothing more: the reply arrow and the pin button
+are drawn on every message and stay drawn, so the room works identically for
+somebody who never discovers either — and for anybody on a keyboard, where a
+gesture is not an option at all.
+
+The press has two costs worth naming. The browser raises its own menu at about
+the same moment on Android, so a `contextmenu` inside a press this app is in the
+middle of is answered for — a right-click at a desk is still the browser's. And
+the browser may have begun selecting a word under the finger, which the press
+clears when it fires: message text stays selectable, and selecting deliberately
+still works because dragging to select is movement, which cancels the press.
 
 ### Reminders
 

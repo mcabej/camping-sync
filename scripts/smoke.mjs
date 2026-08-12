@@ -30,8 +30,16 @@ roots['ask-root'].querySelector = (sel) => (
 // The theme is written to the root element and to the meta tag the browser
 // paints the status bar from, so both are real enough here to be read back.
 const themeMeta = { content: '' }
+// The app subscribes to the document at load. Keeping the handlers rather than
+// dropping them is what lets the gesture tests below press on a message: a swipe
+// and a long press are not renders, so there is nothing to read out of the HTML
+// and the only way to ask what they do is to do them.
+const docListeners = {}
+const fire = (type, ev) => { for (const fn of docListeners[type] ?? []) fn(ev) }
 globalThis.document = {
-  getElementById: (id) => roots[id], addEventListener() {}, createElement: el,
+  getElementById: (id) => roots[id],
+  addEventListener(type, fn) { (docListeners[type] ??= []).push(fn) },
+  createElement: el,
   documentElement: { style: { setProperty() {} }, classList: { toggle() {} }, dataset: {} },
   body: { classList: { add() {}, remove() {}, toggle() {} }, style: { setProperty() {}, removeProperty() {} } },
   hidden: false,
@@ -628,6 +636,173 @@ check('planning room loading state holds its space',
   find(viewTrip(), 'aria-busy="true"') && find(viewTrip(), 'Loading messages'))
 S.chat = readyChat
 
+// The pin. Nothing pinned draws nothing — the banner is not a slot waiting to be
+// filled — and a pinned message is marked where it sits as well as at the top,
+// so the one being held up looks held up wherever you meet it.
+check('an unpinned room has no banner', !find(viewTrip(), 'class="pinned"'))
+S.pinned = { id: 1, author: 'Sam', assistant: false, body: 'Can we leave by eight?', at: new Date().toISOString() }
+const pinnedRoom = viewTrip()
+check('the pinned message heads the room',
+  find(pinnedRoom, 'class="pinned"') && find(pinnedRoom, 'Pinned · <b>Sam</b>')
+  && find(pinnedRoom, 'data-act="chat-unpin"'))
+check('the pin jumps to the message while that message is on the page',
+  find(pinnedRoom, 'data-act="chat-quote" data-id="1"')
+  && !find(pinnedRoom, 'pinned__jump--away'))
+check('the pinned message is marked in the thread it lives in',
+  find(pinnedRoom, 'thread__message--pinned') && find(pinnedRoom, 'thread__pin--on')
+  && find(pinnedRoom, 'aria-pressed="true"'))
+check('pinning something else says whose message it would replace',
+  find(pinnedRoom, 'aria-label="Pin this message, replacing Sam&#39;s"'))
+S.pinned = { id: 99, author: 'Ali Khan', assistant: false, body: 'Gone from the page', at: new Date().toISOString() }
+check('a pin whose message is not loaded is text rather than a dead button',
+  find(viewTrip(), 'pinned__jump--away') && !find(viewTrip(), 'data-act="chat-quote" data-id="99"'))
+S.pinned = null
+check('with nothing pinned the button offers a plain pin',
+  find(viewTrip(), 'aria-label="Pin this message"'))
+
+// ---- swiping to reply, holding to pin ----------------------------------------
+//
+// Neither gesture leaves a mark in the HTML, so these press on the handlers the
+// app registered and read what happened afterwards. What is worth protecting is
+// the arithmetic: which direction wins, how far is far enough, and how still a
+// finger has to be — get any of those wrong and the room either replies to
+// things nobody meant or stops scrolling.
+{
+  const classesOf = () => {
+    const on = new Set()
+    return {
+      set: on,
+      add: (c) => on.add(c), remove: (c) => on.delete(c),
+      toggle: (c, force) => (force ? on.add(c) : on.delete(c)),
+      contains: (c) => on.has(c),
+    }
+  }
+  const rowFor = (id) => {
+    let mark = null
+    return {
+      id, style: {}, classList: classesOf(),
+      append(node) { mark = node },
+      querySelector: (sel) => (sel === '.thread__swipe' ? mark : null),
+      addEventListener() {},
+      get mark() { return mark },
+    }
+  }
+  // createElement is swapped rather than the shared stub widened: the swipe mark
+  // is the only thing in the app that builds a node by hand, and the rest of this
+  // file has no opinion about what one is.
+  const madeCreate = document.createElement
+  document.createElement = () => ({
+    className: '', innerHTML: '', style: {}, classList: classesOf(),
+    setAttribute() {}, remove() {},
+  })
+
+  const down = (row, x = 100, y = 100) => fire('pointerdown', {
+    pointerType: 'touch', isPrimary: true, clientX: x, clientY: y, target: { closest: () => row },
+  })
+  const move = (x, y = 100) => fire('pointermove', { isPrimary: true, clientX: x, clientY: y })
+  const up = () => fire('pointerup', {})
+  const rest = () => { fire('pointercancel', {}); S.chat.replyTo = null }
+
+  const row = rowFor('msg-1')
+
+  // Far enough across, and letting go quotes the message.
+  down(row); move(180); up()
+  check('swiping a message across replies to it', S.chat.replyTo?.id === 1)
+  rest()
+
+  // Not far enough is not an answer. A message nudged sideways on the way to
+  // something else has to come back and mean nothing.
+  down(row); move(140); up()
+  check('a short swipe replies to nothing', S.chat.replyTo === null && !row.style.transform)
+  rest()
+
+  // Down the page belongs to the room. Once a finger is scrolling it is let go
+  // of entirely, so a scroll cannot turn into a swipe halfway down.
+  down(row); move(104, 140); move(200, 140); up()
+  check('scrolling the room is never a reply', S.chat.replyTo === null)
+  rest()
+
+  // Leftwards is nothing at all — the gesture has a direction, and the other one
+  // is where the browser's own back-swipe lives.
+  down(row); move(20); up()
+  check('swiping the other way replies to nothing', S.chat.replyTo === null)
+  rest()
+
+  // A message Camp is still writing has no id to answer, and no gesture either.
+  const streaming = rowFor('')
+  down(streaming); move(180); up()
+  check('a message still being written cannot be swiped', S.chat.replyTo === null)
+  rest()
+
+  // Holding still pins. The request is the assertion: what the press does is ask
+  // the server for the pin, and everything after that is the ordinary path a
+  // press of the button takes.
+  // Only the pin route: other parts of the app do their own asking in the
+  // background, and a test that counted every request would be measuring them.
+  const sent = []
+  const kept = { expenses: S.expenses, payments: S.payments, items: S.items, events: S.events }
+  const realFetch = globalThis.fetch
+  globalThis.fetch = async (url, opts) => {
+    if (String(url).endsWith('/pin')) sent.push({ url, method: opts?.method, body: opts?.body })
+    return { ok: true, status: 200, json: async () => ({ trip: S.trip, ...kept, members: S.members, pinned: null }) }
+  }
+
+  down(row)
+  await new Promise((resolve) => { setTimeout(resolve, 620) })
+  check('holding a message pins it', sent.length === 1
+    && sent[0].url === '/api/trips/t1/pin' && sent[0].method === 'PUT'
+    && JSON.parse(sent[0].body).messageId === 1)
+  check('and holding is not also a swipe', S.chat.replyTo === null)
+  rest()
+
+  // A finger that moved was never holding still. This is the same 620ms wait, so
+  // the press had every chance to fire and did not.
+  sent.length = 0
+  down(row); move(118)
+  await new Promise((resolve) => { setTimeout(resolve, 620) })
+  check('a finger that wandered off is not a press', sent.length === 0)
+  up()
+  rest()
+
+  // The click a long press leaves behind it. A press that landed on the pin
+  // button would otherwise pin and then unpin in one gesture, so the click is
+  // dropped — and the way to see that is that it asks the server for nothing.
+  const pinClick = (from) => ({
+    target: {
+      closest: (sel) => (sel === '.thread__message'
+        ? from
+        : { dataset: { act: 'chat-pin', id: '1' }, tagName: 'BUTTON', type: 'button' }),
+    },
+    preventDefault() {},
+  })
+  const settle = () => new Promise((resolve) => { setTimeout(resolve, 20) })
+
+  sent.length = 0
+  down(row)
+  await new Promise((resolve) => { setTimeout(resolve, 620) })
+  fire('click', pinClick(row))
+  await settle()
+  check('the click behind a long press is dropped', sent.length === 1)
+
+  // Only that message's, though. A press does not put the rest of the room out
+  // of action for the next half second, and the trailing click it was waiting
+  // for is spent once it arrives.
+  fire('click', pinClick(row))
+  await settle()
+  check('a second press of the same message is a real press again', sent.length === 2)
+  sent.length = 0
+  down(row)
+  await new Promise((resolve) => { setTimeout(resolve, 620) })
+  fire('click', pinClick(rowFor('msg-2')))
+  await settle()
+  check('a press does not deafen the rest of the room', sent.length === 2)
+  rest()
+
+  document.createElement = madeCreate
+  globalThis.fetch = realFetch
+  Object.assign(S, kept)
+}
+
 // WebSocket delivery is only a wake-up path. A tiny browser stand-in proves
 // one connection per trip, immediate durable-row delivery, and retry state.
 class FakeSocket {
@@ -755,6 +930,27 @@ S.chat.draft = 'Yes — meet at mine.'
 roots.root.querySelector = () => null
 check('a room redrawn out from under the send does not refill from the draft',
   clearComposer('Yes — meet at mine.') === false && S.chat.draft === '')
+roots.root.querySelector = (selector) => selector === '.chat__body' ? visibleChat : null
+
+// The quote gets the same treatment the sentence does. A send carries the
+// message it was answering; picking a different one to answer while that send is
+// in flight is a newer answer than the one being cleaned up, and tidying up
+// after the old send must not spend it.
+const quoting = composer('')
+roots.root.querySelector = (selector) => selector === '.chat__body' ? visibleChat
+  : selector === '#chat-text' ? quoting.box : null
+S.chat.replyTo = { id: 1, author: 'Sam', assistant: false, body: 'Can we leave by eight?' }
+clearComposer('Yes — meet at mine.', 1)
+check('the quote a message was sent with comes off with it', S.chat.replyTo === null)
+S.chat.replyTo = { id: 2, author: 'Josh', assistant: false, body: 'Yes — meet at mine.' }
+clearComposer('Yes — meet at mine.', 1)
+check('a message picked to answer mid-send is still picked afterwards',
+  S.chat.replyTo?.id === 2)
+S.chat.replyTo = { id: 2, author: 'Josh', assistant: false, body: 'Yes — meet at mine.' }
+clearComposer('Yes — meet at mine.', null)
+check('and so is one picked while an unattached message was in flight',
+  S.chat.replyTo?.id === 2)
+S.chat.replyTo = null
 roots.root.querySelector = (selector) => selector === '.chat__body' ? visibleChat : null
 S.chat.busy = false
 

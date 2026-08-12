@@ -89,6 +89,7 @@ const ICONS = {
   // the way you are going, the stub arm points at the trip you are standing in.
   signpost: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 3v18"/><path d="M14.5 6H7l-3 3 3 3h7.5"/><path d="M14.5 15.5H18"/><path d="M11.5 21h6"/></svg>',
   send: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h13M13 6l6 6-6 6"/></svg>',
+  reply: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 7 5 11.5 9.5 16"/><path d="M5 11.5h8.5a5.5 5.5 0 0 1 5.5 5.5v1.5"/></svg>',
   // A cog, drawn plainly. Every other icon in this app was redrawn to say
   // something particular — a tent, a rucksack, a fingerpost — but the way into
   // settings is the one place where being instantly recognised beats being
@@ -111,6 +112,11 @@ const ICONS = {
   caret: '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 9 7 7 7-7"/></svg>',
   find: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>',
   pin: '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s7-6.1 7-11a7 7 0 1 0-14 0c0 4.9 7 11 7 11Z"/><circle cx="12" cy="10" r="2.5"/></svg>',
+  // A drawing pin pushed into the board, for the pinned message. `pin` above is
+  // already taken by the map pin, and the two are different things that would
+  // both like the same four letters — so the one that is literally a pin gets
+  // the literal name, and this is a tack.
+  tack: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4h6"/><path d="M10 4v5.5L7.5 14h9L14 9.5V4"/><path d="M12 14v6"/></svg>',
   // A clock, for when a thing happens — the other half of the question the pin
   // beside it answers.
   clock: '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 1.8"/></svg>',
@@ -193,6 +199,10 @@ const S = {
   // which is where every tab starts — and where it goes back to when you leave.
   filter: { day: '', kind: '', cat: '', hide: false, q: '' },
   trip: null, members: [], items: [], expenses: [], payments: [], events: [],
+  // The one pinned message, as the server resolves it: `{ id, author, assistant,
+  // body, at }` or null. Trip state rather than chat state, because it is what
+  // the trip is currently waiting on and it changes when the trip does.
+  pinned: null,
   // Google proves one user across devices; a member is still their place on one
   // particular trip. Unlinked local members remain usable while they migrate.
   auth: { loaded: false, clientId: '', devBypass: false, user: null, memberships: [] },
@@ -203,6 +213,9 @@ const S = {
     tripId: '', messages: [], hasMore: false, loading: false,
     loadingOlder: false, busy: false, error: '', draft: '', pending: null,
     connection: 'idle', assistantAvailable: false, streams: {},
+    // The message the next send will quote, as the server describes it:
+    // `{ id, author, assistant, body }` or null. See shapeMessage on the server.
+    replyTo: null,
   },
   notify: {
     tripId: '', loading: false, available: false, subscribed: false,
@@ -474,6 +487,7 @@ function absorb(state) {
   S.expenses = state.expenses ?? []
   S.payments = state.payments ?? []
   S.events = state.events
+  S.pinned = state.pinned ?? null
   S.rev = state.trip.rev
   render()
 }
@@ -503,7 +517,7 @@ function resetChat(tripId = '') {
   S.chat = {
     tripId, messages: [], hasMore: false, loading: false,
     loadingOlder: false, busy: false, error: '', draft: '', pending: null,
-    connection: 'idle', assistantAvailable: false, streams: {},
+    connection: 'idle', assistantAvailable: false, streams: {}, replyTo: null,
   }
 }
 
@@ -853,6 +867,246 @@ function newMessageId() {
     ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
 }
 
+// The same cut the server makes when it hands a quote back, made here as well so
+// the chip under the composer shows exactly what the sent message will carry.
+// See QUOTE_MAX and shapeMessage on the server.
+const QUOTE_MAX = 140
+const quoteOf = (message) => {
+  const body = String(message.body ?? '').replace(/\s+/g, ' ').trim()
+  return {
+    id: Number(message.id),
+    author: message.author_name,
+    assistant: message.role === 'assistant',
+    body: body.length > QUOTE_MAX ? `${body.slice(0, QUOTE_MAX - 1)}…` : body,
+  }
+}
+
+// Straight into the box, because writing the reply is what the tap was for — and
+// on a phone this is the thing that brings the keyboard up. Attaching or
+// dropping a quote redraws the composer, and a textarea drawn with a draft
+// already in it puts the caret in front of it: picking a quote halfway through a
+// sentence would leave the rest of it being typed at the beginning.
+function focusComposer() {
+  const box = root.querySelector('#chat-text')
+  if (!box) return
+  box.focus()
+  box.setSelectionRange(box.value.length, box.value.length)
+}
+
+function startReply(id) {
+  const message = S.chat.messages.find((m) => Number(m.id) === id)
+  if (!message) return
+  S.chat.replyTo = quoteOf(message)
+  render()
+  focusComposer()
+}
+
+// One slot, so pinning is always a choice against whatever is in it. Sending a
+// message id sets the pin and drops what was there; sending null clears it.
+const savePin = (messageId) => mutate(
+  () => api(`/trips/${S.trip.id}/pin`, { method: 'PUT', body: { messageId } }),
+)
+
+// What a pin costs, asked before it costs it. A phone has no hover to read the
+// button's label off, so the message being displaced is put in front of the
+// person doing the displacing — and it is quoted, because "replace the pinned
+// message?" is not a question anybody can answer without seeing which one.
+//
+// Pinning into an empty slot asks nothing. It takes nothing away, and a question
+// with only one sensible answer is furniture.
+async function pinMessage(id) {
+  const held = S.pinned
+  if (held && Number(held.id) !== id) {
+    const swap = await ask({
+      title: 'Replace the pinned message?',
+      blurb: `“${held.body}” comes down — a trip pins one message at a time.`,
+      yes: 'Replace it',
+    })
+    if (!swap) return
+  }
+  await savePin(id)
+}
+
+const motionOK = () => !globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+
+// ---- the two gestures in the room --------------------------------------------
+//
+// One finger down, and what it does next says which of two things it meant:
+// dragging right replies to the message, staying still pins it. They cannot be
+// confused with each other because they are opposites — movement and the absence
+// of it — and the first thing either does is rule the other out.
+//
+// Neither is the only way to do its job. The reply arrow and the pin are drawn on
+// every message and stay drawn, so this is a shortcut for the hand that already
+// expects it and nothing at all to the person who never tries. Mice are left out:
+// a drag with a mouse is a text selection, and a long press with one is a person
+// reading.
+const SWIPE_AXIS = 8      // across before we will call the direction
+const SWIPE_SLOP = 12     // ... and how far a finger may wander and still be still
+const SWIPE_REPLY = 56    // ... and how far it must go before letting go replies
+const SWIPE_MAX = 84      // as far as the message itself will travel
+const HOLD_MS = 500
+const HOLD_HINT_MS = 160
+
+let held = null    // the finger currently down on a message, or null
+let heldAt = 0     // when a press last fired, so the click behind it can be dropped
+let heldRow = null // ... and which message it fired on, so only that click is
+
+// The arrow the message slides off to reveal. It counters the row's own transform
+// so it stays where it was put: the message moves, the mark it moves towards does
+// not, which is what makes the gesture read as uncovering something rather than
+// dragging the whole row somewhere.
+function swipeMark(row) {
+  let mark = row.querySelector('.thread__swipe')
+  if (!mark) {
+    mark = document.createElement('span')
+    mark.className = 'thread__swipe'
+    mark.setAttribute('aria-hidden', 'true')
+    mark.innerHTML = ICONS.reply
+    row.append(mark)
+  }
+  return mark
+}
+
+function drawSwipe(row, dx) {
+  row.style.transform = dx ? `translateX(${dx}px)` : ''
+  if (!dx) {
+    row.querySelector('.thread__swipe')?.remove()
+    return
+  }
+  const mark = swipeMark(row)
+  mark.style.transform = `translateX(${-dx}px)`
+  mark.style.opacity = String(Math.min(1, dx / SWIPE_REPLY))
+  mark.classList.toggle('thread__swipe--ready', dx >= SWIPE_REPLY)
+}
+
+// Putting the row back where it was found. Everything this touches is inline
+// style and one appended span, so a render() in between simply throws it all away
+// and there is nothing to put back.
+function endHold(snap = false) {
+  if (!held) return
+  const { row, dx } = held
+  clearTimeout(held.hint)
+  clearTimeout(held.timer)
+  held = null
+  row.classList.remove('thread__message--holding')
+  // Only a message that actually moved has anywhere to go back to. Sliding one
+  // that never left would leave the class waiting on a transition that is never
+  // going to start.
+  if (!snap || !dx || !motionOK()) return drawSwipe(row, 0)
+  row.classList.add('thread__message--snapping')
+  row.addEventListener('transitionend', () => {
+    row.classList.remove('thread__message--snapping')
+    drawSwipe(row, 0)
+  }, { once: true })
+  row.style.transform = ''
+  const mark = row.querySelector('.thread__swipe')
+  if (mark) mark.style.opacity = '0'
+}
+
+// A press pins, or unpins what it is already holding up — the same answer the
+// button on the message gives, because a gesture that did something the visible
+// control does not would be a second, quieter set of rules.
+function holdPin(id, row) {
+  heldAt = Date.now()
+  heldRow = row
+  globalThis.navigator?.vibrate?.(12)
+  // The browser may have started selecting a word under the finger by now. The
+  // press was not for that, and leaving it highlighted behind the dialog reads
+  // as the app having misheard.
+  globalThis.getSelection?.()?.removeAllRanges?.()
+  return Number(S.pinned?.id) === id ? savePin(null) : pinMessage(id)
+}
+
+document.addEventListener('pointerdown', (ev) => {
+  if (ev.pointerType === 'mouse' || !ev.isPrimary || held) return
+  const row = ev.target.closest?.('.thread__message')
+  // A message being written by Camp has no durable id yet, and nothing can be
+  // said to a message that does not exist. Those rows are simply not gestures.
+  const id = Number(String(row?.id ?? '').slice(4))
+  if (!row?.id?.startsWith('msg-') || !Number.isSafeInteger(id) || id < 1) return
+  held = {
+    id, row, x: ev.clientX, y: ev.clientY, axis: '', dx: 0,
+    hint: setTimeout(() => row.classList.add('thread__message--holding'), HOLD_HINT_MS),
+    timer: setTimeout(() => {
+      const target = held && { id: held.id, row: held.row }
+      endHold()
+      if (target) void holdPin(target.id, target.row)
+    }, HOLD_MS),
+  }
+}, { passive: true })
+
+document.addEventListener('pointermove', (ev) => {
+  if (!held || !ev.isPrimary) return
+  const dx = ev.clientX - held.x
+  const dy = ev.clientY - held.y
+  // Any real movement means this was never a press.
+  if (Math.abs(dx) > SWIPE_SLOP || Math.abs(dy) > SWIPE_SLOP) {
+    clearTimeout(held.hint)
+    clearTimeout(held.timer)
+    held.row.classList.remove('thread__message--holding')
+  }
+  if (!held.axis) {
+    // Down the page is the room's own gesture and it wins: the list is longer
+    // than the screen, and a reply shortcut that made scrolling feel sticky
+    // would have cost more than it saved. Leaving on the vertical also drops the
+    // finger entirely, so a scroll cannot turn into a swipe halfway down.
+    if (Math.abs(dy) > SWIPE_AXIS && Math.abs(dy) >= Math.abs(dx)) return endHold()
+    if (dx > SWIPE_AXIS) held.axis = 'x'
+    else return
+  }
+  held.dx = Math.max(0, Math.min(dx - SWIPE_AXIS, SWIPE_MAX))
+  drawSwipe(held.row, held.dx)
+}, { passive: true })
+
+document.addEventListener('pointerup', () => {
+  if (!held) return
+  const { id, dx, axis } = held
+  endHold(true)
+  if (axis === 'x' && dx >= SWIPE_REPLY) startReply(id)
+})
+
+// A finger the browser has taken for a scroll, or one that has left the screen.
+// Either way it is not saying anything to this message.
+document.addEventListener('pointercancel', () => endHold(true))
+
+// Long-pressing on Android raises the browser's own menu at about the moment the
+// pin fires, and the two would arrive on top of each other. Only a press this app
+// is in the middle of is answered for: a right-click at a desk is still the
+// browser's to handle.
+document.addEventListener('contextmenu', (ev) => {
+  if (held || Date.now() - heldAt < 400) ev.preventDefault()
+})
+
+// Back to whatever a quote was pointing at. The message is marked for a moment
+// once it is there: being dropped into the middle of a room you had scrolled
+// away from otherwise leaves you working out which line you were sent to.
+//
+// The mark is taken off here rather than left to fade out on its own, because
+// the fade is an animation and the stylesheet turns every animation off for
+// anybody who has asked for less motion — which would take the one thing this
+// does away from the people least able to follow an unannounced jump. So the
+// class carries the outline and this owns how long it stays; the animation only
+// decides whether it leaves gently or at once.
+const FOUND_MS = 1600
+let foundTimer = 0
+function showMessage(id) {
+  if (!Number.isSafeInteger(id)) return
+  const found = root.querySelector(`#msg-${id}`)
+  if (!found) return
+  found.scrollIntoView({ block: 'center', behavior: motionOK() ? 'smooth' : 'auto' })
+  clearTimeout(foundTimer)
+  for (const was of root.querySelectorAll('.thread__message--found')) {
+    was.classList.remove('thread__message--found')
+  }
+  // Restarting the mark needs the class to have been off for a frame, rather
+  // than removed and put back inside the same one.
+  requestAnimationFrame(() => {
+    found.classList.add('thread__message--found')
+    foundTimer = setTimeout(() => found.classList.remove('thread__message--found'), FOUND_MS)
+  })
+}
+
 async function wantMessages() {
   const tripId = S.trip?.id
   if (!tripId || (S.chat.tripId === tripId && !S.chat.error)) return
@@ -976,8 +1230,22 @@ function drawChatThread() {
 // before the last one lands — which is the point — so a slow answer coming back
 // to an empty box is the ordinary case, and coming back to a started one must
 // not be a sentence deleted.
-function clearComposer(sent = null) {
+function clearComposer(sent = null, sentReplyTo = null) {
   const box = root.querySelector?.('#chat-text')
+  // The quote went with the message that has just landed, so the next one starts
+  // unattached — unless somebody picked a different message to answer while this
+  // one was in flight. That is a newer answer to the same question than the send
+  // being cleaned up is carrying, and dropping it would throw away a choice made
+  // after the one it is tidying: the same rule the draft below follows, for the
+  // same reason.
+  //
+  // The chip comes off by hand for the same reason the box is emptied by hand.
+  // It lives inside the composer, and the composer is the one thing a send must
+  // not redraw.
+  if ((S.chat.replyTo?.id ?? null) === sentReplyTo) {
+    S.chat.replyTo = null
+    box?.form?.querySelector('.chat__replying')?.remove()
+  }
   // No composer on screen to read, so the message that has just landed is the
   // only thing the draft could still be holding, and it is spent.
   if (!box) { S.chat.draft = ''; return false }
@@ -2456,6 +2724,7 @@ function createBlock(folded) {
       </form>
     </section>`
 }
+
 
 // A first-time visitor needs the pitch and the form. Somebody who already has
 // trips needs their trips — so the hero shrinks and the order flips.
@@ -3983,11 +4252,66 @@ function roomDoor() {
     </a>`
 }
 
+// What a reply is answering, drawn above it. A quote is a jump when the message
+// it names is on screen somewhere and a plain block of text when it is not —
+// rather than a control that looks the same either way and does nothing half the
+// time. Scrolling back far enough turns the same quote into a button, which is
+// the answer to "why can I press that one and not this one".
+function quoteBlock(reply) {
+  if (!reply) return ''
+  const here = S.chat.messages.some((m) => Number(m.id) === Number(reply.id))
+  const inner = `
+    <span class="sr-only">Replying to</span>
+    <b${reply.assistant ? ' class="mono"' : ''}>${esc(reply.author)}</b>
+    <span class="thread__quote-said">${esc(reply.body)}</span>`
+  return here
+    ? `<button class="thread__quote" type="button" data-act="chat-quote" data-id="${esc(String(reply.id))}">${inner}</button>`
+    : `<p class="thread__quote thread__quote--away">${inner}</p>`
+}
+
+// The pin, drawn above the room it heads rather than in the thread where it
+// would scroll away like everything else. It follows the same rule a quote does:
+// a jump while the message it names is on the loaded page, a plain block once
+// you have not scrolled back far enough to reach it — a control that only works
+// half the time is worse than one that admits which half it is in.
+function pinBanner() {
+  const pin = S.pinned
+  if (!pin) return ''
+  const here = S.chat.messages.some((m) => Number(m.id) === Number(pin.id))
+  const inner = `
+    <span class="pinned__mark" aria-hidden="true">${ICONS.tack}</span>
+    <span class="pinned__copy">
+      <small>Pinned · <b${pin.assistant ? ' class="mono"' : ''}>${esc(pin.author)}</b></small>
+      <span>${esc(pin.body)}</span>
+    </span>`
+  return `
+    <div class="pinned">
+      ${here
+        ? `<button class="pinned__jump" type="button" data-act="chat-quote" data-id="${esc(String(pin.id))}"
+             aria-label="Go to the pinned message from ${esc(pin.author)}">${inner}</button>`
+        : `<div class="pinned__jump pinned__jump--away">${inner}</div>`}
+      <button class="pinned__drop" type="button" data-act="chat-unpin"
+        aria-label="Unpin this message">${ICONS.x}</button>
+    </div>`
+}
+
+// What the pin button on a message is offering to do, which depends on what is
+// already pinned. Saying "replacing Sam's" out loud is the point: one slot means
+// pinning is always a choice against something, and a button that hid that would
+// be quietly spending a decision somebody else made.
+function pinLabel(message, isPinned) {
+  if (isPinned) return 'Unpin this message'
+  const held = S.pinned
+  return held ? `Pin this message, replacing ${held.author}'s` : 'Pin this message'
+}
+
 function chatRows() {
   const messageRows = S.chat.messages.map((message) => {
     const member = memberById(message.member_id)
     const when = new Date(message.created_at)
     const assistant = message.role === 'assistant'
+    const isPinned = Number(S.pinned?.id) === Number(message.id)
+    const pinning = pinLabel(message, isPinned)
     // A message is somebody talking, so it is signed with them rather than with
     // a coloured tab standing in for them. The name in the meta line stays: at
     // this size a face is recognition, not identification, and the two together
@@ -3996,7 +4320,8 @@ function chatRows() {
     // Whoever wrote it may have left the trip since. The message keeps the name
     // it was sent under, so the face falls back to that rather than to nothing.
     return `
-      <li class="thread__message${message.member_id === S.me ? ' thread__message--mine' : ''}${assistant ? ' thread__message--assistant' : ''}">
+      <li class="thread__message${message.member_id === S.me ? ' thread__message--mine' : ''}${assistant ? ' thread__message--assistant' : ''}${isPinned ? ' thread__message--pinned' : ''}"
+        id="msg-${esc(String(message.id))}">
         ${assistant
           ? `<span class="thread__mark" aria-hidden="true">${ICONS.camp}</span>`
           : `<span class="thread__mark thread__mark--face" aria-hidden="true"
@@ -4006,7 +4331,14 @@ function chatRows() {
           <div class="thread__meta">
             <strong>${esc(message.author_name)}${assistant ? ' <span class="thread__camp mono">assistant</span>' : ''}</strong>
             <time class="mono" datetime="${esc(message.created_at)}" title="${esc(dateFormat(STAMP).format(when))}">${ago(message.created_at)}</time>
+            <button class="thread__reply" type="button" data-act="chat-reply" data-id="${esc(String(message.id))}"
+              aria-label="Reply to ${esc(message.author_name)}">${ICONS.reply}</button>
+            <button class="thread__pin${isPinned ? ' thread__pin--on' : ''}" type="button"
+              data-act="${isPinned ? 'chat-unpin' : 'chat-pin'}" data-id="${esc(String(message.id))}"
+              aria-pressed="${isPinned}" title="${esc(pinning)}"
+              aria-label="${esc(pinning)}">${ICONS.tack}</button>
           </div>
+          ${quoteBlock(message.reply)}
           ${assistant ? `<div class="assistant-copy">${assistantHtml(message.body)}</div>` : `<p>${esc(message.body)}</p>`}
         </div>
       </li>`
@@ -4044,8 +4376,9 @@ function chatCard() {
       <span class="sr-only chat__connection mono" data-chat-connection
         data-state="${esc(chat.connection)}" role="status" aria-live="polite">${chatConnectionLabel(chat.connection)}</span>
       <p class="sr-only" id="chat-help">${assistantOn()
-        ? 'Keep decisions with the trip. Start with <span class="mono">@camp</span> to ask about the trip, or to have it change the lists, plans, notes and costs.'
+        ? 'Keep decisions with the trip. Start with <span class="mono">@camp</span> to ask about the trip, or to have it change the lists, plans, notes and costs. Replying to one of its messages asks it as well.'
         : 'Keep decisions with the trip, where everybody can find them later.'}</p>
+      ${waiting || chat.error ? '' : pinBanner()}
       <div class="chat__body">
         ${waiting ? '<div class="skel" aria-label="Loading messages"></div>' : chat.error ? `
           <div class="chat__error" role="alert">
@@ -4072,6 +4405,17 @@ function chatCard() {
                 <span class="chat__mention-copy"><strong>Camp</strong><small>Trip assistant</small></span>
                 <span class="chat__mention-handle mono">@camp</span>
               </button>
+            </div>` : ''}
+          ${chat.replyTo ? `
+            <div class="chat__replying">
+              <span class="chat__replying-mark" aria-hidden="true">${ICONS.reply}</span>
+              <span class="chat__replying-copy">
+                <small>Replying to <b${chat.replyTo.assistant ? ' class="mono"' : ''}>${esc(chat.replyTo.author)}</b>${
+                  chat.replyTo.assistant && assistantOn() ? ' — it will answer' : ''}</small>
+                <span>${esc(chat.replyTo.body)}</span>
+              </span>
+              <button class="chat__replying-drop" type="button" data-act="chat-reply-cancel"
+                aria-label="Cancel reply">${ICONS.x}</button>
             </div>` : ''}
           <div class="chat__write">
             <textarea id="chat-text" name="text" rows="1" maxlength="2000" required
@@ -5532,6 +5876,18 @@ async function openTrip(code) {
 }
 
 document.addEventListener('click', async (ev) => {
+  // The click a long press leaves behind it. Pressing on the pin button itself
+  // would otherwise pin and then unpin in one gesture, which reads as the press
+  // having done nothing at all.
+  //
+  // Only that message's click, and only for as long as a trailing one could
+  // still arrive. Dropping every click for the window would take an unrelated
+  // one with it; matching the row alone would swallow a real tap on the message
+  // just pressed, on a platform that sends no trailing click at all.
+  if (heldRow && Date.now() - heldAt < 400 && ev.target.closest?.('.thread__message') === heldRow) {
+    heldRow = null
+    return
+  }
   const el = ev.target.closest('[data-act]')
   if (!el) return
   const act = el.dataset.act
@@ -5720,6 +6076,30 @@ document.addEventListener('click', async (ev) => {
 
     case 'chat-mention':
       acceptCampMention(root.querySelector('#chat-text'))
+      break
+
+    case 'chat-reply':
+      startReply(Number(el.dataset.id))
+      break
+
+    case 'chat-reply-cancel':
+      if (S.chat.replyTo) {
+        S.chat.replyTo = null
+        render()
+        focusComposer()
+      }
+      break
+
+    case 'chat-quote':
+      showMessage(Number(el.dataset.id))
+      break
+
+    case 'chat-pin':
+      await pinMessage(Number(el.dataset.id))
+      break
+
+    case 'chat-unpin':
+      await savePin(null)
       break
 
     case 'chat-older':
@@ -6359,9 +6739,12 @@ document.addEventListener('submit', async (ev) => {
       const text = typed.trim()
       if (!text || S.chat.busy || S.chat.tripId !== S.trip.id) break
       const tripId = S.trip.id
-      const pending = S.chat.pending?.text === text
+      // What it is answering is part of the message, so a retry is only the
+      // same send if the quote on it is the same one too.
+      const replyTo = S.chat.replyTo?.id ?? null
+      const pending = S.chat.pending?.text === text && (S.chat.pending?.replyTo ?? null) === replyTo
         ? S.chat.pending
-        : { clientId: newMessageId(), text }
+        : { clientId: newMessageId(), text, replyTo }
       S.chat.pending = pending
       S.chat.draft = text
       S.chat.busy = true
@@ -6403,7 +6786,7 @@ document.addEventListener('submit', async (ev) => {
         //
         // Whether Camp is there changes the composer itself — its label, its
         // placeholder, the mention list beside it — so that one needs the redraw.
-        const emptied = clearComposer(typed)
+        const emptied = clearComposer(typed, pending.replyTo)
         if (S.chat.assistantAvailable !== wasAvailable || !emptied) {
           render({ chatBottom: true })
         }
@@ -6590,6 +6973,14 @@ document.addEventListener('keydown', (ev) => {
     if (mention && !mention.hidden && ev.key === 'Escape') {
       ev.preventDefault()
       setCampMentionOpen(ev.target, false)
+      return
+    }
+    // The mention list first, then the quote: escape takes the most recent thing
+    // off, and the box itself is never what it closes.
+    if (S.chat.replyTo && ev.key === 'Escape') {
+      ev.preventDefault()
+      S.chat.replyTo = null
+      ev.target.form?.querySelector('.chat__replying')?.remove()
       return
     }
   }
