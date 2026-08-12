@@ -255,6 +255,145 @@ try {
     assert.equal(asked.length, runs, 'a reply to a member woke the assistant')
   }
 
+  // ---- the private thread ---------------------------------------------------------
+
+  // The other place Camp is talked to. What is checked here is the part that
+  // cannot be seen by reading either half: that the conversation lands in the
+  // other table and stays out of the room, that the prompt Camp is given knows
+  // which room it is standing in, and that a change made in private is still a
+  // change to everybody's trip.
+  {
+    let privatelySaid = 0
+    const waitForPrivateReply = async () => {
+      for (let i = 0; i < 100; i++) {
+        const rows = db.prepare("SELECT body FROM camp_messages WHERE role = 'assistant' ORDER BY id").all()
+        if (rows.length > privatelySaid) { privatelySaid = rows.length; return rows.at(-1).body }
+        await new Promise((resolve) => setTimeout(resolve, 100))
+      }
+      return null
+    }
+
+    const roomRows = () => db.prepare('SELECT COUNT(*) AS n FROM messages').get().n
+    const roomBefore = roomRows()
+
+    // A question first, so the no-tools rule is checked on this route too.
+    const quiet = 'You are on Sam\'s pitch, and nobody has claimed the stove.'
+    script = (res) => talks(res, quiet)
+    const asked1 = await api(`/api/trips/${tripId}/camp`, {
+      text: 'what is still unclaimed?', clientId: 'p1',
+    })
+    assert.equal(asked1.status, 201)
+    assert.equal(asked1.body.assistant?.status, 'queued', JSON.stringify(asked1.body))
+    assert.equal(await waitForPrivateReply(), quiet)
+
+    // No @camp anywhere in it: every message on this page is for Camp, because
+    // there is nobody else on the page to be talking to.
+    assert.ok(!asked1.body.message.body.includes('@camp'))
+
+    // The prompt says which room this is, and says the part that is easy to get
+    // wrong out loud: private conversation, shared trip.
+    const privately = asked.at(-1)
+    assert.ok(privately.instructions.includes('private thread between you and the requester'),
+      'the model was told it was standing in the shared room')
+    assert.ok(privately.instructions.includes('changes the trip everybody is on'),
+      'the model was not told a private change is still a shared change')
+    assert.ok(privately.input[1].content.includes('private thread'), privately.input[1].content)
+
+    // And nothing reached the room. This is the whole feature in one assertion.
+    assert.equal(roomRows(), roomBefore, 'a private message was written into the room')
+
+    // A second turn, which is where a thread differs from a room: what was said
+    // before goes to the model as turns rather than as a transcript in the
+    // snapshot.
+    const followed = 'Added a stove to the gear list — the group will see it on the list.'
+    script = (res, request) => (request.input.some((turn) => turn.type === 'function_call_output')
+      ? talks(res, followed)
+      : callsTool(res, toolCall('add_items', {
+        items: [{
+          list: 'gear', title: 'Stove', category: 'Camp kitchen', qty: null, note: null,
+          kind: 'shared', day: null, time: null, place: null, broughtBy: 'me',
+        }],
+      })))
+    const asked2 = await api(`/api/trips/${tripId}/camp`, {
+      text: 'add one for me then', clientId: 'p2',
+    })
+    assert.equal(asked2.body.assistant?.status, 'queued', JSON.stringify(asked2.body))
+    assert.equal(await waitForPrivateReply(), followed)
+
+    const second = asked.find((request) => request.input.some(
+      (turn) => turn.content === 'what is still unclaimed?'))
+    assert.ok(second, 'the earlier turn was not carried into the follow-up')
+    assert.ok(second.input.some((turn) => turn.role === 'assistant' && turn.content === quiet),
+      'Camp was not given its own earlier answer')
+
+    // Private conversation, shared trip: the item is real and the activity feed
+    // has it, which is how the group finds out without reading the thread.
+    assert.ok(db.prepare("SELECT 1 FROM items WHERE title = 'Stove'").get(),
+      'a change asked for privately was not made')
+    assert.ok(db.prepare("SELECT 1 FROM events WHERE text = 'added Stove'").get(),
+      'a private change was kept out of the activity feed')
+    assert.equal(roomRows(), roomBefore, 'the private exchange leaked into the room')
+
+    // The same idempotency rule as the room: one key names one send.
+    const retried = await api(`/api/trips/${tripId}/camp`, {
+      text: 'add one for me then', clientId: 'p2',
+    })
+    assert.equal(retried.status, 200)
+    assert.equal(retried.body.assistant, null, 'a retry asked Camp a second time')
+    const changed = await api(`/api/trips/${tripId}/camp`, {
+      text: 'something else entirely', clientId: 'p2',
+    })
+    assert.equal(changed.status, 409)
+    assert.equal(changed.body.conflict, 'message-retry')
+
+    // Reading it back, newest last, with the cursor the client polls on.
+    const page = await api(`/api/trips/${tripId}/camp`, undefined, 'GET')
+    assert.equal(page.status, 200)
+    assert.deepEqual(page.body.messages.map((m) => m.role),
+      ['member', 'assistant', 'member', 'assistant'])
+    const after = await api(`/api/trips/${tripId}/camp?after=${page.body.messages[1].id}`, undefined, 'GET')
+    assert.equal(after.body.messages.length, 2)
+
+    // Somebody else on the same trip has their own thread and cannot see this
+    // one. The route reads by trip and member together, so their page comes back
+    // empty rather than filtered — there is no query here that could return
+    // both threads and then have to remember to take one out.
+    const mine = [...jar]
+    jar.length = 0
+    await api('/api/auth/dev', { devId: 'campsmoke5678' })
+    const joined = await api(`/api/trips/${tripId}/members`, { name: 'Alex', self: true })
+    assert.ok(joined.status < 300, JSON.stringify(joined.body))
+    const theirs = await api(`/api/trips/${tripId}/camp`, undefined, 'GET')
+    assert.equal(theirs.status, 200)
+    assert.deepEqual(theirs.body.messages, [], 'one member could read another\'s private thread')
+    jar.length = 0
+    jar.push(...mine)
+
+    // Clearing takes the thread and leaves the trip alone.
+    const cleared = await api(`/api/trips/${tripId}/camp`, undefined, 'DELETE')
+    assert.equal(cleared.status, 200)
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM camp_messages').get().n, 0)
+    assert.ok(db.prepare("SELECT 1 FROM items WHERE title = 'Stove'").get(),
+      'clearing the thread undid what Camp had done to the trip')
+
+    // Clearing while Camp is still thinking. The answer comes back to a thread
+    // that no longer has the question in it, and an answer on its own at the
+    // top of an emptied page is worse than no answer — so it is dropped.
+    let release = null
+    script = (res) => { release = () => talks(res, 'Six, including the two children.') }
+    const midRun = await api(`/api/trips/${tripId}/camp`, {
+      text: 'how many are we feeding?', clientId: 'p9',
+    })
+    assert.equal(midRun.body.assistant?.status, 'queued', JSON.stringify(midRun.body))
+    for (let i = 0; i < 100 && !release; i++) await new Promise((r) => setTimeout(r, 50))
+    assert.ok(release, 'the model was never called')
+    await api(`/api/trips/${tripId}/camp`, undefined, 'DELETE')
+    release()
+    await new Promise((r) => setTimeout(r, 400))
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM camp_messages').get().n, 0,
+      'an answer landed in a thread whose question had been deleted')
+  }
+
   db.close()
   console.log('camp round-trip smoke passed')
 } finally {

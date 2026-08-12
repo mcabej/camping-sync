@@ -21,6 +21,12 @@ lost in a separate group chat.
   never an unlabelled checkbox sitting next to an unanswered question.
 - **What am I missing?** — a catalogue of ~90 things people usually bring, each
   with a note explaining why, filtered to hide what you already have.
+- **Camp, twice** — an assistant that can read the trip and change it. `@camp`
+  in the Planning Room asks it in front of everybody, which is right when the
+  answer is the group's business. The spark button in the corner of every list
+  opens a thread only you can read, for the eleven questions in a row that
+  aren't. Both hold the same tools, so a change made privately is still a change
+  everybody sees on the list.
 - **The Trip tab** — the whole trip on one screen: days to go, what nobody has
   picked up yet and which list to open about it, all four bars reporting at once
   — including your own load — tap one to go there, the notes everyone needs
@@ -148,7 +154,9 @@ One `items` table with a `list` discriminator (`gear` / `food` / `drinks` /
 that's what the clients poll. Messages use their own increasing cursor, a
 `role` that distinguishes member posts from durable Camp replies, and an
 optional `reply_to` naming the one message a reply answers. See *Quoted
-replies*.
+replies*. `camp_messages` is the other conversation — one thread per member per
+trip, which nobody else can read — and it is deliberately a separate table
+rather than a column on `messages`. See *Asking Camp on your own*.
 
 An item's `kind` decides how it's tracked, and the two are mutually exclusive:
 
@@ -869,6 +877,84 @@ question carries no tools, that a tool call invented anyway is refused rather
 than run, and that an explicit deletion happens in its original turn.
 `server.js` keeps the streaming, the queue and the hourly allowance, and knows
 nothing about what a tool means.
+
+### Asking Camp on your own
+
+Most of what one person asks Camp is not addressed to anybody else. "What am I
+still missing?", "what do I owe Alex?", "read me back Saturday" — every one of
+those went into the Planning Room, pushed a notification to everybody on the
+trip twice over (the question, then the answer), and settled permanently into
+what db.js calls "durable trip history, not part of the short activity feed".
+The room is the group's record of how a decision was reached; a side-question is
+not that, and eleven of them in a row buries the one message that was.
+
+So there is a second place. A spark button stands on the shortcut into the room,
+in the corner of every list, and opens `/t/:id/ask` — the same Camp, the same
+trip, the same tools, in a thread only you can read. The two buttons are one
+stack on purpose — they are the same errand, say something without leaving the
+list you are reading, and all that differs is who hears it — but not one control
+with two heads: the room's is the solid green circle it has always been, and
+Camp's is smaller, on paper, with the spark in forest ink, sitting in a crescent
+masked out of the green one's top. Two identical circles in a column are a thing
+you have to stop and read; a small one resting in a notch cut for it says which
+is the aside before you have looked at either icon. The crescent is a modifier
+rather than part of the button, because a scoop out of a circle with nothing
+sitting in it is damage. Neither is drawn inside the
+room, where a button over the composer is a button in the way of a box that
+grows to four lines.
+
+**It is a separate table, not a flag.** `camp_messages` is keyed by trip *and*
+member, and nothing joins it to `messages`. That is the whole security argument:
+a visibility column on the room would need a filter on every read of the room,
+and the one that got forgotten would be the leak. Here there is no query that
+could return both. It carries no `author_name` — there are two voices and one of
+them is you — and no `reply_to`, because a quote is how you point at one voice
+out of six. `member_id` cascades rather than nulling, which is the other place
+the two tables part company: the room keeps what a departed member said because
+it is the group's history, and a private aside has no meaning without them.
+
+**Private conversation, shared trip.** Camp keeps every tool it has, so "add a
+tarp and put me down for it" works here and changes the list everybody sees. The
+activity feed says *you* added it, the same as if you had typed it in yourself.
+The prompt says this out loud (`campInstructions({ alone: true })`) and asks
+Camp to mention it when it makes a change — somebody who thinks a private thread
+means a private trip will otherwise find out from the group.
+
+**What the two channels share.** One queue per trip, because a private question
+can write to the same list a room question is halfway through changing. One
+hourly allowance per person, because it is one person's API bill either way.
+One WebSocket: `assistant.*` events now carry a `channel`, and a private run is
+delivered with `sendToMember()` rather than `broadcastTripEvent()` — the run id
+says which answer a delta belongs to, not which page is drawing it, and a
+browser with both open cannot infer the difference.
+
+**Notifications.** The room's mute switch does not silence this, for the same
+reason it does not silence a reminder: that switch means "the group is talking
+and I have had enough of it", and this is the answer to a question you asked ten
+seconds ago. It goes to your devices and no further, and not at all if you are
+still standing on the page watching it being written — `camp.presence` on the
+socket answers that separately from `room.presence`, because being in the room
+is not watching Camp write somewhere else.
+
+**Clearing.** The room has no delete and this does, which is the difference
+between a record and a scratchpad. It takes the whole thread rather than one
+message — a conversation with half its questions removed is Camp answering
+things that are no longer above it — and it leaves the trip alone: anything Camp
+already changed stays changed.
+
+Clearing mid-answer is the case it has to survive, because Camp takes ten
+seconds and the button is right there. The answer is dropped rather than saved —
+`deliverCampThreadMessage()` writes nothing if the question it answers has gone,
+so nothing lands alone at the top of an emptied page — and the client writes off
+the run ids that were in the air (`S.ask.dropped`), because the deltas keep
+arriving and would otherwise rebuild the row that was just deleted and leave it
+saying "Writing…" for ever.
+
+`scripts/chat-smoke.mjs` covers the table (the per-member key, the isolation,
+what a departing member takes with them); `scripts/camp-run-smoke.mjs` puts the
+stub model behind the real server and checks that the prompt knows which room it
+is in, that earlier turns reach the model as turns, that a private change lands
+in the trip and the feed, and that nothing reaches `messages`.
 
 ### Installing it
 

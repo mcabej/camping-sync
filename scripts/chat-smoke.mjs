@@ -89,6 +89,40 @@ try {
   assert.equal(db.prepare('SELECT pinned_message_id FROM trips WHERE id = ?').get('trip').pinned_message_id,
     latest[1].id)
 
+  // ---- the private thread ----------------------------------------------------
+  //
+  // A separate table rather than a flag on messages, so that the isolation is
+  // structural: there is no query over the room that could return one of these
+  // rows and have to remember to take it out again. What is checked here is the
+  // shape of that separation — a thread is a trip and a member together, and
+  // nothing about it is shared.
+  db.prepare(`INSERT INTO members (id, trip_id, name, created_at)
+              VALUES (?, ?, ?, ?)`).run('alex', 'trip', 'Alex', ts)
+  const aside = db.prepare(`INSERT INTO camp_messages
+    (trip_id, member_id, client_id, role, body, created_at) VALUES (?, ?, ?, ?, ?, ?)`)
+  aside.run('trip', 'sam', 'p1', 'member', 'what am I still missing?', ts)
+  aside.run('trip', 'sam', 'assistant:run-p1', 'assistant', 'A stove and a tarp.', ts)
+  aside.run('trip', 'alex', 'p1', 'member', 'what do I owe?', ts)
+
+  // The same client id in two threads is two messages: the key is unique per
+  // trip and member, not per trip, so one person's retry cannot collide with
+  // another person's first send.
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM camp_messages WHERE client_id = ?').get('p1').n, 2)
+  const retried = db.prepare(`INSERT INTO camp_messages
+    (trip_id, member_id, client_id, role, body, created_at) VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT (trip_id, member_id, client_id) DO NOTHING`)
+    .run('trip', 'sam', 'p1', 'member', 'what am I still missing?', ts)
+  assert.equal(retried.changes, 0)
+
+  // The read every route makes: a trip and a member together. Sam's thread has
+  // no trace of Alex's in it, and neither has anything to do with the room.
+  const samsThread = db.prepare(`SELECT role, body FROM camp_messages
+    WHERE trip_id = ? AND member_id = ? ORDER BY id`).all('trip', 'sam')
+  assert.deepEqual(samsThread.map((m) => m.role), ['member', 'assistant'])
+  assert.ok(!samsThread.some((m) => m.body === 'what do I owe?'))
+  assert.ok(!db.prepare('SELECT 1 FROM messages WHERE body LIKE ?').get('%what am I still missing?%'),
+    'a private message was written into the room as well')
+
   db.prepare(`INSERT INTO notification_preferences
     (member_id, trip_id, muted, last_read_message_id, updated_at)
     VALUES (?, ?, 1, ?, ?)`).run('sam', 'trip', latest[0].id, ts)
@@ -107,6 +141,13 @@ try {
     .get('assistant:run-1').body, 'Bring a tarp for the forecast rain.')
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM push_subscriptions').get().n, 0)
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM notification_preferences').get().n, 0)
+
+  // And the two tables part company over exactly this. The room keeps what a
+  // departed member said, under the name they said it as, because it is the
+  // group's record of how a decision was reached. Their private thread is not
+  // the group's anything and goes with them — while everybody else's stays.
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM camp_messages WHERE member_id = ?').get('sam').n, 0)
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM camp_messages WHERE member_id = ?').get('alex').n, 1)
 
   // A reply outlives what it answered. Losing the quoted message costs the
   // quote and nothing else: the reply is still a message, still in the room,
@@ -129,6 +170,9 @@ try {
   db.prepare('DELETE FROM trips WHERE id = ?').run('trip')
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM messages').get().n, 0)
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM trips').get().n, 0)
+  // Deleting the trip takes both conversations with it, which is what "delete
+  // this trip" has to mean if the private one is to be worth the name.
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM camp_messages').get().n, 0)
 
   db.close()
   console.log('durable chat smoke passed')

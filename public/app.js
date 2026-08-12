@@ -102,6 +102,11 @@ const ICONS = {
   // reads as "slightly wrong" without anybody being able to say why.
   cog: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M10.45 2.73A9.4 9.4 0 0 1 13.55 2.73L13.96 5.18A7.1 7.1 0 0 1 15.44 5.79L17.46 4.35A9.4 9.4 0 0 1 19.65 6.54L18.21 8.56A7.1 7.1 0 0 1 18.82 10.04L21.27 10.45A9.4 9.4 0 0 1 21.27 13.55L18.82 13.96A7.1 7.1 0 0 1 18.21 15.44L19.65 17.46A9.4 9.4 0 0 1 17.46 19.65L15.44 18.21A7.1 7.1 0 0 1 13.96 18.82L13.55 21.27A9.4 9.4 0 0 1 10.45 21.27L10.04 18.82A7.1 7.1 0 0 1 8.56 18.21L6.54 19.65A9.4 9.4 0 0 1 4.35 17.46L5.79 15.44A7.1 7.1 0 0 1 5.18 13.96L2.73 13.55A9.4 9.4 0 0 1 2.73 10.45L5.18 10.04A7.1 7.1 0 0 1 5.79 8.56L4.35 6.54A9.4 9.4 0 0 1 6.54 4.35L8.56 5.79A7.1 7.1 0 0 1 10.04 5.18Z"/><circle cx="12" cy="12" r="3.1"/></svg>',
   bell: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg>',
+  // A bin, drawn plainly for the same reason the cog is: this is the one
+  // control on the private thread that throws something away, it sits in the
+  // corner where a close button lives, and an × there would read as "leave this
+  // page" — which is the back arrow's job at the other end of the same bar.
+  bin: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 7h15"/><path d="M9.5 7V5.3a1.3 1.3 0 0 1 1.3-1.3h2.4a1.3 1.3 0 0 1 1.3 1.3V7"/><path d="m6.7 7 .8 12.2A1.9 1.9 0 0 0 9.4 21h5.2a1.9 1.9 0 0 0 1.9-1.8L17.3 7"/><path d="M10.4 10.8v6.4M13.6 10.8v6.4"/></svg>',
   bellOff: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M13.7 5.25A6 6 0 0 0 6 9c0 2.1-.27 3.55-.68 4.58M18 9c0 7 3 7 3 9H9M10 21h4M3 3l18 18"/></svg>',
   tick: '<svg viewBox="0 0 24 24" fill="none" stroke="var(--on-forest)" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5 9.5 18 20 6.5"/></svg>',
   tickGreen: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5 9.5 18 20 6.5"/></svg>',
@@ -216,6 +221,21 @@ const S = {
     // The message the next send will quote, as the server describes it:
     // `{ id, author, assistant, body }` or null. See shapeMessage on the server.
     replyTo: null,
+  },
+  // The other conversation: you and Camp, on this trip, where nobody else on
+  // the trip can read it. The same shape as `chat` minus the parts that only
+  // mean something in a room with other people in it — no pin, no quote, and no
+  // connection of its own, because both pages ride the one socket.
+  // `dropped` is the run ids that were in the air when the thread was cleared.
+  // The server will not write their answers down — an answer alone at the top
+  // of an emptied page answers nothing — but it is still streaming them, and
+  // without this the next delta would rebuild the row that was just deleted and
+  // leave it saying "Writing…" for ever, because the message that would have
+  // replaced it is never coming.
+  ask: {
+    tripId: '', messages: [], hasMore: false, loading: false,
+    loadingOlder: false, busy: false, error: '', draft: '', pending: null,
+    assistantAvailable: false, streams: {}, dropped: [],
   },
   notify: {
     tripId: '', loading: false, available: false, subscribed: false,
@@ -498,7 +518,8 @@ async function api(path, opts = {}) {
 
 function absorb(state) {
   if (!state?.trip) return
-  if (S.trip?.id !== state.trip.id) resetChat()
+  // Both conversations belong to the trip, so both are dropped when it changes.
+  if (S.trip?.id !== state.trip.id) { resetChat(); resetAsk() }
   S.trip = state.trip
   if (Object.hasOwn(state, 'viewer_id')) S.me = state.viewer_id
   S.members = state.members
@@ -539,6 +560,34 @@ function resetChat(tripId = '') {
     connection: 'idle', assistantAvailable: false, streams: {}, replyTo: null,
   }
 }
+
+function resetAsk(tripId = '') {
+  S.ask = {
+    tripId, messages: [], hasMore: false, loading: false,
+    loadingOlder: false, busy: false, error: '', draft: '', pending: null,
+    assistantAvailable: false, streams: {}, dropped: [],
+  }
+}
+
+// Emptying the thread on screen, which both the button and another device of
+// yours ask for. The runs still in the air are written off rather than left to
+// redraw themselves — see `dropped` on the state. The list is capped because it
+// is only ever a handful of ids and it must not become a leak on a page
+// somebody clears twenty times.
+function clearAskThread() {
+  S.ask.dropped = [...S.ask.dropped, ...Object.keys(S.ask.streams)].slice(-20)
+  S.ask.messages = []
+  S.ask.streams = {}
+  S.ask.hasMore = false
+}
+
+// The two conversations are drawn by the same code because only one of them is
+// ever on screen: the same classes, the same textarea id, the same scroll
+// keeping. What differs is which store holds the messages and which rows get
+// built from it, and that is answered here rather than at a dozen call sites
+// each remembering to ask.
+const onAskPage = () => S.view === 'trip' && S.camp === 'ask'
+const chatStore = () => (onAskPage() ? S.ask : S.chat)
 
 const pushSupported = () => typeof Notification !== 'undefined'
   && 'serviceWorker' in navigator && 'PushManager' in globalThis
@@ -881,6 +930,22 @@ function mergeMessages(incoming) {
   S.chat.messages = [...byId.values()].sort((a, b) => Number(a.id) - Number(b.id))
 }
 
+// The same merge against the private thread's own store. Rows arrive from three
+// places that can overlap — the first page, the socket, and the answer to the
+// POST that sent them — so identity is the id and the last copy wins.
+function mergeAskMessages(incoming) {
+  const byId = new Map(S.ask.messages.map((m) => [Number(m.id), m]))
+  for (const message of incoming ?? []) {
+    byId.set(Number(message.id), message)
+    // The finished answer replaces the stream that was drawing it, so the row
+    // does not appear twice for the moment between the last delta and the save.
+    if (message.role === 'assistant' && message.client_id?.startsWith('assistant:')) {
+      delete S.ask.streams[message.client_id.slice('assistant:'.length)]
+    }
+  }
+  S.ask.messages = [...byId.values()].sort((a, b) => Number(a.id) - Number(b.id))
+}
+
 function newMessageId() {
   return globalThis.crypto?.randomUUID?.()
     ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
@@ -1126,9 +1191,18 @@ function showMessage(id) {
   })
 }
 
-async function wantMessages() {
+// `retry` is who is asking. render() asks on every draw of the room, and this
+// function ends by drawing the room — so treating a failure as a reason to
+// start over made the two of them a loop: fetch, fail, redraw, fetch. Offline
+// in the room that was an unbounded run of requests, and the room flickering
+// between its skeleton and its error for as long as somebody stood there.
+//
+// So a failure is a resting state now, and only something that means it can
+// disturb it: the button in the error block, and a socket that has just come
+// back. Both say so.
+async function wantMessages({ retry = false } = {}) {
   const tripId = S.trip?.id
-  if (!tripId || (S.chat.tripId === tripId && !S.chat.error)) return
+  if (!tripId || (S.chat.tripId === tripId && !(retry && S.chat.error))) return
   const connection = S.chat.connection
   resetChat(tripId)
   S.chat.connection = connection
@@ -1170,6 +1244,67 @@ async function olderMessages() {
   }
 }
 
+// The private thread's three reads, which are the room's three reads against a
+// table with one reader: the first page on arrival, a page further back, and
+// everything since the last id after the socket has been away.
+// Asked for by render(), which runs again when this finishes — so the thread
+// having been asked for is what stops it being asked for again, and a failure
+// is not a reason to start over. See wantMessages, which is the same shape and
+// the same `retry`: only the button in the error block and a socket coming back
+// mean it.
+async function wantAsk({ retry = false } = {}) {
+  const tripId = S.trip?.id
+  if (!tripId || (S.ask.tripId === tripId && !(retry && S.ask.error))) return
+  resetAsk(tripId)
+  S.ask.loading = true
+  try {
+    const data = await api(`/trips/${tripId}/camp`)
+    if (S.ask.tripId !== tripId) return
+    mergeAskMessages(data.messages)
+    S.ask.hasMore = !!data.hasMore
+    S.ask.assistantAvailable = !!data.assistantAvailable
+  } catch (err) {
+    if (S.ask.tripId === tripId) S.ask.error = err.message
+  } finally {
+    if (S.ask.tripId === tripId) {
+      S.ask.loading = false
+      if (onAskPage()) render({ chatBottom: true })
+    }
+  }
+}
+
+async function olderAskMessages() {
+  const tripId = S.trip?.id
+  const first = S.ask.messages[0]?.id
+  if (!tripId || !first || S.ask.loadingOlder || !S.ask.hasMore) return
+  S.ask.loadingOlder = true
+  try {
+    const data = await api(`/trips/${tripId}/camp?before=${first}`)
+    if (S.ask.tripId !== tripId) return
+    mergeAskMessages(data.messages)
+    S.ask.hasMore = !!data.hasMore
+  } catch (err) {
+    if (S.ask.tripId === tripId) toast(err.message)
+  } finally {
+    if (S.ask.tripId === tripId) {
+      S.ask.loadingOlder = false
+      render()
+    }
+  }
+}
+
+// An answer that landed while the socket was down is still on the server, so
+// coming back asks for it rather than assuming the stream said everything. The
+// thread is short and one person's, so a single page is always enough.
+async function syncNewAskMessages(tripId) {
+  if (S.ask.tripId !== tripId || S.ask.loading || S.ask.error) return false
+  const after = S.ask.messages.at(-1)?.id ?? 0
+  const data = await api(`/trips/${tripId}/camp?after=${after}&limit=100`)
+  if (S.ask.tripId !== tripId || !data.messages?.length) return false
+  mergeAskMessages(data.messages)
+  return true
+}
+
 // WebSocket delivery is a fast notification of durable rows. Reconnect always
 // asks REST for everything after the last id, so a dropped packet or sleeping
 // phone cannot leave a permanent hole in the thread.
@@ -1179,6 +1314,7 @@ let chatReconnectTimer = null
 let chatReconnectAttempt = 0
 let chatNeedsRender = false
 let sentRoomPresence = null
+let sentAskPresence = null
 
 const chatConnectionLabel = (state) => ({
   live: 'Live', connecting: 'Connecting', reconnecting: 'Reconnecting',
@@ -1194,7 +1330,7 @@ function setChatConnection(state) {
 }
 
 function showChatChanges() {
-  if (S.camp !== 'room') return
+  if (S.camp !== 'room' && !onAskPage()) return
   // Keep the textarea itself in place while an IME owns it, or while the message
   // it just sent is still in flight, and refresh its sibling thread instead.
   // Replacing the composer can lose a composing word or dismiss the phone
@@ -1202,7 +1338,7 @@ function showChatChanges() {
   // form the room has already thrown away, leaving the visible one holding the
   // text with its button stuck on the ellipsis. Your own message comes back down
   // the socket before the POST answers, so this is the ordinary case, not a race.
-  if (S.chat.busy || document.activeElement?.id === 'chat-text') {
+  if (chatStore().busy || document.activeElement?.id === 'chat-text') {
     chatNeedsRender = true
     drawChatThread()
     return
@@ -1224,10 +1360,10 @@ function drawChatThread() {
     if (!empty) return
     thread = document.createElement('ol')
     thread.className = 'thread'
-    thread.setAttribute('aria-label', 'Planning messages')
+    thread.setAttribute('aria-label', onAskPage() ? 'Your messages with Camp' : 'Planning messages')
     empty.replaceWith(thread)
   }
-  thread.innerHTML = chatRows()
+  thread.innerHTML = onAskPage() ? askRows() : chatRows()
   followChat(body)
 }
 
@@ -1251,6 +1387,7 @@ function drawChatThread() {
 // not be a sentence deleted.
 function clearComposer(sent = null, sentReplyTo = null) {
   const box = root.querySelector?.('#chat-text')
+  const chat = chatStore()
   // The quote went with the message that has just landed, so the next one starts
   // unattached — unless somebody picked a different message to answer while this
   // one was in flight. That is a newer answer to the same question than the send
@@ -1261,18 +1398,20 @@ function clearComposer(sent = null, sentReplyTo = null) {
   // The chip comes off by hand for the same reason the box is emptied by hand.
   // It lives inside the composer, and the composer is the one thing a send must
   // not redraw.
-  if ((S.chat.replyTo?.id ?? null) === sentReplyTo) {
-    S.chat.replyTo = null
+  // Nothing to drop on the private page: there is one other voice in there, so
+  // there is nothing to point at and no chip to take off.
+  if (!onAskPage() && (chat.replyTo?.id ?? null) === sentReplyTo) {
+    chat.replyTo = null
     box?.form?.querySelector('.chat__replying')?.remove()
   }
   // No composer on screen to read, so the message that has just landed is the
   // only thing the draft could still be holding, and it is spent.
-  if (!box) { S.chat.draft = ''; return false }
+  if (!box) { chat.draft = ''; return false }
   if (sent === null || box.value === sent) {
     box.value = ''
-    S.chat.draft = ''
+    chat.draft = ''
   } else {
-    S.chat.draft = box.value
+    chat.draft = box.value
   }
   fitChatBox(box)
   setCampMentionOpen(box, false)
@@ -1289,8 +1428,18 @@ function clearComposer(sent = null, sentReplyTo = null) {
 function receiveAssistantEvent(data) {
   const runId = String(data.runId ?? '')
   if (!/^[a-z0-9-]{1,100}$/i.test(runId)) return
-  const current = S.chat.streams[runId] ?? { runId, body: '', state: 'thinking', error: '' }
-  S.chat.streams[runId] = current
+  // Which of the two conversations is being written into. The server says so on
+  // the event rather than leaving it to be inferred from the run id, because a
+  // browser holding both pages open has no way to infer it — and a private
+  // answer streaming into the room's thread would be the one mistake this whole
+  // feature exists to prevent. Anything that does not say is the room, which is
+  // what a server from before the thread existed sends.
+  const chat = data.channel === 'private' ? S.ask : S.chat
+  // A run the thread was cleared out from under. Its answer is never going to
+  // be saved, so painting it would leave a row nothing can ever replace.
+  if (chat.dropped?.includes(runId)) return
+  const current = chat.streams[runId] ?? { runId, body: '', state: 'thinking', error: '' }
+  chat.streams[runId] = current
 
   if (data.type === 'assistant.delta' && typeof data.delta === 'string') {
     current.body = (current.body + data.delta).slice(0, 12000)
@@ -1338,6 +1487,7 @@ function stopChatSocket(state = 'idle') {
   chatReconnectAttempt = 0
   chatSocketTrip = ''
   sentRoomPresence = null
+  sentAskPresence = null
   const socket = chatSocket
   chatSocket = null
   if (socket && socket.readyState < 2) socket.close(1000, 'Leaving trip')
@@ -1374,14 +1524,26 @@ function connectChatSocket(tripId) {
   chatSocket = socket
   chatSocketTrip = tripId
   sentRoomPresence = null
+  sentAskPresence = null
 
   socket.addEventListener('open', () => {
     if (chatSocket !== socket || chatSocketTrip !== tripId) return
     chatReconnectAttempt = 0
     setChatConnection('live')
     syncRoomPresence()
-    if (S.chat.error) wantMessages()
+    if (S.chat.error) wantMessages({ retry: true })
     else syncNewMessages(tripId).then((changed) => { if (changed) showChatChanges() }, () => {})
+    // The private thread closes its own gap. It is not part of the room's sync
+    // because the two are separate tables with separate cursors, and the one
+    // you are standing on is the one whose gap you would notice.
+    //
+    // A thread whose first page never arrived has no cursor to close a gap on,
+    // so the socket coming back is a reason to ask for it again — the same
+    // second chance the room gets on the line above.
+    if (S.ask.error) wantAsk({ retry: true })
+    else if (S.ask.tripId === tripId) {
+      syncNewAskMessages(tripId).then((changed) => { if (changed) showChatChanges() }, () => {})
+    }
   })
   socket.addEventListener('message', (event) => {
     if (chatSocket !== socket) return
@@ -1401,8 +1563,28 @@ function connectChatSocket(tripId) {
           if (data.message.member_id !== S.me) {
             S.notify.unread = Math.max(0, Number(S.notify.unread) || 0) + 1
           }
-          render()
+          // What this redraw is for is a number on the tab bar, and it is not
+          // worth a dropped keyboard. Until the private thread there was no
+          // composer anywhere but the room, and the room is the branch above;
+          // now somebody can be halfway through a sentence to Camp when the
+          // group says something, and rebuilding the page under them would take
+          // the caret and the phone keyboard with it. The next redraw carries
+          // the count, and the composer's own blur is one.
+          if (document.activeElement?.id !== 'chat-text') render()
         }
+      } else if (data.type === 'camp.created' && data.message) {
+        if (S.ask.tripId === tripId) mergeAskMessages([data.message])
+        // Only this page draws the private thread, so off it there is nothing
+        // to redraw — and redrawing anyway would rebuild whichever list or form
+        // you actually are on, for a change nothing on it can show.
+        if (onAskPage() && !document.hidden) showChatChanges()
+      } else if (data.type === 'camp.cleared') {
+        // Cleared on another device of yours. The thread is emptied here rather
+        // than refetched: there is nothing to fetch, and leaving the rows up
+        // until the next visit would be this page disagreeing with itself
+        // across two screens about what you had just deleted.
+        if (S.ask.tripId === tripId) clearAskThread()
+        if (onAskPage()) render()
       } else if (data.type?.startsWith('assistant.')) {
         receiveAssistantEvent(data)
       }
@@ -1412,6 +1594,7 @@ function connectChatSocket(tripId) {
     if (chatSocket !== socket) return
     chatSocket = null
     sentRoomPresence = null
+    sentAskPresence = null
     scheduleChatReconnect(tripId)
   })
   socket.addEventListener('error', () => { /* close schedules the retry */ })
@@ -1420,10 +1603,20 @@ function connectChatSocket(tripId) {
 function syncRoomPresence() {
   if (!chatSocket || chatSocket.readyState !== 1 || typeof chatSocket.send !== 'function') return
   const active = S.camp === 'room' && !document.hidden
-  if (active === sentRoomPresence) return
+  if (active !== sentRoomPresence) {
+    try {
+      chatSocket.send(JSON.stringify({ type: 'room.presence', active }))
+      sentRoomPresence = active
+    } catch { /* a closing socket will reconnect and announce again */ }
+  }
+  // And the same answer for the other page, which suppresses a different
+  // notification: standing in the room is not watching Camp write your own
+  // answer somewhere else, so the two are asked separately.
+  const asking = onAskPage() && !document.hidden
+  if (asking === sentAskPresence) return
   try {
-    chatSocket.send(JSON.stringify({ type: 'room.presence', active }))
-    sentRoomPresence = active
+    chatSocket.send(JSON.stringify({ type: 'camp.presence', active: asking }))
+    sentAskPresence = asking
   } catch { /* a closing socket will reconnect and announce again */ }
 }
 
@@ -1454,6 +1647,7 @@ function reconnectChatNow() {
   const old = chatSocket
   chatSocket = null
   sentRoomPresence = null
+  sentAskPresence = null
   if (old && old.readyState < 2) old.close()
   chatSocketTrip = S.trip.id
   connectChatSocket(S.trip.id)
@@ -3101,6 +3295,27 @@ function roomNotificationButton() {
 }
 
 function topbar() {
+  // The private thread's own bar. It says whose page this is in the place the
+  // room says whose room it is, because "Ask Camp" alone would leave the one
+  // question this page has to answer — who else can see this — to be worked out
+  // from the fact that there is nobody else in it.
+  if (S.camp === 'ask') {
+    return `
+      <header class="topbar topbar--bare topbar--focus">
+        <div class="roombar">
+          <a class="roombar__back" href="/t/${encodeURIComponent(S.trip.id)}/room" data-act="leave-focus">
+            <span aria-hidden="true">${ICONS.back}</span>
+            <span class="sr-only">Back</span>
+          </a>
+          <h1 class="roombar__title roombar__title--noted" id="ask-camp-title">Ask Camp
+            <small class="roombar__note">Only you can see this</small>
+          </h1>
+          ${S.ask.messages.length ? `<button class="roombar__act" data-act="ask-clear"
+            aria-label="Clear this thread" title="Clear this thread">${ICONS.bin}</button>`
+    : '<span class="roombar__balance" aria-hidden="true"></span>'}
+        </div>
+      </header>`
+  }
   if (S.camp === 'room' || S.camp === 'settle') {
     const settling = S.camp === 'settle'
     return `
@@ -4404,7 +4619,8 @@ function chatCard() {
   const rows = chatRows()
 
   return `
-    <section class="chat-card chat-card--page" aria-labelledby="planning-room-title" aria-busy="${waiting}">
+    <section class="chat-card chat-card--page chat-card--room"
+      aria-labelledby="planning-room-title" aria-busy="${waiting}">
       <span class="sr-only chat__connection mono" data-chat-connection
         data-state="${esc(chat.connection)}" role="status" aria-live="polite">${chatConnectionLabel(chat.connection)}</span>
       <p class="sr-only" id="chat-help">${assistantOn()
@@ -4465,6 +4681,110 @@ function roomPage() {
   return `
     <main class="room-page">
       ${chatCard()}
+    </main>`
+}
+
+// ---- asking Camp on your own -------------------------------------------------
+
+// The same thread, with everything that belongs to a room taken out. No names,
+// because there are two voices and one of them is yours; no faces, for the same
+// reason; no pin, because a pin is the trip saying what it is waiting on and
+// this page is not the trip; no reply, because a quote is how you point at one
+// voice out of six.
+//
+// What is left is the two things a chat is: who said it and what they said —
+// and the first of those is answered by which side of the page it is on.
+function askRows() {
+  const messageRows = S.ask.messages.map((message) => {
+    const assistant = message.role === 'assistant'
+    const when = new Date(message.created_at)
+    return `
+      <li class="thread__message${assistant ? ' thread__message--assistant' : ' thread__message--mine'}">
+        ${assistant ? `<span class="thread__mark" aria-hidden="true">${ICONS.camp}</span>` : ''}
+        <div class="thread__content">
+          <div class="thread__meta">
+            <strong class="sr-only">${assistant ? 'Camp' : 'You'}</strong>
+            <time class="mono" datetime="${esc(message.created_at)}"
+              title="${esc(dateFormat(STAMP).format(when))}">${dateFormat(CLOCK).format(when)}</time>
+          </div>
+          ${assistant
+            ? `<div class="assistant-copy">${assistantHtml(message.body)}</div>`
+            : `<p>${esc(message.body)}</p>`}
+        </div>
+      </li>`
+  }).join('')
+  const streamRows = Object.values(S.ask.streams).map((stream) => `
+    <li class="thread__message thread__message--assistant thread__message--streaming"
+      data-assistant-stream="${esc(stream.runId)}" data-state="${esc(stream.state)}"
+      aria-busy="${stream.state === 'failed' ? 'false' : 'true'}">
+      <span class="thread__mark" aria-hidden="true">${ICONS.camp}</span>
+      <div class="thread__content">
+        <div class="thread__meta">
+          <strong class="sr-only">Camp</strong>
+          <span class="thread__status mono" data-assistant-status>${stream.state === 'failed' ? 'Could not answer' : 'Writing…'}</span>
+        </div>
+        <div class="assistant-copy" data-assistant-body>${assistantHtml(stream.body || stream.error || 'Thinking…')}</div>
+      </div>
+    </li>`).join('')
+  return messageRows + streamRows
+}
+
+function askCard() {
+  // Not `ask`, which is the name of the confirm dialog this file has had all
+  // along. Shadowing it here would leave a function that cannot ask a question.
+  const thread = S.ask
+  const waiting = thread.tripId !== S.trip.id || thread.loading
+  const rows = askRows()
+  // Two different noes again — see assistantOn(). The room can absorb the
+  // difference because it is still a room with Camp switched off; this page is
+  // only Camp, so a dead composer here has to say which no it is or it is a
+  // screen with no way off it and no reason given.
+  const switchedOff = !wants('assistant')
+  const off = switchedOff || !thread.assistantAvailable
+
+  return `
+    <section class="chat-card chat-card--page chat-card--ask" aria-labelledby="ask-camp-title"
+      aria-busy="${waiting}">
+      <p class="sr-only" id="chat-help">Everything here is between you and Camp. Nobody else on the trip can read it. Changes Camp makes to the lists, plans, notes and costs are still shared with the group.</p>
+      <div class="chat__body">
+        ${waiting ? '<div class="skel" aria-label="Loading messages"></div>' : thread.error ? `
+          <div class="chat__error" role="alert">
+            <p>${esc(thread.error)}</p>
+            <button class="btn btn--sm" data-act="ask-retry">Try again</button>
+          </div>` : `
+          ${thread.hasMore ? `<button class="chat__older" data-act="ask-older"
+            ${thread.loadingOlder ? 'disabled' : ''}>${thread.loadingOlder ? 'Loading…' : 'Earlier messages'}</button>` : ''}
+          ${rows ? `
+            <ol class="thread" aria-label="Your messages with Camp">${rows}</ol>` : `
+            <div class="chat__empty">
+              <strong>${off ? 'Camp is not here' : 'Just you and Camp'}</strong>
+              <span>${switchedOff
+    ? 'Camp is switched off. Turn it back on in Settings and this page is yours.'
+    : off
+      ? 'Camp needs an account before it can answer. The Planning Room still works without one.'
+      : 'Ask about the trip, or ask it to change the lists — without putting it in front of the group.'}</span>
+            </div>`}`}
+      </div>
+      ${waiting || thread.error ? '' : `
+        <form class="chat__composer" data-act="send-ask">
+          <label class="sr-only" for="chat-text">Ask Camp</label>
+          <div class="chat__write">
+            <textarea id="chat-text" name="text" rows="1" maxlength="2000" required
+              aria-describedby="chat-help"
+              placeholder="${switchedOff ? 'Camp is switched off…'
+    : off ? 'Camp is not available…' : 'Ask Camp anything about the trip…'}"
+              ${off ? 'disabled' : ''}>${esc(thread.draft)}</textarea>
+            <button class="btn btn--primary chat__send" type="submit" aria-label="${thread.busy ? 'Sending message' : 'Send message'}"
+              ${thread.busy || off ? 'disabled' : ''}>${thread.busy ? '<span class="chat__sending" aria-hidden="true">…</span>' : ICONS.send}</button>
+          </div>
+        </form>`}
+    </section>`
+}
+
+function askPage() {
+  return `
+    <main class="room-page">
+      ${askCard()}
     </main>`
 }
 
@@ -4576,6 +4896,12 @@ function tabbar() {
     </nav>`
 }
 
+// Whether Camp's button is standing in the corner. Three things have to agree
+// about it and none of them can see the others: the button itself, the crescent
+// the room's button carries so it has something to sit in, and the padding that
+// keeps the foot of a list clear of the pair. One answer, asked three times.
+const askFabOn = () => S.view === 'trip' && !S.camp && wants('assistant')
+
 // The room, from wherever you are standing. The door on the trip page is the
 // front one — wide, with the last thing said written on it — and this is the
 // side entrance for the four lists, which otherwise reach the room through a
@@ -4590,10 +4916,41 @@ function roomFab() {
     ? `Planning room, ${unread} unread message${unread === 1 ? '' : 's'}`
     : 'Planning room'
   return `
-    <a class="room-fab" href="/t/${encodeURIComponent(S.trip.id)}/room" data-act="room"
+    <a class="room-fab${askFabOn() ? ' room-fab--notched' : ''}"
+       href="/t/${encodeURIComponent(S.trip.id)}/room" data-act="room"
        aria-label="${label}" title="Planning room">
       <span class="room-fab__icon" aria-hidden="true">${ICONS.room}</span>
       ${unread ? `<span class="room-fab__unread" aria-hidden="true">${unread > 9 ? '9+' : unread}</span>` : ''}
+    </a>`
+}
+
+// The private thread's way in, standing on the button above. The two are one
+// stack rather than two ideas: the room's speech bubble on the bottom and the
+// spark over it, because they are the same errand — say something, here,
+// without leaving the list you are reading — and all that differs is who hears
+// it. A second shape in a second corner would be a second thing to learn.
+//
+// One stack, but not one control with two heads: this one is smaller, drawn on
+// paper rather than in green, and it sits in a crescent cut out of the other's
+// top rather than floating above it — so which is which is a glance, and which
+// one is the aside is the shape of the pair rather than something you work out
+// by reading two 21px icons. See .room-fab--ask and .room-fab--notched.
+//
+// It goes wherever that one goes, and nowhere else. The room does not carry it
+// — a button over the composer is a button in the way of a growing box, and the
+// arrow out is one tap from the list this is standing on.
+//
+// It asks the preference rather than assistantOn(), which also knows whether
+// the server has a key at all: that answer arrives with a thread's first page
+// and nothing on a packing list has ever asked for one. The trip page's door
+// promises Camp on the same evidence, and the page itself says plainly when
+// there is no assistant to talk to.
+function askFab() {
+  if (!askFabOn()) return ''
+  return `
+    <a class="room-fab room-fab--ask" href="/t/${encodeURIComponent(S.trip.id)}/ask" data-act="ask"
+       aria-label="Ask Camp privately" title="Ask Camp privately">
+      <span class="room-fab__icon" aria-hidden="true">${ICONS.spark}</span>
     </a>`
 }
 
@@ -4608,11 +4965,12 @@ function authNudge() {
 function viewTrip() {
   const tab = currentTab()
   const page = S.camp === 'room' ? roomPage()
-    : S.camp === 'settle' ? settlePage()
-      : S.camp ? campPage() : tab.id === 'mine' ? minePage() : listPage()
-  if (S.camp === 'room') return `<div class="app app--room">${topbar()}${page}</div>`
+    : S.camp === 'ask' ? askPage()
+      : S.camp === 'settle' ? settlePage()
+        : S.camp ? campPage() : tab.id === 'mine' ? minePage() : listPage()
+  if (S.camp === 'room' || S.camp === 'ask') return `<div class="app app--room">${topbar()}${page}</div>`
   if (S.camp === 'settle') return `<div class="app app--focus">${topbar()}${page}</div>`
-  return `<div class="app">${topbar()}${authNudge()}${page}</div>${tabbar()}${roomFab()}`
+  return `<div class="app">${topbar()}${authNudge()}${page}</div>${tabbar()}${askFab()}${roomFab()}`
 }
 
 // ---- sheets -----------------------------------------------------------------
@@ -5569,10 +5927,13 @@ function render({ chatBottom = false } = {}) {
   chatNeedsRender = false
   // The install card floats over the bottom of the screen, which on the trip
   // page already has a tab bar standing on it.
-  document.body.classList.toggle('has-tabbar', S.view === 'trip' && S.camp !== 'room')
+  document.body.classList.toggle('has-tabbar', S.view === 'trip' && S.camp !== 'room' && S.camp !== 'ask')
   // And the room button floats in the corner above that bar, so the foot of a
-  // list needs to end clear of it — see .has-room-fab.
+  // list needs to end clear of it — see .has-room-fab. Camp's button stands on
+  // that one when it is there, which is another circle's worth of corner the
+  // list has to stop above.
   document.body.classList.toggle('has-room-fab', S.view === 'trip' && !S.camp)
+  document.body.classList.toggle('has-ask-fab', askFabOn())
   renderSheet()
   if (S.view === 'trip') window.scrollTo(0, y)
 
@@ -5616,6 +5977,7 @@ function render({ chatBottom = false } = {}) {
     wantMessages()
     markRoomRead()
   }
+  if (onAskPage()) wantAsk()
   if (S.view === 'settings') wantAlerts()
   ensureChatSocket()
   syncRoomPresence()
@@ -5806,7 +6168,7 @@ function tripCodeFrom(raw) {
 }
 
 function tripRoute(pathname = location.pathname) {
-  const match = String(pathname).match(/^\/t\/([^/]+)(?:\/(room|settle))?\/?$/)
+  const match = String(pathname).match(/^\/t\/([^/]+)(?:\/(room|ask|settle))?\/?$/)
   return match ? { code: decodeURIComponent(match[1]), view: match[2] || '' } : null
 }
 
@@ -5879,7 +6241,7 @@ async function goToTrip(code) {
 // of the Planning Room knows there is a page underneath to go back to rather
 // than a link somebody sent you. See leaveFocus.
 function pushTripView(view) {
-  const suffix = view === 'room' ? '/room' : view === 'settle' ? '/settle' : ''
+  const suffix = view === 'room' ? '/room' : view === 'ask' ? '/ask' : view === 'settle' ? '/settle' : ''
   // What the page you are leaving was showing, written on the entry you are
   // leaving it on: which list, how it was narrowed, how far down it you had got.
   // In memory all three survive a visit to the room on their own — but a reload
@@ -6178,6 +6540,13 @@ document.addEventListener('click', async (ev) => {
       window.scrollTo(0, 0)
       break
 
+    case 'ask':
+      if (S.camp !== 'ask') pushTripView('ask')
+      S.camp = 'ask'
+      render()
+      window.scrollTo(0, 0)
+      break
+
     case 'settle':
       if (S.camp !== 'settle') pushTripView('settle')
       S.camp = 'settle'
@@ -6225,6 +6594,36 @@ document.addEventListener('click', async (ev) => {
       resetChat()
       render()
       break
+
+    case 'ask-older':
+      await olderAskMessages()
+      break
+
+    case 'ask-retry':
+      resetAsk()
+      render()
+      break
+
+    // Clearing is a real deletion of durable rows, so it asks — but it asks
+    // once and in one line, because this is a scratchpad and the whole point of
+    // the button is that starting again should be cheap.
+    case 'ask-clear': {
+      if (!S.ask.messages.length) break
+      const gone = await ask({
+        title: 'Clear this thread?',
+        blurb: 'Everything you and Camp have said here goes. Anything Camp already changed on the trip stays changed.',
+        yes: 'Clear it',
+      })
+      if (!gone) break
+      const tripId = S.trip.id
+      try {
+        await api(`/trips/${tripId}/camp`, { method: 'DELETE' })
+        if (S.ask.tripId !== tripId) break
+        clearAskThread()
+        render()
+      } catch (err) { toast(err.message) }
+      break
+    }
 
     // Not a toggle: All is the way back out, and it is sitting at the left-hand
     // end of the bar where the thumb already is. Pressing the day you are on to
@@ -6923,6 +7322,70 @@ document.addEventListener('submit', async (ev) => {
       break
     }
 
+    // The same send against the private thread. It is written out rather than
+    // folded into the one above because almost every line of that one is about
+    // the room — the quote it carries, whether the sender wanted Camp at all,
+    // what to say when Camp is unavailable and the message is "saved for the
+    // group". None of those are true here: there is no quote, every message is
+    // for Camp, and a message Camp cannot answer is a message to nobody.
+    case 'send-ask': {
+      const typed = String(f.text ?? '')
+      const text = typed.trim()
+      if (!text || S.ask.busy || S.ask.tripId !== S.trip.id) break
+      const tripId = S.trip.id
+      const pending = S.ask.pending?.text === text
+        ? S.ask.pending
+        : { clientId: newMessageId(), text }
+      S.ask.pending = pending
+      S.ask.draft = text
+      S.ask.busy = true
+      const send = form.querySelector('button[type="submit"]')
+      if (send) {
+        send.disabled = true
+        send.setAttribute('aria-label', 'Sending message')
+        send.innerHTML = '<span class="chat__sending" aria-hidden="true">…</span>'
+      }
+      // Whether Camp is there decides whether this page has a working composer
+      // at all — the box is disabled and says so when it is not — so a send that
+      // finds out otherwise has to redraw it rather than tidy it up in place.
+      const wasAvailable = S.ask.assistantAvailable
+      try {
+        const { message, assistant, assistantAvailable } = await api(`/trips/${tripId}/camp`, {
+          method: 'POST', body: pending,
+        })
+        if (S.ask.tripId !== tripId) break
+        mergeAskMessages([message])
+        S.ask.assistantAvailable = !!assistantAvailable
+        if (assistant?.status === 'queued' && assistant.runId) {
+          S.ask.streams[assistant.runId] ??= {
+            runId: assistant.runId, body: '', state: 'thinking', error: '',
+          }
+        } else if (assistant?.status === 'unavailable') {
+          toast('Camp is not available yet.')
+        } else if (assistant?.status === 'busy') {
+          toast('Camp already has a few requests queued. Try again shortly.')
+        } else if (assistant?.status === 'limited') {
+          toast('Camp has answered you a lot this hour. Try again later.')
+        }
+        S.ask.pending = null
+        S.ask.busy = false
+        const emptied = clearComposer(typed)
+        if (S.ask.assistantAvailable !== wasAvailable || !emptied) render({ chatBottom: true })
+        root.querySelector('#chat-text')?.focus()
+      } catch (err) {
+        if (S.ask.tripId !== tripId) break
+        if (err.payload?.conflict === 'message-retry') S.ask.pending = null
+        S.ask.busy = false
+        if (send) {
+          send.disabled = false
+          send.setAttribute('aria-label', 'Send message')
+          send.innerHTML = ICONS.send
+        }
+        toast(err.message)
+      }
+      break
+    }
+
     // One form for when and where, so one save. The server takes the two dates
     // as independent strings and has no opinion about their order, so the one
     // order that is not a trip is stopped here — a trip that ends before it
@@ -7092,7 +7555,7 @@ document.addEventListener('keydown', (ev) => {
     }
     // The mention list first, then the quote: escape takes the most recent thing
     // off, and the box itself is never what it closes.
-    if (S.chat.replyTo && ev.key === 'Escape') {
+    if (!onAskPage() && S.chat.replyTo && ev.key === 'Escape') {
       ev.preventDefault()
       S.chat.replyTo = null
       ev.target.form?.querySelector('.chat__replying')?.remove()
@@ -7120,7 +7583,7 @@ function typedFind(box) {
 
 document.addEventListener('input', (ev) => {
   if (ev.target.id === 'chat-text') {
-    S.chat.draft = ev.target.value
+    chatStore().draft = ev.target.value
     fitChatBox(ev.target)
     syncCampMention(ev.target)
   }
@@ -7566,7 +8029,7 @@ function onPop() {
   const found = tripRoute()
   if (S.view !== 'trip' || !S.trip || found?.code !== S.trip.id) { boot(); return }
   const route = found.view || history.state?.tripView
-  S.camp = route === 'room' || route === 'settle' || route === 'overview' ? route : false
+  S.camp = route === 'room' || route === 'ask' || route === 'settle' || route === 'overview' ? route : false
   if (!S.camp) restoreList(history.state)
   render()
   // Render puts the page back where it was standing, which on the way out of the
@@ -7578,9 +8041,20 @@ window.addEventListener('popstate', onPop)
 // ---- sync -------------------------------------------------------------------
 
 async function pollMessages() {
+  const tripId = S.trip.id
+  // The private thread polls on the same tick and by the same rule, because a
+  // profile that has not been linked to Google yet has no socket at all — see
+  // ensureChatSocket — and an answer that only ever arrived over one would
+  // never arrive for them.
+  if (onAskPage() && S.ask.tripId === tripId && !S.ask.loading
+      && !S.ask.busy && !S.ask.error && !isEditing()) {
+    try {
+      if (await syncNewAskMessages(tripId)) showChatChanges()
+    } catch { /* offline; try again next tick */ }
+    return
+  }
   if (S.camp !== 'room' || S.chat.tripId !== S.trip.id || S.chat.loading
       || S.chat.busy || S.chat.error || isEditing()) return
-  const tripId = S.trip.id
   try {
     if (await syncNewMessages(tripId)) showChatChanges()
   } catch { /* offline; try again next tick */ }
@@ -7858,7 +8332,7 @@ async function boot() {
   if (isSettingsRoute()) showSettings(history.state?.back ?? '/')
   else if (found) {
     const route = found.view || history.state?.tripView
-    S.camp = route === 'room' || route === 'settle' || route === 'overview' ? route : false
+    S.camp = route === 'room' || route === 'ask' || route === 'settle' || route === 'overview' ? route : false
     await openTrip(found.code)
   }
   else await showLanding()

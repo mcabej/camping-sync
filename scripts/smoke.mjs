@@ -158,7 +158,7 @@ const hooks = ['S', 'render', 'viewTrip', 'renderSheet', 'CAMP', 'TABS',
   'ask', 'askCopy', 'closeAsk',
   'loadPrefs', 'savePrefs', 'applyTheme', 'viewSettings', 'showSettings', 'leaveSettings',
   'isSettingsRoute', 'FEATURES', 'THEMES', 'PREFS_KEY', 'FACES',
-  'pushTripView', 'leaveFocus']
+  'pushTripView', 'leaveFocus', 'receiveAssistantEvent', 'clearAskThread', 'ICONS']
 new Function(`${src}\n;Object.assign(globalThis, {${hooks.map((h) => `__${h}: ${h}`).join(',')}})`)()
 
 const { __S: S, __render: render, __viewTrip: viewTrip, __renderSheet: renderSheet, __TABS: TABS,
@@ -177,7 +177,9 @@ const { __S: S, __render: render, __viewTrip: viewTrip, __renderSheet: renderShe
   __viewSettings: viewSettings, __showSettings: showSettings, __leaveSettings: leaveSettings,
   __isSettingsRoute: isSettingsRoute, __FEATURES: FEATURES, __THEMES: THEMES,
   __PREFS_KEY: PREFS_KEY, __FACES: FACES,
-  __pushTripView: pushTripView, __leaveFocus: leaveFocus } = globalThis
+  __pushTripView: pushTripView, __leaveFocus: leaveFocus,
+  __receiveAssistantEvent: receiveAssistantEvent,
+  __clearAskThread: clearAskThread, __ICONS: ICONS } = globalThis
 const { CATALOG } = await import('../lib/catalog.js')
 
 // A trip with a bit of everything: claimed by one, claimed by three, unclaimed,
@@ -1916,17 +1918,17 @@ S.camp = false
 S.tab = 'eat'
 S.notify = { ...S.notify, tripId: 't1', unread: 3 }
 const onAList = viewTrip()
-check('a list carries the button into the room', find(onAList, 'class="room-fab"'))
+check('a list carries the button into the room', find(onAList, 'data-act="room"'))
 check('with what you have missed on it',
   find(onAList, 'class="room-fab__unread" aria-hidden="true">3<'))
 check('and it says so out loud', find(onAList, 'aria-label="Planning room, 3 unread messages"'))
 
 S.camp = 'overview'
 check('the trip page does not — the door is already open on that screen',
-  !find(viewTrip(), 'class="room-fab"'))
+  !find(viewTrip(), 'room-fab'))
 S.camp = 'room'
 check('and the room itself does not offer a way into itself',
-  !find(viewTrip(), 'class="room-fab"'))
+  !find(viewTrip(), 'room-fab'))
 
 // The bug this replaced: the arrow out drove to the trip page whatever door you
 // came in by, so opening the room from the packing list and closing it again
@@ -1983,6 +1985,126 @@ S.camp = 'room'
 leaveFocus()
 check('opened cold, the arrow puts you on the trip page instead',
   S.camp === 'overview' && location.pathname === '/t/t1')
+
+section('Asking Camp on your own')
+
+S.view = 'trip'
+S.camp = false
+S.tab = 'eat'
+S.chat = { ...S.chat, tripId: 't1', loading: false, error: '', assistantAvailable: true }
+S.prefs.features.assistant = true
+const listWithAsk = viewTrip()
+check('a list carries a second button above the one into the room',
+  find(listWithAsk, 'class="room-fab room-fab--ask"') && find(listWithAsk, 'data-act="room"'))
+check('and it says what makes it different from the room under it',
+  find(listWithAsk, 'aria-label="Ask Camp privately"'))
+// A scoop out of a button with nothing sitting in it is damage, so the two
+// answer to one question — see askFabOn.
+check('the room\'s button carries the crescent the other one sits in',
+  find(listWithAsk, 'class="room-fab room-fab--notched"'))
+
+// It goes wherever the room's button goes, which is nowhere the room's own
+// screens can see it.
+S.camp = 'room'
+check('the room does not carry it — the arrow out is one tap from the list',
+  !find(viewTrip(), 'room-fab--ask'))
+S.camp = 'overview'
+check('and the trip page does not, for the reason the room button is not there',
+  !find(viewTrip(), 'room-fab--ask'))
+
+// The settings page can turn Camp off, and a door into a page that cannot
+// answer would be that promise broken somewhere new. It rests on the
+// preference alone: a packing list has never asked the server whether there is
+// a key, and waiting for that answer would leave the corner empty on the one
+// screen the button lives on.
+S.camp = false
+S.prefs.features.assistant = false
+const listWithoutAsk = viewTrip()
+check('Camp switched off takes the button with it',
+  !find(listWithoutAsk, 'room-fab--ask'))
+check('and the crescent with it, rather than leaving a bite out of nothing',
+  !find(listWithoutAsk, 'room-fab--notched'))
+S.prefs.features.assistant = true
+S.chat = { ...S.chat, assistantAvailable: false }
+check('but a list that has never opened a thread still offers it',
+  find(viewTrip(), 'room-fab--ask'))
+S.chat = { ...S.chat, assistantAvailable: true }
+
+// The page itself is a route, an address and a screen of its own.
+check('/ask is a trip route', tripRoute('/t/t1/ask')?.view === 'ask')
+check('and /t/t1/asking is not', tripRoute('/t/t1/asking') === null)
+
+S.camp = 'ask'
+S.ask = { ...S.ask, tripId: 't1', loading: false, error: '', assistantAvailable: true, messages: [] }
+const asking = viewTrip()
+check('the page names itself', find(asking, 'id="ask-camp-title"'))
+check('and answers the only question anybody arrives with',
+  find(asking, 'Only you can see this'))
+check('every message on it is for Camp, so nothing asks for a handle',
+  find(asking, 'data-act="send-ask"') && !find(asking, 'id="chat-mention"'))
+check('and there is no way to pin or quote on a page with two voices on it',
+  !find(asking, 'data-act="chat-pin"') && !find(asking, 'data-act="chat-reply"'))
+check('an empty thread says whose page this is',
+  find(asking, 'Just you and Camp'))
+check('with nothing to clear yet', !find(asking, 'data-act="ask-clear"'))
+
+S.ask = {
+  ...S.ask,
+  messages: [
+    { id: 1, client_id: 'p1', member_id: 'm1', role: 'member', body: 'what do I owe?', created_at: '2026-08-12T10:00:00.000Z' },
+    { id: 2, client_id: 'assistant:r1', member_id: 'm1', role: 'assistant', body: 'Nothing.', created_at: '2026-08-12T10:00:09.000Z' },
+  ],
+}
+const talked = viewTrip()
+check('a thread with something in it offers to clear itself',
+  find(talked, 'data-act="ask-clear"'))
+// An × in that corner, beside a back arrow, reads as "close the page" — which
+// is the arrow's job at the other end of the same bar. The bin says what the
+// button actually does.
+check('and says so with a bin rather than a close cross',
+  talked.includes(ICONS.bin) && !talked.includes(ICONS.x))
+check('Camp is signed and you are not, because the side of the page says so',
+  find(talked, 'thread__message--assistant') && find(talked, 'thread__message--mine'))
+
+// The one that matters: an answer to a private question must not be able to
+// land in the room's thread, and the run id alone cannot say which is which.
+S.chat.streams = {}
+S.ask.streams = {}
+receiveAssistantEvent({ type: 'assistant.delta', runId: 'r9', delta: 'hello', channel: 'private' })
+check('a private answer streams into the private thread',
+  S.ask.streams.r9?.body === 'hello')
+check('and never into the room', !S.chat.streams.r9)
+receiveAssistantEvent({ type: 'assistant.delta', runId: 'r8', delta: 'hi all' })
+check('a room answer still streams into the room', S.chat.streams.r8?.body === 'hi all')
+check('and not into the private thread', !S.ask.streams.r8)
+
+// Clearing the thread with an answer still being written. The server will not
+// save that answer — it would land alone at the top of an emptied page — so the
+// deltas still arriving must not rebuild the row, or it sits there saying
+// "Writing…" waiting for a message that is never coming.
+S.ask.streams = {}
+S.ask.dropped = []
+receiveAssistantEvent({ type: 'assistant.started', runId: 'r7', channel: 'private' })
+check('a run in the air has a row', !!S.ask.streams.r7)
+clearAskThread()
+check('clearing takes the row with it', !S.ask.streams.r7)
+receiveAssistantEvent({ type: 'assistant.delta', runId: 'r7', delta: 'still going', channel: 'private' })
+check('and a delta from that run does not put it back', !S.ask.streams.r7)
+receiveAssistantEvent({ type: 'assistant.started', runId: 'r6', channel: 'private' })
+check('while the next question still gets a row of its own', !!S.ask.streams.r6)
+S.ask.streams = {}
+S.ask.dropped = []
+
+// In and out, the same way the room goes.
+S.camp = 'room'
+resetHistory('/t/t1/room')
+pushTripView('ask')
+S.camp = 'ask'
+check('opening it from the room is one entry deep',
+  history.length === 2 && location.pathname === '/t/t1/ask')
+leaveFocus()
+check('and the arrow puts you back in the room you left',
+  history.length === 1 && location.pathname === '/t/t1/room')
 
 console.log(bad ? `\n${bad} FAILED` : '\nall passed')
 process.exit(bad ? 1 : 0)
