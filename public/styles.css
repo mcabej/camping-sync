@@ -2127,6 +2127,58 @@ button.wx__day:hover .wx__wet, .wx__row--open .wx__wet { color: var(--ink); }
 .tabbar__flag--chat { background: var(--forest); }
 
 /* ==========================================================================
+   Room button
+   ========================================================================== */
+
+/* One circle in the bottom corner, standing on the tab bar rather than in it —
+   the bar holds the five places this trip is, and the room is a sixth that was
+   never going to fit. It is sized to a thumb and no larger: 48px, and the icon
+   with no word beside it, because a pill saying "Planning room" over the list
+   you are reading is a banner, not a shortcut. Right-hand corner because that
+   is where the thumb already
+   is, and because the left of that row is where a long list's own footer runs.
+   Under the tab bar in the stack, so a sheet's scrim, a toast and the install
+   card all cover it — it is the quietest thing on the screen and loses to
+   everything. A shadow rather than an outline: it has to sit on canvas and on
+   the corner of a card, and a ring the colour of one of those is a seam on the
+   other. */
+.room-fab {
+  position: fixed; z-index: 39;
+  right: max(16px, env(safe-area-inset-right));
+  bottom: calc(var(--tabbar-h) + 14px + env(safe-area-inset-bottom));
+  width: 48px; height: 48px; border-radius: 999px;
+  display: grid; place-items: center;
+  background: var(--forest-deep); color: var(--on-forest);
+  box-shadow: var(--shadow-lift);
+  transition: background .16s ease, transform .12s ease;
+}
+.room-fab:hover { background: var(--forest); }
+.room-fab:active { transform: translateY(1px); }
+.room-fab svg { width: 23px; height: 23px; }
+.room-fab__icon { display: grid; place-items: center; }
+
+/* What you have missed, on the corner of the circle: the button's own two
+   colours, swapped. Not blaze — that says one thing in this app, nobody has
+   picked this up, and unread messages are not that. The pair is `--on-forest`
+   on `--forest-deep` rather than paper on green ink, because those two are the
+   light and the dark of the same surface in both themes; paper is a dark grey
+   at night and the badge would go out on the button it is sitting on. */
+.room-fab__unread {
+  position: absolute; top: -3px; right: -3px;
+  min-width: 19px; height: 19px; padding: 0 5px; border-radius: 999px;
+  background: var(--on-forest); color: var(--forest-deep);
+  font-family: var(--mono); font-size: 10.5px; font-weight: 600; line-height: 1;
+  display: grid; place-items: center;
+  box-shadow: 0 0 0 2px var(--forest-deep);
+}
+.room-fab:hover .room-fab__unread { box-shadow: 0 0 0 2px var(--forest); }
+
+/* The foot of the list ends above the button rather than under it: the last row
+   of a list, and the "What am I missing?" chip that sits in the same corner,
+   are both things you came here to press. */
+.has-room-fab .app { padding-bottom: calc(var(--tabbar-h) + 62px + env(safe-area-inset-bottom)); }
+
+/* ==========================================================================
    Sheet
    ========================================================================== */
 
@@ -2442,6 +2494,11 @@ button.wx__day:hover .wx__wet, .wx__row--open .wx__wet { color: var(--ink); }
    two and outranks it, so it is moved rather than left to land on top. */
 .install-open #toast {
   bottom: calc(var(--tabbar-h) + 32px + var(--install-h, 0px) + env(safe-area-inset-bottom));
+}
+/* And the room button stands on the card rather than behind it, where it would
+   be a thing you can see and not press. */
+.install-open .room-fab {
+  bottom: calc(var(--tabbar-h) + 28px + var(--install-h, 0px) + env(safe-area-inset-bottom));
 }
 
 /* ==========================================================================

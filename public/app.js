@@ -3086,9 +3086,13 @@ function topbar() {
     return `
       <header class="topbar topbar--bare topbar--focus">
         <div class="roombar">
-          <a class="roombar__back" href="/t/${encodeURIComponent(S.trip.id)}" data-act="camp">
+          <!-- Back to whatever you were reading when you opened this, which is
+               not always the trip page — so the arrow says "Back" and means it.
+               The href is the trip, which is where this lands when there is
+               nothing behind it, and where a new tab should open. -->
+          <a class="roombar__back" href="/t/${encodeURIComponent(S.trip.id)}" data-act="leave-focus">
             <span aria-hidden="true">${ICONS.back}</span>
-            <span class="sr-only">Back to trip overview</span>
+            <span class="sr-only">Back</span>
           </a>
           <h1 class="roombar__title" id="${settling ? 'settle-up-title' : 'planning-room-title'}">${settling ? 'Settle up' : 'Planning Room'}</h1>
           ${settling
@@ -4544,6 +4548,27 @@ function tabbar() {
     </nav>`
 }
 
+// The room, from wherever you are standing. The door on the trip page is the
+// front one — wide, with the last thing said written on it — and this is the
+// side entrance for the four lists, which otherwise reach the room through a
+// page they did not ask for. It stays a button rather than becoming a second
+// door: an icon, a count when there is one, and nothing to read. The trip page
+// never gets it, because the door is already open on that screen and two ways
+// into the same room, six inches apart, is one of them too many.
+function roomFab() {
+  if (S.camp) return ''
+  const unread = S.notify.tripId === S.trip.id ? S.notify.unread : 0
+  const label = unread
+    ? `Planning room, ${unread} unread message${unread === 1 ? '' : 's'}`
+    : 'Planning room'
+  return `
+    <a class="room-fab" href="/t/${encodeURIComponent(S.trip.id)}/room" data-act="room"
+       aria-label="${label}" title="Planning room">
+      <span class="room-fab__icon" aria-hidden="true">${ICONS.room}</span>
+      ${unread ? `<span class="room-fab__unread" aria-hidden="true">${unread > 9 ? '9+' : unread}</span>` : ''}
+    </a>`
+}
+
 function authNudge() {
   if (S.auth.user || !S.me) return ''
   return `<aside class="auth-nudge">
@@ -4559,7 +4584,7 @@ function viewTrip() {
       : S.camp ? campPage() : tab.id === 'mine' ? minePage() : listPage()
   if (S.camp === 'room') return `<div class="app app--room">${topbar()}${page}</div>`
   if (S.camp === 'settle') return `<div class="app app--focus">${topbar()}${page}</div>`
-  return `<div class="app">${topbar()}${authNudge()}${page}</div>${tabbar()}`
+  return `<div class="app">${topbar()}${authNudge()}${page}</div>${tabbar()}${roomFab()}`
 }
 
 // ---- sheets -----------------------------------------------------------------
@@ -5517,6 +5542,9 @@ function render({ chatBottom = false } = {}) {
   // The install card floats over the bottom of the screen, which on the trip
   // page already has a tab bar standing on it.
   document.body.classList.toggle('has-tabbar', S.view === 'trip' && S.camp !== 'room')
+  // And the room button floats in the corner above that bar, so the foot of a
+  // list needs to end clear of it — see .has-room-fab.
+  document.body.classList.toggle('has-room-fab', S.view === 'trip' && !S.camp)
   renderSheet()
   if (S.view === 'trip') window.scrollTo(0, y)
 
@@ -5817,9 +5845,64 @@ async function goToTrip(code) {
   await openTrip(code)
 }
 
+// `from` is the view this entry was pushed on top of — the list you were
+// reading, the trip page, false for a plain list tab. Nothing reads it as a
+// destination: what it is for is being there at all, which is how the arrow out
+// of the Planning Room knows there is a page underneath to go back to rather
+// than a link somebody sent you. See leaveFocus.
 function pushTripView(view) {
   const suffix = view === 'room' ? '/room' : view === 'settle' ? '/settle' : ''
-  history.pushState({ tripView: view }, '', `/t/${encodeURIComponent(S.trip.id)}${suffix}`)
+  // What the page you are leaving was showing, written on the entry you are
+  // leaving it on: which list, how it was narrowed, how far down it you had got.
+  // In memory all three survive a visit to the room on their own — but a reload
+  // in the room does not touch the stack underneath and wipes the memory above
+  // it, and then back landed on the top of an unfiltered Pack list, which is
+  // nowhere anybody has been. The entry is the only part of this that is still
+  // there afterwards, so the answer goes on the entry.
+  history.replaceState(
+    { ...history.state, tab: S.tab, filter: { ...S.filter }, y: window.scrollY },
+    '', location.pathname)
+  history.pushState({ tripView: view, from: S.camp },
+    '', `/t/${encodeURIComponent(S.trip.id)}${suffix}`)
+}
+
+// And back the other way. Everything here is checked rather than trusted: an
+// entry can have been written by an older version of this app, or by a reload
+// three days ago, and a filter of the wrong shape would take the list down on
+// arrival. Absent is fine and means the default — this is a page being restored,
+// not a page being validated, and the worst answer it can give is the list you
+// would have got anyway.
+function restoreList(state) {
+  if (TABS.some((t) => t.id === state?.tab)) S.tab = state.tab
+  const f = state?.filter
+  if (!f || typeof f !== 'object') return
+  const word = (v) => (typeof v === 'string' ? v : '')
+  S.filter = { day: word(f.day), kind: word(f.kind), cat: word(f.cat), hide: !!f.hide, q: word(f.q) }
+}
+
+// The arrow out of the Planning Room and Settle up. It unwinds the way in
+// rather than driving to a fixed address: the room is opened from a list as
+// often as from the trip page now, and an arrow that always landed on the trip
+// page took you somewhere you had not been on the way in — and left the list
+// you were actually reading two taps away.
+//
+// The same pop as leaveSettings, for the same reasons: it keeps this arrow and
+// the browser's own back button saying the same thing, it brings the scroll
+// position back with it, and it does not leave a pair of entries behind that
+// walk you into the room again on the way out.
+//
+// Opened cold — a notification, a shared link, a home-screen icon on /room —
+// there is nothing underneath, and then the trip page is the right place to be
+// put down: it is the one screen everything else on the trip is reachable from.
+function leaveFocus() {
+  if (history.state?.from !== undefined) {
+    history.back()
+    return
+  }
+  pushTripView('overview')
+  S.camp = 'overview'
+  render()
+  window.scrollTo(0, 0)
 }
 
 // Joining is the one place a name is load-bearing, so it lives in one function:
@@ -6054,6 +6137,10 @@ document.addEventListener('click', async (ev) => {
       S.camp = 'overview'
       render()
       window.scrollTo(0, 0)
+      break
+
+    case 'leave-focus':
+      leaveFocus()
       break
 
     case 'room':
@@ -7439,7 +7526,26 @@ watchKeyboard()
 // dead, so the button could not be pressed while it was up; a question that
 // waits on a promise can be walked out from under, and answering it afterwards
 // would run "Remove" against a trip you have already left.
-window.addEventListener('popstate', () => { closeAsk(false); boot() })
+//
+// Moving between the pages of the trip already on screen is a redraw and not an
+// arrival — the same trip, the same state, already in hand. Booting it again
+// left the room sitting there for three requests to end up drawing the list it
+// had all along, which is a long time to spend on a back button. Anything else
+// — another trip, the home page, settings, a state we cannot account for — is a
+// visit, and boot is what a visit is.
+function onPop() {
+  closeAsk(false)
+  const found = tripRoute()
+  if (S.view !== 'trip' || !S.trip || found?.code !== S.trip.id) { boot(); return }
+  const route = found.view || history.state?.tripView
+  S.camp = route === 'room' || route === 'settle' || route === 'overview' ? route : false
+  if (!S.camp) restoreList(history.state)
+  render()
+  // Render puts the page back where it was standing, which on the way out of the
+  // room is the top of it. Where you were is on the entry we came back to.
+  window.scrollTo(0, history.state?.y ?? 0)
+}
+window.addEventListener('popstate', onPop)
 
 // ---- sync -------------------------------------------------------------------
 

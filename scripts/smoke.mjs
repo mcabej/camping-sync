@@ -61,8 +61,20 @@ const setSystemDark = (dark) => {
   systemDark = dark
   for (const fn of themeWatchers) fn()
 }
+// The window listeners are kept and the scroll position is real, because "back
+// puts you where you were" is a claim about both: a handler that was never
+// registered and a scroll that was never restored both look like a pass to a
+// test that calls the function itself and reads the number back out of history.
+// Firing is left to the tests rather than done from history.back() — a browser
+// follows the pop with a popstate of its own, but doing that here would run
+// boot() in the middle of the settings tests, which pop on purpose.
+const winListeners = {}
+const fireWindow = (type, ev) => { for (const fn of winListeners[type] ?? []) fn(ev) }
 globalThis.window = {
-  scrollY: 0, scrollTo() {}, scrollBy() {}, addEventListener() {},
+  scrollY: 0,
+  scrollTo(_x, y) { globalThis.window.scrollY = Number(y) || 0 },
+  scrollBy() {},
+  addEventListener(type, fn) { (winListeners[type] ??= []).push(fn) },
   innerHeight: 800, visualViewport: null, matchMedia: globalThis.matchMedia,
 }
 globalThis.location = { pathname: '/', origin: 'http://x', protocol: 'http:', host: 'x' }
@@ -128,7 +140,8 @@ const hooks = ['S', 'render', 'viewTrip', 'renderSheet', 'CAMP', 'TABS',
   'settlement', 'customExpenseShares', 'googleSignIn', 'tripRoute', 'isEditing', 'unsaved', 'restore',
   'ask', 'askCopy', 'closeAsk',
   'loadPrefs', 'savePrefs', 'applyTheme', 'viewSettings', 'showSettings', 'leaveSettings',
-  'isSettingsRoute', 'FEATURES', 'THEMES', 'PREFS_KEY', 'FACES']
+  'isSettingsRoute', 'FEATURES', 'THEMES', 'PREFS_KEY', 'FACES',
+  'pushTripView', 'leaveFocus']
 new Function(`${src}\n;Object.assign(globalThis, {${hooks.map((h) => `__${h}: ${h}`).join(',')}})`)()
 
 const { __S: S, __render: render, __viewTrip: viewTrip, __renderSheet: renderSheet, __TABS: TABS,
@@ -146,7 +159,8 @@ const { __S: S, __render: render, __viewTrip: viewTrip, __renderSheet: renderShe
   __loadPrefs: loadPrefs, __savePrefs: savePrefs, __applyTheme: applyTheme,
   __viewSettings: viewSettings, __showSettings: showSettings, __leaveSettings: leaveSettings,
   __isSettingsRoute: isSettingsRoute, __FEATURES: FEATURES, __THEMES: THEMES,
-  __PREFS_KEY: PREFS_KEY, __FACES: FACES } = globalThis
+  __PREFS_KEY: PREFS_KEY, __FACES: FACES,
+  __pushTripView: pushTripView, __leaveFocus: leaveFocus } = globalThis
 const { CATALOG } = await import('../lib/catalog.js')
 
 // A trip with a bit of everything: claimed by one, claimed by three, unclaimed,
@@ -1850,6 +1864,81 @@ showSettings('/settings')
 check('opening settings on settings does not point back at itself',
   S.settingsBack === '/')
 check('and knows there is nothing behind it to go back to', S.settingsPushed === false)
+
+section('The Planning Room: in and out')
+
+S.view = 'trip'
+S.camp = false
+S.tab = 'eat'
+S.notify = { ...S.notify, tripId: 't1', unread: 3 }
+const onAList = viewTrip()
+check('a list carries the button into the room', find(onAList, 'class="room-fab"'))
+check('with what you have missed on it',
+  find(onAList, 'class="room-fab__unread" aria-hidden="true">3<'))
+check('and it says so out loud', find(onAList, 'aria-label="Planning room, 3 unread messages"'))
+
+S.camp = 'overview'
+check('the trip page does not — the door is already open on that screen',
+  !find(viewTrip(), 'class="room-fab"'))
+S.camp = 'room'
+check('and the room itself does not offer a way into itself',
+  !find(viewTrip(), 'class="room-fab"'))
+
+// The bug this replaced: the arrow out drove to the trip page whatever door you
+// came in by, so opening the room from the packing list and closing it again
+// left you on a page you had not been on, with the list two taps away.
+S.camp = false
+S.tab = 'eat'
+S.filter = { day: '', kind: 'own', cat: '', hide: false, q: 'bag' }
+resetHistory('/t/t1')
+// Half way down the list, which is the other half of where you were.
+window.scrollY = 240
+pushTripView('room')
+window.scrollY = 0
+S.camp = 'room'
+check('opening the room from a list is one entry deep',
+  history.length === 2 && location.pathname === '/t/t1/room')
+check('and the arrow out of it is the way back rather than a destination',
+  find(viewTrip(), 'data-act="leave-focus"'))
+leaveFocus()
+check('leaving takes that entry back off the stack', history.length === 1)
+check('and lands on the trip rather than the room', location.pathname === '/t/t1')
+
+// A reload in the room is the case the entry has to answer for: the stack
+// underneath is untouched and the app's memory of which list it was drawn on is
+// gone, so back has nothing to go on but what was written on the way in.
+S.tab = 'pack'
+S.filter = { day: '', kind: '', cat: '', hide: false, q: '' }
+// The browser follows the pop with a popstate of its own, and this is the app's
+// own handler answering it — not a function the test reached in and called.
+fireWindow('popstate', {})
+check('the pop draws the list rather than booting the app again',
+  S.view === 'trip' && S.camp === false)
+check('and it is the list you were reading, not the one the app opens on',
+  S.tab === 'eat')
+check('narrowed the way you left it', S.filter.kind === 'own' && S.filter.q === 'bag')
+check('and scrolled where you left it', window.scrollY === 240)
+window.scrollY = 0
+S.filter = { day: '', kind: '', cat: '', hide: false, q: '' }
+
+// Nonsense on an entry — an older version of the app wrote it, or a reload three
+// days ago did — is a page restored to its defaults, never a page that fails to
+// draw.
+resetHistory('/t/t1')
+history.replaceState({ tripView: false, tab: 'nowhere', filter: 'yes' }, '', '/t/t1')
+S.camp = 'room'
+fireWindow('popstate', {})
+check('an entry written by another version of this app is ignored, not obeyed',
+  S.tab === 'eat' && S.filter.kind === '' && typeof S.filter.q === 'string')
+
+// Opened cold: a notification, a link somebody sent, a home-screen icon left in
+// the room. There is nothing underneath to pop, so the arrow has to go
+// somewhere, and the trip page is the screen the rest of the trip hangs off.
+resetHistory('/t/t1/room')
+S.camp = 'room'
+leaveFocus()
+check('opened cold, the arrow puts you on the trip page instead',
+  S.camp === 'overview' && location.pathname === '/t/t1')
 
 console.log(bad ? `\n${bad} FAILED` : '\nall passed')
 process.exit(bad ? 1 : 0)
