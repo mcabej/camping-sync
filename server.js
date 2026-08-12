@@ -608,8 +608,8 @@ async function runCampAssistant({
 
     // A deletion Camp proposed last time, and the yes that answers it. The
     // rows were resolved and put aside then; all that is read from this message
-    // is whether it is agreement. The model has not run yet and cannot change
-    // what goes — and anything that is not a plain yes throws the proposal
+    // is whether it is unambiguous agreement. The model has not run yet and
+    // cannot change what goes — and anything else throws the proposal
     // away rather than leaving it lying about for a later sentence to trip.
     let removed = null
     if (campStagedRemoval(tripId, memberId)) {

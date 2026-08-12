@@ -827,10 +827,11 @@ code, before the model has a say:
 - *Deletion is proposed, never decided.* A removal tool writes nothing. It
   resolves the refs to real rows, puts the exact ids aside, and returns them, so
   Camp can list back what would go and ask. If the next thing that person says
-  is a plain yes, the server deletes those ids — before the model runs again,
-  from the ids it stored, so what goes is what was agreed to and not what the
-  model decides on the second pass. Anything that is not a plain yes throws the
-  proposal away. There is deliberately no regex trying to read destructive
+  is an unambiguous yes — either alone or ending with "yes, do it" — the server
+  deletes those ids before the model runs again, from the ids it stored, so what
+  goes is what was agreed to, not what the model decides on the second pass.
+  Anything that is not a confirmation throws the proposal away. There is
+  deliberately no regex trying to read destructive
   intent out of a sentence: "don't delete the pitch fee" contains the words for
   deleting the pitch fee, and "drop Alex from the tent" should never have been
   able to authorise touching money.

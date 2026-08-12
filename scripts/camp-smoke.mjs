@@ -260,12 +260,16 @@ try {
 
   {
     // The yes that answers a proposal, and the many things that are not one.
-    for (const yes of ['yes', 'Yes please', '@camp yes', 'go ahead', 'do it', 'yep, confirm']) {
+    for (const yes of [
+      'yes', 'Yes please', '@camp yes', 'go ahead', 'do it', 'yep, confirm',
+      '@camp how many confirmation do you need yes do it',
+    ]) {
       assert.equal(campConfirmIntent(yes), true, yes)
     }
     for (const no of [
       'no', "don't", 'not the pitch fee', 'yes to the tarp but not the chilli',
-      'yes, and also delete the bacon', '', '@camp',
+      'yes, and also delete the bacon', 'did Josh say yes?', 'if Josh says yes, do it',
+      'yes, do not do it', '', '@camp',
     ]) assert.equal(campConfirmIntent(no), false, no)
   }
 

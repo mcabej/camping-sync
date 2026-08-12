@@ -214,12 +214,12 @@ try {
 
   const confirmed = 'Deleted the tarp.'
   script = (res) => talks(res, confirmed)
-  assert.equal(await ask('@camp yes', 'c4'), confirmed)
+  assert.equal(await ask('@camp how many confirmation do you need yes do it', 'c4'), confirmed)
   assert.ok(!db.prepare("SELECT 1 FROM items WHERE title = 'Tarp'").get(), 'the yes did not delete it')
   // The deletion happened before the model was called, and it was told so.
   const afterYes = asked[asked.length - 1]
   assert.ok(afterYes.input.some((turn) => String(turn.content ?? '').includes('already been carried out')))
-  assert.equal(afterYes.tools, undefined, 'a bare yes was sent tools')
+  assert.equal(afterYes.tools, undefined, 'a confirmation turn was sent tools')
 
   // ---- replying to Camp, which is a question without the handle -------------------
 
