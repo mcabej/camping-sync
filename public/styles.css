@@ -76,6 +76,15 @@
   --switch-off:  #B6C2B1;
   --switch-knob: #fff;
 
+  /* The face of the room button, and that face under a cursor. Its own pair
+     rather than --forest-deep directly: the button is a 48px circle standing on
+     the canvas with nothing but a shadow under it, and in the dark palette the
+     deep green and the canvas are the same colour — the circle disappears and
+     leaves the icon floating. Dark takes the lighter green instead, which is
+     the one green that clears 3:1 on canvas and on paper both. */
+  --fab:       var(--forest-deep);
+  --fab-hover: var(--forest);
+
   --hair:      rgb(var(--forest-rgb) / .14);
   --hair-soft: rgb(var(--ink-rgb) / .12);
   --mark:      rgb(var(--forest-rgb) / .09);
@@ -158,6 +167,11 @@
 
   --switch-off:  #4C6156;
   --switch-knob: #D8E2DA;
+
+  --fab:       var(--forest);
+  /* A green lifted off --forest by about as much as --forest is lifted off the
+     canvas, so a hover is still a change on a ground where a shadow isn't. */
+  --fab-hover: #55937C;
 
   /* Hairlines on a dark ground have to be light to be lines at all, so these
      stop deriving from the ink and are stated outright. */
@@ -1536,7 +1550,7 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 }
 .chat__body {
   flex: 1; min-height: 0; padding: 16px var(--chat-pad-x) 0;
-  overflow-y: auto; overscroll-behavior-y: contain;
+  overflow-x: hidden; overflow-y: auto; overscroll-behavior-y: contain;
   -webkit-overflow-scrolling: touch;
 }
 
@@ -1735,10 +1749,15 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 }
 .thread__message--mine .thread__meta { justify-content: flex-end; }
 .thread__message--mine .thread__meta strong { flex: 0 1 auto; text-align: right; }
-.thread__message--mine .thread__meta strong::after {
-  content: 'you'; margin-left: 7px; color: var(--ink-faint);
-  font-family: var(--mono); font-size: 9.5px; font-weight: 500;
-  letter-spacing: .04em; text-transform: uppercase;
+
+/* A phone already has the swipe and hold gestures, so repeating both actions
+   beside every message costs scarce line width. The controls remain in the
+   accessibility tree: touch screen-reader users still get named buttons. */
+@media (hover: none), (max-width: 799px) {
+  .thread__reply, .thread__pin {
+    position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+  }
 }
 .thread__message--assistant {
   grid-template-columns: 32px minmax(0, 1fr); gap: 12px; padding: 16px 0;
@@ -2148,11 +2167,11 @@ button.wx__day:hover .wx__wet, .wx__row--open .wx__wet { color: var(--ink); }
   bottom: calc(var(--tabbar-h) + 14px + env(safe-area-inset-bottom));
   width: 48px; height: 48px; border-radius: 999px;
   display: grid; place-items: center;
-  background: var(--forest-deep); color: var(--on-forest);
+  background: var(--fab); color: var(--on-forest);
   box-shadow: var(--shadow-lift);
   transition: background .16s ease, transform .12s ease;
 }
-.room-fab:hover { background: var(--forest); }
+.room-fab:hover { background: var(--fab-hover); }
 .room-fab:active { transform: translateY(1px); }
 .room-fab svg { width: 23px; height: 23px; }
 .room-fab__icon { display: grid; place-items: center; }
@@ -2162,16 +2181,18 @@ button.wx__day:hover .wx__wet, .wx__row--open .wx__wet { color: var(--ink); }
    picked this up, and unread messages are not that. The pair is `--on-forest`
    on `--forest-deep` rather than paper on green ink, because those two are the
    light and the dark of the same surface in both themes; paper is a dark grey
-   at night and the badge would go out on the button it is sitting on. */
+   at night and the badge would go out on the button it is sitting on. The ring
+   is the face it is standing on, `--fab`, so it stays a hole cut in the button
+   rather than a dark bead on a green one in the dark palette. */
 .room-fab__unread {
   position: absolute; top: -3px; right: -3px;
   min-width: 19px; height: 19px; padding: 0 5px; border-radius: 999px;
   background: var(--on-forest); color: var(--forest-deep);
   font-family: var(--mono); font-size: 10.5px; font-weight: 600; line-height: 1;
   display: grid; place-items: center;
-  box-shadow: 0 0 0 2px var(--forest-deep);
+  box-shadow: 0 0 0 2px var(--fab);
 }
-.room-fab:hover .room-fab__unread { box-shadow: 0 0 0 2px var(--forest); }
+.room-fab:hover .room-fab__unread { box-shadow: 0 0 0 2px var(--fab-hover); }
 
 /* The foot of the list ends above the button rather than under it: the last row
    of a list, and the "What am I missing?" chip that sits in the same corner,

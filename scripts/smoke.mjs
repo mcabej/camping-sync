@@ -637,7 +637,12 @@ check('planning room replaces the trip chrome with a focused chat header',
   && !find(roomPageHtml, 'class="tabbar"')
   && !find(roomPageHtml, 'auth-nudge'))
 check('planning room attributes the current member',
-  find(roomPageHtml, 'thread__message--mine') && find(roomPageHtml, 'Josh'))
+  find(roomPageHtml, 'thread__message--mine')
+  && find(roomPageHtml, '<strong class="sr-only">You</strong>')
+  && !find(roomPageHtml, '<strong>Josh'))
+check('planning room uses local clock times instead of elapsed ages',
+  /<time[^>]*>\d{2}:\d{2}<\/time>/.test(roomPageHtml)
+  && !find(roomPageHtml, '>now</time>'))
 check('planning room has paged history and a labelled composer',
   find(roomPageHtml, 'data-act="chat-older"') && find(roomPageHtml, 'class="sr-only" for="chat-text">Message the group'))
 check('planning room scrolls messages separately from its composer',

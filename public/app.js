@@ -1477,6 +1477,7 @@ const STAMP = {
   year: 'numeric', month: 'numeric', day: 'numeric',
   hour: 'numeric', minute: 'numeric', second: 'numeric',
 }
+const CLOCK = { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }
 
 function moneyText(minor) {
   const currency = tripCurrency()
@@ -4314,17 +4315,20 @@ function chatRows() {
     const member = memberById(message.member_id)
     const when = new Date(message.created_at)
     const assistant = message.role === 'assistant'
+    const mine = message.member_id === S.me
     const isPinned = Number(S.pinned?.id) === Number(message.id)
     const pinning = pinLabel(message, isPinned)
     // A message is somebody talking, so it is signed with them rather than with
-    // a coloured tab standing in for them. The name in the meta line stays: at
-    // this size a face is recognition, not identification, and the two together
-    // are how you read a room you have scrolled back through.
+    // a coloured tab standing in for them. Other people's names stay: at this
+    // size a face is recognition, not identification, and the two together are
+    // how you read a room you have scrolled back through. Your own bubble is
+    // already signed by its side and face, so repeating your name there adds no
+    // information; screen readers still get the simpler author label "You".
     //
     // Whoever wrote it may have left the trip since. The message keeps the name
     // it was sent under, so the face falls back to that rather than to nothing.
     return `
-      <li class="thread__message${message.member_id === S.me ? ' thread__message--mine' : ''}${assistant ? ' thread__message--assistant' : ''}${isPinned ? ' thread__message--pinned' : ''}"
+      <li class="thread__message${mine ? ' thread__message--mine' : ''}${assistant ? ' thread__message--assistant' : ''}${isPinned ? ' thread__message--pinned' : ''}"
         id="msg-${esc(String(message.id))}">
         ${assistant
           ? `<span class="thread__mark" aria-hidden="true">${ICONS.camp}</span>`
@@ -4333,8 +4337,10 @@ function chatRows() {
                >${faceInner(member ?? { name: message.author_name })}</span>`}
         <div class="thread__content">
           <div class="thread__meta">
-            <strong>${esc(message.author_name)}${assistant ? ' <span class="thread__camp mono">assistant</span>' : ''}</strong>
-            <time class="mono" datetime="${esc(message.created_at)}" title="${esc(dateFormat(STAMP).format(when))}">${ago(message.created_at)}</time>
+            ${mine
+              ? '<strong class="sr-only">You</strong>'
+              : `<strong>${esc(message.author_name)}${assistant ? ' <span class="thread__camp mono">assistant</span>' : ''}</strong>`}
+            <time class="mono" datetime="${esc(message.created_at)}" title="${esc(dateFormat(STAMP).format(when))}">${dateFormat(CLOCK).format(when)}</time>
             <button class="thread__reply" type="button" data-act="chat-reply" data-id="${esc(String(message.id))}"
               aria-label="Reply to ${esc(message.author_name)}">${ICONS.reply}</button>
             <button class="thread__pin${isPinned ? ' thread__pin--on' : ''}" type="button"
