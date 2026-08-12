@@ -7599,23 +7599,48 @@ window.addEventListener('offline', () => {
 // rather than nothing. Registration waits for load so it never competes with
 // the first paint or the first fetch of a trip.
 if ('serviceWorker' in navigator) {
-  // Read before registering, not after: on a first visit the worker claims this
-  // page as part of installing, and a check made afterwards would mistake that
-  // for an update and greet a new user with news of one.
-  const hadWorker = !!navigator.serviceWorker.controller
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js').catch(() => {
+  const pageVersion = document.querySelector('meta[name="camping-sync-version"]')?.content
+  let workerRegistration = null
+  let announcedVersion = null
+
+  // A worker announces the build it has activated. A reload can fetch the new
+  // page before that worker takes control, so controllerchange alone is not an
+  // update signal: only a build newer than this running page is.
+  navigator.serviceWorker.addEventListener('message', (event) => {
+    if (event.data?.type !== 'app-version') return
+    const workerVersion = event.data.version
+    if (!pageVersion || !workerVersion || workerVersion === pageVersion || workerVersion === announcedVersion) return
+    announcedVersion = workerVersion
+    toast('Update ready. Reopen the app to get it.')
+  })
+
+  const checkForAppUpdate = () => {
+    if (document.hidden || !workerRegistration) return
+    workerRegistration.update().catch(() => {
       /* plain http, private mode, or no support: still an app, just not offline */
     })
-  })
-  // Being handed a worker when there already was one means a deploy landed
-  // while this tab was open. The code running here is still the old code, so
-  // say so rather than swapping it out from under a half-typed item.
-  if (hadWorker) {
-    navigator.serviceWorker.addEventListener('controllerchange', () => {
-      toast('Update ready. Reopen the app to get it.')
-    })
   }
+
+  window.addEventListener('load', async () => {
+    try {
+      workerRegistration = await navigator.serviceWorker.register('/sw.js')
+    } catch {
+      /* plain http, private mode, or no support: still an app, just not offline */
+    }
+  })
+
+  // Registration checks on page load, but a home-screen app can remain open
+  // through several deploys. Check while it is in use and immediately when the
+  // person returns to it; one request a minute keeps this prompt timely without
+  // turning the worker script into part of the five-second trip-state poll.
+  setInterval(checkForAppUpdate, 60_000)
+  window.addEventListener('focus', checkForAppUpdate)
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) checkForAppUpdate()
+  })
+  window.addEventListener('online', () => {
+    if (!document.hidden) checkForAppUpdate()
+  })
 }
 
 // ---- add to home screen -----------------------------------------------------

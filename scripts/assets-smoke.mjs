@@ -5,6 +5,7 @@
 import { spawn } from 'node:child_process'
 import { rmSync } from 'node:fs'
 import { strict as assert } from 'node:assert'
+import vm from 'node:vm'
 
 const port = 34000 + (process.pid % 1000)
 const path = `/tmp/camping-sync-assets-${process.pid}.db`
@@ -49,11 +50,42 @@ try {
   // The bare name is whatever is deployed now, so it has to be asked about.
   const index = await head('/', 'gzip')
   const version = index.body.match(/app\.js\?v=([a-f0-9]+)/)?.[1]
+  const build = index.body.match(/name="camping-sync-version" content="([a-f0-9]+)"/)?.[1]
   assert.ok(version, 'index.html carries no hashed app.js')
+  assert.ok(build, 'index.html carries no build version')
   assert.equal(index.cache, 'no-cache')
   assert.equal((await head(`/app.js?v=${version}`, 'gzip')).cache, 'public, max-age=31536000, immutable')
   assert.equal((await head('/app.js', 'gzip')).cache, 'no-cache')
   assert.equal((await head('/app.js?v=deadbeef', 'gzip')).cache, 'no-cache')
+
+  // Activation tells every open page which build now controls it. The page can
+  // compare this with its own stamped build and avoid treating an already-new
+  // page as stale merely because its controller changed during the reload.
+  const sw = await head('/sw.js', 'gzip')
+  assert.equal(sw.body.match(/const VERSION = '([a-f0-9]+)'/)?.[1], build)
+  const listeners = {}
+  const messages = []
+  const activation = []
+  const context = {
+    URL, fetch,
+    caches: { keys: async () => [], delete: async () => true },
+    self: {
+      addEventListener: (type, fn) => { listeners[type] = fn },
+      clients: {
+        claim: async () => {},
+        matchAll: async () => [{ postMessage: (message) => messages.push(message) }],
+      },
+      registration: { showNotification: async () => {} },
+      location: { origin },
+      skipWaiting: async () => {},
+    },
+  }
+  vm.runInNewContext(sw.body, context)
+  listeners.activate({ waitUntil: (promise) => activation.push(promise) })
+  await Promise.all(activation)
+  assert.equal(messages.length, 1)
+  assert.equal(messages[0].type, 'app-version')
+  assert.equal(messages[0].version, build)
 
   // The JSON path is answered the same way, and is not compressed for a client
   // that has said it does not want it.

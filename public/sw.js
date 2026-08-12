@@ -48,6 +48,11 @@ self.addEventListener('activate', (event) => {
     const names = await caches.keys()
     await Promise.all(names.filter((n) => !KEEP.has(n)).map((n) => caches.delete(n)))
     await self.clients.claim()
+    // A controller changing only says which worker owns the page; it does not
+    // say whether the page itself is old. Give every open page the actual build
+    // so it can make that comparison without a false reload warning.
+    const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
+    for (const client of windows) client.postMessage({ type: 'app-version', version: VERSION })
   })())
 })
 

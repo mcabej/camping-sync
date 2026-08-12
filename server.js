@@ -2148,6 +2148,20 @@ const assetVersions = new Map(ASSETS.map((name) => [
   name,
   createHash('sha256').update(readFileSync(join(PUBLIC, name))).digest('hex').slice(0, 8),
 ]))
+const indexTemplate = readFileSync(join(PUBLIC, 'index.html'), 'utf8')
+const swTemplate = readFileSync(join(PUBLIC, 'sw.js'), 'utf8')
+
+// One identity for everything that can change the installed client. It is
+// stamped into both the page and the worker so an old open page can distinguish
+// a real deploy from a freshly loaded page merely changing controllers.
+const buildVersion = createHash('sha256')
+  .update([
+    ...assetVersions.values(),
+    createHash('sha256').update(indexTemplate).digest('hex'),
+    createHash('sha256').update(swTemplate).digest('hex'),
+  ].join('|'))
+  .digest('hex')
+  .slice(0, 8)
 
 // Every body prepared this way is fixed for the life of the process, so the
 // work of squeezing it belongs at boot rather than in front of each request
@@ -2197,7 +2211,8 @@ function sendPrepared(req, res, prepared) {
 // srcs are candidates, which leaves the data: icon and the Google Fonts links
 // alone, and an unrecognised name is passed through untouched.
 const indexPage = precompress(
-  readFileSync(join(PUBLIC, 'index.html'), 'utf8')
+  indexTemplate
+    .replace('__VERSION__', buildVersion)
     .replace(/\b(href|src)="\/([^"?]+)"/g, (whole, attr, name) => (
       assetVersions.has(name) ? `${attr}="/${name}?v=${assetVersions.get(name)}"` : whole
     )),
@@ -2215,15 +2230,10 @@ app.get('/', sendIndex)
 // along in its bytes, which is how a browser is told a new worker exists at an
 // unchanged path. Like index.html it must never be held, or a phone would go on
 // installing last week's worker.
-const swVersion = createHash('sha256')
-  .update([...assetVersions.values()].join('|'))
-  .digest('hex')
-  .slice(0, 8)
-
 const hashed = (name) => `/${name}?v=${assetVersions.get(name)}`
 
-const swJs = readFileSync(join(PUBLIC, 'sw.js'), 'utf8')
-  .replace('__VERSION__', swVersion)
+const swJs = swTemplate
+  .replace('__VERSION__', buildVersion)
   .replace('__PRECACHE__', JSON.stringify(['/', ...ASSETS.map(hashed)]))
 
 const swPage = precompress(swJs, 'js')

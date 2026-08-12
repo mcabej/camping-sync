@@ -6,6 +6,10 @@
 <title>Camping Sync</title>
 <meta name="description" content="Work out who's bringing what, what you're eating, and what you're doing — without losing the plan in a group chat.">
 <meta name="theme-color" content="#1B382E">
+<!-- Stamped by server.js from the complete client build. The running page uses
+     it to tell a genuinely newer service worker from one that merely took
+     control after this already-current page loaded. -->
+<meta name="camping-sync-version" content="__VERSION__">
 <!-- The theme has to be on the page before the first paint, or a dark app opens
      with a white flash on every visit. Reading one localStorage key inline is
      the whole of it; app.js re-applies the same answer once it loads, and both

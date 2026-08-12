@@ -30,6 +30,7 @@ roots['ask-root'].querySelector = (sel) => (
 // The theme is written to the root element and to the meta tag the browser
 // paints the status bar from, so both are real enough here to be read back.
 const themeMeta = { content: '' }
+const appVersionMeta = { content: 'build-a' }
 // The app subscribes to the document at load. Keeping the handlers rather than
 // dropping them is what lets the gesture tests below press on a message: a swipe
 // and a long press are not renders, so there is nothing to read out of the HTML
@@ -43,7 +44,11 @@ globalThis.document = {
   documentElement: { style: { setProperty() {} }, classList: { toggle() {} }, dataset: {} },
   body: { classList: { add() {}, remove() {}, toggle() {} }, style: { setProperty() {}, removeProperty() {} } },
   hidden: false,
-  querySelector: (sel) => (sel === 'meta[name="theme-color"]' ? themeMeta : null),
+  querySelector: (sel) => (
+    sel === 'meta[name="theme-color"]' ? themeMeta
+      : sel === 'meta[name="camping-sync-version"]' ? appVersionMeta
+        : null
+  ),
   // Readable and writable, because the tests set it by hand to say "the cursor
   // is in the message box" and focus() sets it the way the app does.
   get activeElement() { return onFocus },
@@ -123,9 +128,21 @@ globalThis.Notification = { permission: 'granted', requestPermission: async () =
 globalThis.PushManager = function PushManager() {}
 // Node brings a navigator of its own, and it is read-only, so this replaces it
 // rather than adding to it.
+const workerListeners = {}
+const fireWorker = (type, ev) => { for (const fn of workerListeners[type] ?? []) fn(ev) }
+let workerUpdates = 0
+const workerRegistration = { update: async () => { workerUpdates++ } }
 Object.defineProperty(globalThis, 'navigator', {
   configurable: true,
-  value: { userAgent: 'node', serviceWorker: { getRegistration: async () => null } },
+  value: {
+    userAgent: 'node',
+    serviceWorker: {
+      controller: {},
+      getRegistration: async () => null,
+      register: async () => workerRegistration,
+      addEventListener(type, fn) { (workerListeners[type] ??= []).push(fn) },
+    },
+  },
 })
 globalThis.fetch = async () => ({ ok: true, json: async () => ({ catalog: {}, tips: [] }) })
 globalThis.__CAMPING_SYNC_TEST__ = true
@@ -217,6 +234,28 @@ const find = (html, needle) => html.includes(needle)
 let bad = 0
 const check = (label, ok) => { if (!ok) { bad++; console.log(`  FAIL  ${label}`) } else console.log(`  ok    ${label}`) }
 const section = (title) => console.log(`\n${title}`)
+
+section('App updates')
+
+// An open copy asks again when it returns to the foreground. The browser may
+// make its own opportunistic checks, but that is not a deploy signal an open
+// app can rely on.
+fireWindow('load', {})
+await new Promise((resolve) => setImmediate(resolve))
+fireWindow('focus', {})
+await new Promise((resolve) => setImmediate(resolve))
+check('returning to the app checks the service worker for an update', workerUpdates === 1)
+
+// The version belongs to the page, not to whichever worker happened to control
+// the navigation at its first instant. A reload can load build A and then be
+// claimed by build A; that is not news. A still-open build A claimed by build B
+// is the page that actually needs reopening.
+roots.toast.textContent = ''
+fireWorker('message', { data: { type: 'app-version', version: 'build-a' } })
+check('a freshly loaded current page is not told to reopen', roots.toast.textContent === '')
+fireWorker('message', { data: { type: 'app-version', version: 'build-b' } })
+check('an open old page is told when a new build takes control',
+  roots.toast.textContent === 'Update ready. Reopen the app to get it.')
 
 const signedAuth = S.auth
 S.auth = { ...signedAuth, clientId: '', devBypass: true, user: null }
