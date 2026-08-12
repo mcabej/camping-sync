@@ -132,8 +132,8 @@ try {
     }
     return null
   }
-  const ask = async (text, clientId) => {
-    const sent = await api(`/api/trips/${tripId}/messages`, { text, clientId })
+  const ask = async (text, clientId, replyTo = null) => {
+    const sent = await api(`/api/trips/${tripId}/messages`, { text, clientId, replyTo })
     assert.equal(sent.body.assistant?.status, 'queued', JSON.stringify(sent.body))
     return waitForReply()
   }
@@ -220,6 +220,45 @@ try {
   const afterYes = asked[asked.length - 1]
   assert.ok(afterYes.input.some((turn) => String(turn.content ?? '').includes('already been carried out')))
   assert.equal(afterYes.tools, undefined, 'a bare yes was sent tools')
+
+  // ---- replying to Camp, which is a question without the handle -------------------
+
+  {
+    // "Are you sure?" under an answer is addressed to whoever gave the answer.
+    // The room can see that, and so can the route: no @camp anywhere in it.
+    const lastCamp = db.prepare("SELECT id FROM messages WHERE role = 'assistant' ORDER BY id DESC LIMIT 1").get()
+    const sure = 'Yes — the tarp is gone. Say the word and I will put it back.'
+    script = (res) => talks(res, sure)
+    assert.equal(await ask('are you sure that was the right one?', 'c5', lastCamp.id), sure)
+
+    // And it arrives attached to what it doubts, rather than leaving the model
+    // to work out which of thirty messages "that" was.
+    const followUp = asked[asked.length - 1].input[1].content
+    assert.ok(followUp.includes('replied'), followUp)
+    assert.ok(followUp.includes('a message of yours'), followUp)
+    assert.ok(followUp.includes('Deleted the tarp.'), followUp)
+    assert.ok(followUp.includes('are you sure that was the right one?'), followUp)
+
+    // The answer quotes the question it answers, so the room can read the pair.
+    const answer = db.prepare("SELECT reply_to FROM messages WHERE role = 'assistant' ORDER BY id DESC LIMIT 1").get()
+    const question = db.prepare('SELECT id FROM messages WHERE client_id = ?').get('c5')
+    assert.equal(answer.reply_to, question.id)
+  }
+
+  {
+    // A reply to a person is not a question for Camp. Nothing is queued, and
+    // the model is not called at all.
+    const runs = asked.length
+    const person = db.prepare('SELECT id FROM messages WHERE client_id = ?').get('c5')
+    const sent = await api(`/api/trips/${tripId}/messages`, {
+      text: 'good, that was the one I meant', clientId: 'c6', replyTo: person.id,
+    })
+    assert.equal(sent.status, 201)
+    assert.equal(sent.body.assistant, null, JSON.stringify(sent.body))
+    assert.equal(sent.body.message.reply.id, person.id)
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    assert.equal(asked.length, runs, 'a reply to a member woke the assistant')
+  }
 
   db.close()
   console.log('camp round-trip smoke passed')

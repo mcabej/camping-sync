@@ -13,7 +13,7 @@ try {
   const { db, now } = await import('../lib/db.js')
   const {
     campSnapshot, campContext, campWriteIntent, campConfirmIntent, runCampTool, CAMP_LIMITS,
-    campStagedRemoval, clearCampStagedRemoval, applyCampStagedRemoval,
+    campStagedRemoval, clearCampStagedRemoval, applyCampStagedRemoval, asksCamp,
   } = await import('../lib/camp.js')
 
   const ts = now()
@@ -236,6 +236,26 @@ try {
       '@camp record 12.50 for firewood, I paid',
       '@camp write the gate code into the notes',
     ]) assert.equal(campWriteIntent(ask), true, ask)
+  }
+
+  {
+    // Whether the room is talking to Camp. The handle says so; so does replying
+    // to something Camp said, which is the only way a bare sentence gets in.
+    const camp = { id: 1, author: 'Camp', assistant: true, body: 'Saturday looks wet.' }
+    const person = { id: 2, author: 'Alex', assistant: false, body: 'Bring the tarp then.' }
+
+    assert.equal(asksCamp('@camp what else do we need?', null), true)
+    assert.equal(asksCamp('  @CAMP is Saturday sorted?', null), true)
+    assert.equal(asksCamp('are you sure about that?', camp), true)
+    assert.equal(asksCamp('yes', camp), true)
+
+    // A reply to a person is a reply to a person, and Camp named in passing is
+    // somebody talking about it rather than to it.
+    assert.equal(asksCamp('agreed, tarp it is', person), false)
+    assert.equal(asksCamp('agreed, tarp it is', null), false)
+    assert.equal(asksCamp('I asked @camp about this yesterday', person), false)
+    assert.equal(asksCamp('@campfire is a better name', null), false)
+    assert.equal(asksCamp('', null), false)
   }
 
   {

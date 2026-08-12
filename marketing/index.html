@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Camping Sync — Plan the trip, not the group chat</title>
+  <meta name="description" content="One calm place for what to pack, eat and do — with every owner, gap and last-minute decision clear before anyone leaves home.">
+  <meta name="theme-color" content="#1B382E">
+  <meta property="og:title" content="Camping Sync — Plan the trip, not the group chat">
+  <meta property="og:description" content="See who is bringing what, what is packed, and what still needs someone before anybody leaves home.">
+  <meta property="og:type" content="website">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=IBM+Plex+Mono:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231B382E'/%3E%3Cpath d='M16 6 6 26h20z' fill='%23E9EDE6'/%3E%3Cpath d='M16 14 11 26h10z' fill='%231B382E'/%3E%3C/svg%3E">
+</head>
+<body data-app-url="https://camping-sync.up.railway.app">
+  <svg class="svg-defs" aria-hidden="true">
+    <symbol id="icon-tick" viewBox="0 0 20 20"><path d="m4 10.5 3.6 3.6L16 5.8"/></symbol>
+    <symbol id="icon-arrow" viewBox="0 0 20 20"><path d="M4 10h11M11 6l4 4-4 4"/></symbol>
+    <symbol id="icon-tent" viewBox="0 0 24 24"><path d="M3.6 20.5 14 3.8M20.4 20.5 10 3.8M15.5 20.5 12 14.6l-3.5 5.9M2.2 20.5h19.6"/></symbol>
+    <symbol id="icon-pack" viewBox="0 0 24 24"><path d="M8 7V5.8a4 4 0 0 1 8 0V7"/><rect x="5" y="7" width="14" height="14" rx="3"/><path d="M8 13h8v5H8zM5 11H3.5v6H5M19 11h1.5v6H19"/></symbol>
+    <symbol id="icon-eat" viewBox="0 0 24 24"><path d="M4.5 3v7a2 2 0 0 0 4 0V3M6.5 10v11M13.2 4h7.6l-1.1 7.4a2.9 2.9 0 0 1-5.4 0L13.2 4ZM17 14.5V21M14.2 21h5.6"/></symbol>
+    <symbol id="icon-plan" viewBox="0 0 24 24"><rect x="3.5" y="5.5" width="17" height="15" rx="2.5"/><path d="M7.5 3.5v4M16.5 3.5v4M3.5 10h17M8 14h3M8 17h6"/></symbol>
+    <symbol id="icon-mine" viewBox="0 0 24 24"><path d="M9 4h6v3H9V4ZM9 5.5H6.5A1.5 1.5 0 0 0 5 7v12.5A1.5 1.5 0 0 0 6.5 21h11a1.5 1.5 0 0 0 1.5-1.5V7a1.5 1.5 0 0 0-1.5-1.5H15m-6 8 2 2 4.5-4.5"/></symbol>
+    <symbol id="icon-spark" viewBox="0 0 24 24"><path d="M12 3.5 13.8 9l5.7 1.8-5.7 1.8L12 18l-1.8-5.4-5.7-1.8L10.2 9 12 3.5ZM19 3v3M20.5 4.5h-3"/></symbol>
+  </svg>
+
+  <div class="marketing">
+    <nav class="marketing-nav" aria-label="Main navigation">
+      <div class="marketing-shell marketing-nav__inner">
+        <a class="marketing-brand" href="/" aria-label="Camping Sync home">
+          <svg class="marketing-brand__mark" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7.5" fill="#1B382E"/><path d="M16 6 6 26h20z" fill="#E9EDE6"/><path d="M16 14 11 26h10z" fill="#1B382E"/></svg>
+          <span>Camping Sync</span>
+        </a>
+        <div class="marketing-nav__links">
+          <a href="#features">What it does</a>
+          <a href="#how-it-works">How it works</a>
+          <a class="marketing-nav__settings" href="#join">Join a trip</a>
+          <a class="btn btn--blaze btn--sm" data-app-link href="https://camping-sync.up.railway.app">Open app</a>
+        </div>
+      </div>
+    </nav>
+
+    <main>
+      <section class="marketing-hero">
+        <div class="marketing-shell marketing-hero__grid">
+          <div class="marketing-hero__copy">
+            <span class="marketing-kicker"><span></span>The shared trip planner for campers</span>
+            <h1>Leave the group chat.<br><em>Bring the tent.</em></h1>
+            <p class="marketing-hero__lead">One calm place for what to pack, eat and do — with every owner, gap and last-minute decision clear before anyone leaves home.</p>
+            <div class="marketing-hero__actions">
+              <a class="btn btn--blaze marketing-btn" data-app-link href="https://camping-sync.up.railway.app">Start your trip <svg><use href="#icon-arrow"/></svg></a>
+              <a class="marketing-text-link" href="#how-it-works">See how it works <span aria-hidden="true">↓</span></a>
+            </div>
+            <ul class="marketing-assurances" aria-label="Product highlights">
+              <li><svg><use href="#icon-tick"/></svg> One link for the whole group</li>
+              <li><svg><use href="#icon-tick"/></svg> No app install required</li>
+              <li><svg><use href="#icon-tick"/></svg> Useful without signal</li>
+            </ul>
+          </div>
+
+          <div class="product-shot" aria-label="Camping Sync packing list preview">
+            <div class="product-shot__note product-shot__note--top">
+              <span class="product-shot__note-icon">☂</span>
+              <span><b>Rain on Saturday</b><small>Tarp added to Pack</small></span>
+            </div>
+            <div class="product-shot__frame">
+              <div class="product-shot__topbar">
+                <span class="product-shot__tent"><svg><use href="#icon-tent"/></svg></span>
+                <span><b>Pine Hollow</b><small>Keswick · 16–18 Aug</small></span>
+                <span class="product-shot__dots">•••</span>
+              </div>
+              <div class="product-shot__body">
+                <div class="product-shot__overview">
+                  <span><b>4</b><small>days to go</small></span>
+                  <div><small>Group kit</small><strong>12 of 14 covered</strong></div>
+                </div>
+                <div class="product-shot__coverage" aria-hidden="true"><span style="flex:5;background:var(--m0)"></span><span style="flex:4;background:var(--m1)"></span><span style="flex:3;background:var(--m2)"></span><span class="product-shot__gap" style="flex:2"></span></div>
+                <div class="product-shot__section-head"><span>Shelter &amp; sleep</span><small>4 of 5</small></div>
+                <div class="product-shot__list">
+                  <div class="product-shot__row"><span class="product-shot__check is-done"><svg><use href="#icon-tick"/></svg></span><span><b>Four-person tent</b><small><i style="background:var(--m0)"></i> Alex · packed</small></span><span class="product-shot__status">Done</span></div>
+                  <div class="product-shot__row"><span class="product-shot__check is-done"><svg><use href="#icon-tick"/></svg></span><span><b>Camping stove</b><small><i style="background:var(--m1)"></i> Maya · packed</small></span><span class="product-shot__status">Done</span></div>
+                  <div class="product-shot__row product-shot__row--open"><span class="product-shot__check"></span><span><b>Groundsheet</b><small>Nobody yet</small></span><span class="product-shot__claim">I’ll bring it</span></div>
+                  <div class="product-shot__row"><span class="product-shot__check is-ready"></span><span><b>Lantern</b><small><i style="background:var(--m2)"></i> Sam · still to pack</small></span><span class="product-shot__status product-shot__status--wait">To pack</span></div>
+                </div>
+              </div>
+              <div class="product-shot__tabs" aria-hidden="true">
+                <span class="is-active"><svg><use href="#icon-pack"/></svg><small>Pack</small></span>
+                <span><svg><use href="#icon-eat"/></svg><small>Eat</small></span>
+                <span><svg><use href="#icon-plan"/></svg><small>Plan</small></span>
+                <span><svg><use href="#icon-mine"/></svg><small>My kit</small></span>
+              </div>
+            </div>
+            <div class="product-shot__note product-shot__note--bottom">
+              <span class="product-shot__avatars"><i></i><i></i><i></i></span>
+              <span><b>Everyone knows their bit</b><small>No “wait, I thought you had it”</small></span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="marketing-proof" aria-label="Why groups use Camping Sync">
+        <div class="marketing-shell marketing-proof__grid">
+          <div><b>One trip</b><span>Lists, plans, chat and costs together</span></div>
+          <div><b>One clear owner</b><span>For every shared responsibility</span></div>
+          <div><b>One less worry</b><span>The gaps stay impossible to miss</span></div>
+        </div>
+      </section>
+
+      <section class="marketing-problem">
+        <div class="marketing-shell marketing-problem__grid">
+          <div class="marketing-section-copy">
+            <span class="marketing-kicker marketing-kicker--dark"><span></span>The group chat is not the plan</span>
+            <h2>Somewhere between the memes and the weather chat, the stove disappeared.</h2>
+            <p>Camping Sync turns loose promises into a trip everyone can actually see. Who owns it. Whether it’s packed. What still needs a volunteer. Nothing important gets buried under 200 messages.</p>
+          </div>
+          <div class="before-after" aria-label="From group chat confusion to a clear shared plan">
+            <div class="before-after__chat">
+              <span class="before-after__label">Group chat · Friday, 22:41</span>
+              <p class="bubble bubble--one">Who’s got the stove?</p>
+              <p class="bubble bubble--two">Thought Jamie said they had one?</p>
+              <p class="bubble bubble--three">That was the speaker 😂</p>
+              <span class="before-after__fade">47 unread messages</span>
+            </div>
+            <div class="before-after__sync">
+              <span class="before-after__label">Camping Sync · right now</span>
+              <span class="before-after__item"><i class="before-after__tick"><svg><use href="#icon-tick"/></svg></i><span><b>Camping stove</b><small>Maya · packed</small></span></span>
+              <span class="before-after__item before-after__item--open"><i></i><span><b>Groundsheet</b><small>Still needs someone</small></span><strong>Open</strong></span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="marketing-features" id="features">
+        <div class="marketing-shell">
+          <div class="marketing-section-head">
+            <span class="marketing-kicker marketing-kicker--dark"><span></span>Everything the trip needs</span>
+            <h2>Built for the bit between<br>“we should go” and “we’re here.”</h2>
+            <p>Enough structure to keep everyone aligned. Never so much that planning starts to feel like work.</p>
+          </div>
+          <div class="feature-grid">
+            <article class="feature-card feature-card--wide feature-card--coverage">
+              <div class="feature-card__copy"><span class="feature-card__num mono">01</span><h3>See the gaps before you leave</h3><p>Blaze orange means exactly one thing: nobody has picked this up yet. Every list tells the truth at a glance.</p></div>
+              <div class="feature-coverage" aria-hidden="true"><div><span>Trip coverage</span><b>86%</b></div><div class="feature-coverage__bar"><i></i><i></i><i></i><i></i></div><small>2 things still need someone</small></div>
+            </article>
+            <article class="feature-card feature-card--kit">
+              <span class="feature-card__num mono">02</span><h3>Shared kit and personal kit know the difference</h3><p>One tent for the group. One sleeping bag each. Camping Sync tracks both without turning them into the same checkbox.</p>
+              <div class="mini-kit" aria-hidden="true"><span><i><svg><use href="#icon-tick"/></svg></i><b>Tent</b><small>Alex</small></span><span><i><svg><use href="#icon-tick"/></svg></i><b>Sleeping bag</b><small>Mine</small></span></div>
+            </article>
+            <article class="feature-card feature-card--camp">
+              <span class="feature-card__num mono">03</span><span class="feature-card__camp-mark"><svg><use href="#icon-spark"/></svg></span><h3>Ask <span>@camp</span> what the trip knows</h3><p>“What are we missing for the rain?” Get an answer grounded in your dates, forecast, lists and dietary needs — then add it in the same conversation.</p><div class="mini-chat" aria-hidden="true"><b>@camp</b> Saturday looks wet. I’d add a tarp and two extra guy lines.</div>
+            </article>
+            <article class="feature-card feature-card--settle">
+              <span class="feature-card__num mono">04</span><h3>Settle the pitch, petrol and food shop</h3><p>Record who paid and who shared it. The shortest list of repayments appears automatically — odd pennies and all.</p><div class="mini-payment" aria-hidden="true"><span><i style="background:var(--m0)">A</i><i style="background:var(--m1)">M</i></span><b>Maya owes Alex</b><strong>£18.40</strong></div>
+            </article>
+            <article class="feature-card feature-card--offline">
+              <span class="feature-card__num mono">05</span><span class="signal" aria-hidden="true"><i></i><i></i><i></i><i></i></span><h3>Still useful past the last bar of signal</h3><p>Add it to your home screen and the latest trip stays available when the campsite Wi-Fi gives up.</p>
+            </article>
+            <article class="feature-card feature-card--home">
+              <span class="feature-card__num mono">06</span><h3>Bring it home again</h3><p>On the last morning, flip the whole trip around. Now every list answers the question that matters: is it back in the car?</p><div class="mini-home" aria-hidden="true"><span>Going home mode</span><i><svg><use href="#icon-tick"/></svg></i></div>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="marketing-how" id="how-it-works">
+        <div class="marketing-shell">
+          <div class="marketing-how__intro"><span class="marketing-kicker"><span></span>From idea to ready</span><h2>One link.<br>Three calm steps.</h2></div>
+          <ol class="marketing-steps">
+            <li><span>1</span><div><h3>Make the trip</h3><p>Add the dates and place. It takes about twenty seconds.</p></div></li>
+            <li><span>2</span><div><h3>Send one link</h3><p>Friends join from any browser and claim what they’re bringing.</p></div></li>
+            <li><span>3</span><div><h3>Watch the gaps close</h3><p>Pack, plan and arrive knowing the important bits are covered.</p></div></li>
+          </ol>
+        </div>
+      </section>
+
+      <section class="marketing-start" id="join">
+        <div class="marketing-shell">
+          <div class="marketing-start__head">
+            <span class="marketing-kicker marketing-kicker--dark"><span></span>Make the plan real</span>
+            <h2>Your next trip can feel organised before it even starts.</h2>
+            <p>Start a new trip or jump into the one your friend already made.</p>
+          </div>
+          <div class="standalone-start">
+            <article class="standalone-start__card standalone-start__card--new">
+              <span class="mono">NEW TRIP</span>
+              <h3>Get everyone on the same page.</h3>
+              <p>Open Camping Sync, add the dates and place, then send one link to the group.</p>
+              <a class="btn btn--blaze" data-app-link href="https://camping-sync.up.railway.app">Start a trip <svg><use href="#icon-arrow"/></svg></a>
+            </article>
+            <article class="standalone-start__card" id="join-trip">
+              <span class="mono">GOT AN INVITE?</span>
+              <h3>Join your friends.</h3>
+              <p>Paste the trip link or type the code from the end of it.</p>
+              <form class="standalone-join" id="join-form">
+                <label class="sr-only" for="trip-code">Trip link or code</label>
+                <input id="trip-code" name="code" placeholder="pine-hollow-204" autocomplete="off" autocapitalize="off" spellcheck="false" required>
+                <button class="btn" type="submit">Join trip</button>
+              </form>
+              <p class="standalone-join__error" id="join-error" role="alert"></p>
+            </article>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="marketing-footer">
+      <div class="marketing-shell marketing-footer__inner">
+        <a class="marketing-brand" href="/" aria-label="Camping Sync home">
+          <svg class="marketing-brand__mark" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7.5" fill="#1B382E"/><path d="M16 6 6 26h20z" fill="#E9EDE6"/><path d="M16 14 11 26h10z" fill="#1B382E"/></svg>
+          <span>Camping Sync</span>
+        </a>
+        <p>Less chasing. More camping.</p>
+        <a data-app-link href="https://camping-sync.up.railway.app">Open the app</a>
+      </div>
+    </footer>
+  </div>
+
+  <script>
+    const appUrl = document.body.dataset.appUrl.replace(/\/$/, '')
+    document.querySelectorAll('[data-app-link]').forEach((link) => { link.href = appUrl })
+    document.querySelector('#join-form').addEventListener('submit', (event) => {
+      event.preventDefault()
+      const raw = new FormData(event.currentTarget).get('code').trim()
+      let code = raw
+      try {
+        if (/^https?:\/\//i.test(raw)) code = new URL(raw).pathname.split('/').filter(Boolean).at(-1) || ''
+      } catch { code = '' }
+      code = code.toLowerCase().replace(/[^a-z0-9-]/g, '')
+      if (!code) {
+        document.querySelector('#join-error').textContent = 'Enter the trip link or code your friend sent.'
+        return
+      }
+      window.location.href = `${appUrl}/t/${encodeURIComponent(code)}`
+    })
+  </script>
+</body>
+</html>
