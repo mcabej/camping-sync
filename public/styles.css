@@ -77,7 +77,7 @@
   --switch-knob: #fff;
 
   /* The face of the room button, and that face under a cursor. Its own pair
-     rather than --forest-deep directly: the button is a 54px circle standing on
+     rather than --forest-deep directly: the button is a 60px circle standing on
      the canvas with nothing but a shadow under it, and in the dark palette the
      deep green and the canvas are the same colour — the circle disappears and
      leaves the icon floating. Dark takes the lighter green instead, which is
@@ -2179,7 +2179,7 @@ button.wx__day:hover .wx__wet, .wx__row--open .wx__wet { color: var(--ink); }
 
 /* One circle in the bottom corner, standing on the tab bar rather than in it —
    the bar holds the five places this trip is, and the room is a sixth that was
-   never going to fit. It is sized to a thumb and no larger: 54px, and the icon
+   never going to fit. It is sized to a thumb and no larger: 60px, and the icon
    with no word beside it, because a pill saying "Planning room" over the list
    you are reading is a banner, not a shortcut. Right-hand corner because that
    is where the thumb already
@@ -2193,7 +2193,7 @@ button.wx__day:hover .wx__wet, .wx__row--open .wx__wet { color: var(--ink); }
   position: fixed; z-index: 39;
   right: max(16px, env(safe-area-inset-right));
   bottom: calc(var(--tabbar-h) + 14px + env(safe-area-inset-bottom));
-  width: 54px; height: 54px; border-radius: 999px;
+  width: 60px; height: 60px; border-radius: 999px;
   display: grid; place-items: center;
   background: var(--fab); color: var(--on-forest);
   box-shadow: var(--shadow-lift);
@@ -2202,24 +2202,46 @@ button.wx__day:hover .wx__wet, .wx__row--open .wx__wet { color: var(--ink); }
 .room-fab:hover { background: var(--fab-hover); }
 .room-fab:active { transform: translateY(1px); }
 
-/* And a crescent bitten out of its top for the button that nests in it. The
-   cut is a circle 26px across the middle, hung 18px above this one's top edge —
-   the same centre as the button that sits there, 5px wider all round — so what
-   is left between them is an even seam of whatever the list is drawn on, and
-   the small button reads as resting in the curve rather than crossing in front
-   of it. 8px deep at the middle, which stops well clear of the 25px icon.
+/* And a crescent bitten out of it for the button that nests there. The cut is a
+   circle of 26px on the same centre as the 42px button — 5px wider all round —
+   so what is left between them is an even seam of whatever the list is drawn
+   on, and the small button reads as resting in the curve rather than crossing
+   in front of it. 11px deep, which is as far in as it can go and still leave
+   the 26px icon its corner and the badge on the far side its ring.
+   (12px, -11px) is 45px from this circle's own centre and 24° off the top of
+   it, which is two decisions. Round to the left, because two circles on one
+   vertical axis are a diagram of a stack and one perched on the shoulder of
+   another is a thing sitting on a thing — and left rather than right because
+   right is where the screen edge is, and 16px of margin is not a shoulder. And
+   in: 45px rather than the 51px that would have the two circles merely touch,
+   so the small one is set six deep into the curve rather than balanced on it.
+   Deep enough to have been put there; not so deep that the button it is sitting
+   in stops being a circle.
    A mask rather than a second circle in the canvas colour, for the reason the
    daybar uses one: the button floats over paper and over canvas both, and a
    patch has to know which it is standing on. The mask does not.
+   Cut out of a layer under the content rather than out of the button itself,
+   because a mask takes the children with it and one of the children is the
+   unread badge on the far corner — which the first version of this quietly ate
+   half of. What the bite is allowed to touch is the green disc and its shadow,
+   and nothing else. The badge is the whole reason the button is worth looking
+   at from across a page.
    Only when there is something to nest, which is why this is a modifier and not
    part of the circle: a scoop out of a button with nothing above it is damage.
-   Where masks are not understood the two simply overlap by 3px, which is a
-   stack of two buttons rather than a broken one. */
-.room-fab--notched {
-  -webkit-mask-image: radial-gradient(circle at 50% -18px, transparent 25.5px, #000 26.5px);
-  mask-image: radial-gradient(circle at 50% -18px, transparent 25.5px, #000 26.5px);
+   Where masks are not understood the two simply overlap, which is a stack of
+   two buttons rather than a broken one. */
+/* :hover included, or the rule above it repaints the whole unbitten circle
+   behind the layer that has the bite in it. */
+.room-fab--notched, .room-fab--notched:hover { background: none; box-shadow: none; }
+.room-fab--notched::before {
+  content: ''; position: absolute; inset: 0; z-index: -1;
+  border-radius: inherit; background: var(--fab); box-shadow: var(--shadow-lift);
+  transition: background .16s ease;
+  -webkit-mask-image: radial-gradient(circle at 12px -11px, transparent 25.5px, #000 26.5px);
+  mask-image: radial-gradient(circle at 12px -11px, transparent 25.5px, #000 26.5px);
 }
-.room-fab svg { width: 25px; height: 25px; }
+.room-fab--notched:hover::before { background: var(--fab-hover); }
+.room-fab svg { width: 26px; height: 26px; }
 .room-fab__icon { display: grid; place-items: center; }
 
 /* What you have missed, on the corner of the circle: the button's own two
@@ -2243,27 +2265,30 @@ button.wx__day:hover .wx__wet, .wx__row--open .wx__wet { color: var(--ink); }
 /* The foot of the list ends above the button rather than under it: the last row
    of a list, and the "What am I missing?" chip that sits in the same corner,
    are both things you came here to press. */
-.has-room-fab .app { padding-bottom: calc(var(--tabbar-h) + 68px + env(safe-area-inset-bottom)); }
+.has-room-fab .app { padding-bottom: calc(var(--tabbar-h) + 74px + env(safe-area-inset-bottom)); }
 
 /* Camp's own button, sitting in the crescent cut out of the one below it — see
-   .room-fab--notched, which is where the geometry is explained. It laps 3px
-   over that button's top edge, so the two are a stack that is held together
-   rather than two circles that happen to be near each other, and the 5px seam
-   the notch leaves is what keeps them legible as two.
-   Centred on the same axis rather than flush to the same right edge — the 6px
-   is half the difference in width — because the notch is concentric with this
-   button or the whole thing is a mistake.
-   Smaller and lighter, which together are the whole of the distinction. Two
-   solid green circles in a column were one control that had grown a second
-   head: same size, same fill, and nothing to tell them apart until you had
-   stopped and read two icons at 21px. So this one is the paper card the install
-   prompt is made of, the same ring and the same lift, with the spark in forest
-   ink — the trip's green pushing a shape, a page answering. The room is where
-   the trip is organised and stays the solid one; this is the aside you take out
-   of it. It is also why the room does not carry it — see askFab. */
+   .room-fab--notched, which is where the geometry is explained. It laps over
+   that button's edge, so the two are a stack that is held together rather than
+   two circles that happen to be near each other, and the 5px seam the notch
+   leaves is what keeps them legible as two.
+   The 27px is 9px of centring — half the difference in width — and 18px of
+   walking it round to the left shoulder; the 64px sets it down to where its
+   centre is 45px from the big circle's own. Those two numbers and the mask's
+   are one figure counted twice: the notch is concentric with this button or the
+   whole thing is a mistake.
+   Lighter, and smaller by a clear 18px. Two solid green circles in a column
+   were one control that had grown a second head: same size, same fill, and
+   nothing to tell them apart until you had stopped and read two icons. So this
+   one is the paper card the install prompt is made of, the same ring and the
+   same lift, with the spark in forest ink — the trip's green pushing a shape, a
+   page answering. The size is the other half of it, and it is rank rather than
+   reach: the room is the front door of the trip and stays the big solid circle,
+   this is the aside you take out of it, and 42px is still a thumb. It is also
+   why the room does not carry it — see askFab. */
 .room-fab--ask {
-  bottom: calc(var(--tabbar-h) + 65px + env(safe-area-inset-bottom));
-  right: calc(max(16px, env(safe-area-inset-right)) + 6px);
+  bottom: calc(var(--tabbar-h) + 64px + env(safe-area-inset-bottom));
+  right: calc(max(16px, env(safe-area-inset-right)) + 27px);
   width: 42px; height: 42px;
   background: var(--paper); color: var(--forest-ink);
   box-shadow: inset 0 0 0 1.5px var(--line), var(--shadow-lift);
@@ -2271,7 +2296,7 @@ button.wx__day:hover .wx__wet, .wx__row--open .wx__wet { color: var(--ink); }
 .room-fab--ask:hover { background: var(--paper-lift); }
 .room-fab--ask svg { width: 21px; height: 21px; }
 /* And the foot of the list ends above the taller stack, for the same reason. */
-.has-ask-fab .app { padding-bottom: calc(var(--tabbar-h) + 107px + env(safe-area-inset-bottom)); }
+.has-ask-fab .app { padding-bottom: calc(var(--tabbar-h) + 106px + env(safe-area-inset-bottom)); }
 
 /* ==========================================================================
    Sheet
@@ -2592,13 +2617,13 @@ button.wx__day:hover .wx__wet, .wx__row--open .wx__wet { color: var(--ink); }
 }
 /* And the room button stands on the card rather than behind it, where it would
    be a thing you can see and not press. Camp's button rides up with it, keeping
-   the same 51px between their bottom edges: the stack moves as one, or the
+   the same 50px between their bottom edges: the stack moves as one, or the
    button leaves the notch it is meant to be sitting in. */
 .install-open .room-fab {
   bottom: calc(var(--tabbar-h) + 28px + var(--install-h, 0px) + env(safe-area-inset-bottom));
 }
 .install-open .room-fab--ask {
-  bottom: calc(var(--tabbar-h) + 79px + var(--install-h, 0px) + env(safe-area-inset-bottom));
+  bottom: calc(var(--tabbar-h) + 78px + var(--install-h, 0px) + env(safe-area-inset-bottom));
 }
 
 /* ==========================================================================

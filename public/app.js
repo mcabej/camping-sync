@@ -4930,11 +4930,12 @@ function roomFab() {
 // without leaving the list you are reading — and all that differs is who hears
 // it. A second shape in a second corner would be a second thing to learn.
 //
-// One stack, but not one control with two heads: this one is smaller, drawn on
-// paper rather than in green, and it sits in a crescent cut out of the other's
-// top rather than floating above it — so which is which is a glance, and which
-// one is the aside is the shape of the pair rather than something you work out
-// by reading two 21px icons. See .room-fab--ask and .room-fab--notched.
+// One stack, but not one control with two heads: this one is drawn on paper
+// rather than in green, it is the smaller of the two by a clear margin, and it
+// sits in a crescent cut for it on the other's left shoulder rather than
+// floating over the middle of it — so which is which, and which of them is the
+// aside, is a glance at the shape of the pair rather than something you work
+// out by reading two small icons. See .room-fab--ask and .room-fab--notched.
 //
 // It goes wherever that one goes, and nowhere else. The room does not carry it
 // — a button over the composer is a button in the way of a growing box, and the

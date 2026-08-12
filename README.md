@@ -895,7 +895,10 @@ stack on purpose — they are the same errand, say something without leaving the
 list you are reading, and all that differs is who hears it — but not one control
 with two heads: the room's is the solid green circle it has always been, and
 Camp's is smaller, on paper, with the spark in forest ink, sitting in a crescent
-masked out of the green one's top. Two identical circles in a column are a thing
+masked out of the green one's left shoulder — 24° off the top and set six pixels
+into the curve rather than balanced on it, because two circles on one vertical
+axis are a diagram of a stack and one sunk into the shoulder of another is a
+thing sitting on a thing. Two identical circles in a column are a thing
 you have to stop and read; a small one resting in a notch cut for it says which
 is the aside before you have looked at either icon. The crescent is a modifier
 rather than part of the button, because a scoop out of a circle with nothing
