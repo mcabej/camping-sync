@@ -94,8 +94,8 @@ lost in a separate group chat.
   editing, claiming, ticking, writing the notes, recording costs and payments —
   through the same validation the screens use. Replies stream through the
   existing WebSocket and become durable messages when complete. A message that
-  only asks something is sent no tools at all, and deleting anything is proposed
-  and then confirmed rather than done; see
+  only asks something is sent no tools at all, and a clear deletion request is
+  carried out immediately; see
   [What Camp is allowed to do](#what-camp-is-allowed-to-do).
 - **Activity feed** — who added, claimed, packed or dropped what.
 - **Installs, and works without a signal** — add it to a home screen and it
@@ -610,9 +610,7 @@ the room can already see. Only Camp's own messages count — replying to a perso
 is replying to a person, and does not become a question for the assistant by
 sitting near one. The reply arrives at the model attached to what it answers,
 in the same turn rather than several messages back in the transcript, because
-"are you sure?" needs its subject to mean anything. A bare `yes` under a
-proposed deletion works for the same reason, and through the same confirmation
-path as `@camp yes`.
+"are you sure?" needs its subject to mean anything.
 
 ### One pin
 
@@ -810,7 +808,9 @@ named at all. Each tool then goes through the same validation as the screen that
 does the same job — `insertTripItems()`, `expenseFields()`, `mayTouch()` — so a
 thing added by asking is the same row as a thing added by tapping, with the same
 refusals and the same line in the activity feed. The feed says *Camp*, because
-it was.
+it was. Clear requests are acted on immediately: Camp does not echo the request,
+announce a plan, turn it into a proposal or ask for confirmation. Its reply
+reports only what changed or why the requested change failed.
 
 **What stops it** is not in the prompt. Four things are decided or counted in
 code, before the model has a say:
@@ -824,17 +824,12 @@ code, before the model has a say:
   instruction. It errs towards not writing: guessing wrong that way costs a
   sentence, and the person says the word. A tool call that arrives anyway, on a
   turn that was given none, is answered rather than run.
-- *Deletion is proposed, never decided.* A removal tool writes nothing. It
-  resolves the refs to real rows, puts the exact ids aside, and returns them, so
-  Camp can list back what would go and ask. If the next thing that person says
-  is an unambiguous yes — either alone or ending with "yes, do it" — the server
-  deletes those ids before the model runs again, from the ids it stored, so what
-  goes is what was agreed to, not what the model decides on the second pass.
-  Anything that is not a confirmation throws the proposal away. There is
-  deliberately no regex trying to read destructive
-  intent out of a sentence: "don't delete the pitch fee" contains the words for
-  deleting the pitch fee, and "drop Alex from the tent" should never have been
-  able to authorise touching money.
+- *Deletion has to be asked for.* `campDeleteIntent()` decides from the
+  requester's own message whether removal tools may act; an unrelated edit or
+  "don't delete the pitch fee" keeps them closed. An authorised removal tool
+  deletes immediately, but it can only resolve refs from the requester's
+  snapshot and checks the trip and ownership again as it writes. The model
+  choosing a removal tool during some other request is refused in code.
 - *Budgets.* Twenty adds, twenty edits, ten deletions and ten money changes per
   answer, counted as the tools run rather than requested in words. A model that
   has misread one sentence can be wrong about twenty things and not two hundred.
@@ -871,9 +866,9 @@ and a deletion not, the budgets running out, a membership disappearing mid-run �
 without an API key anywhere near it — and `scripts/camp-run-smoke.mjs` puts a
 stub model behind the real server to check the half that lib cannot see: that a
 question carries no tools, that a tool call invented anyway is refused rather
-than run, and that a proposed deletion waits for the yes. `server.js` keeps the
-streaming, the queue and the hourly allowance, and knows nothing about what a
-tool means.
+than run, and that an explicit deletion happens in its original turn.
+`server.js` keeps the streaming, the queue and the hourly allowance, and knows
+nothing about what a tool means.
 
 ### Installing it
 

@@ -12,8 +12,8 @@ process.env.DB_PATH = path
 try {
   const { db, now } = await import('../lib/db.js')
   const {
-    campSnapshot, campContext, campWriteIntent, campConfirmIntent, runCampTool, CAMP_LIMITS,
-    campStagedRemoval, clearCampStagedRemoval, applyCampStagedRemoval, asksCamp,
+    campSnapshot, campContext, campWriteIntent, campDeleteIntent, runCampTool, CAMP_LIMITS,
+    asksCamp,
   } = await import('../lib/camp.js')
 
   const ts = now()
@@ -36,12 +36,13 @@ try {
   expense.run('pitch', 'Pitch fee', 6000, 'alex', ts, ts)
   db.prepare(`INSERT INTO expense_participants (expense_id, member_id) VALUES ('pitch', 'sam'), ('pitch', 'alex')`).run()
 
-  const context = () => {
+  const context = ({ canDelete = false } = {}) => {
     const { snapshot, refs } = campSnapshot('trip', 'sam')
     return {
       snapshot,
       ctx: campContext({
-        tripId: 'trip', memberId: 'sam', memberName: 'Sam', refs, notes: snapshot.trip.notes ?? '',
+        tripId: 'trip', memberId: 'sam', memberName: 'Sam', refs,
+        notes: snapshot.trip.notes ?? '', canDelete,
       }),
     }
   }
@@ -259,69 +260,60 @@ try {
   }
 
   {
-    // The yes that answers a proposal, and the many things that are not one.
-    for (const yes of [
-      'yes', 'Yes please', '@camp yes', 'go ahead', 'do it', 'yep, confirm',
-      '@camp how many confirmation do you need yes do it',
-    ]) {
-      assert.equal(campConfirmIntent(yes), true, yes)
-    }
-    for (const no of [
-      'no', "don't", 'not the pitch fee', 'yes to the tarp but not the chilli',
-      'yes, and also delete the bacon', 'did Josh say yes?', 'if Josh says yes, do it',
-      'yes, do not do it', '', '@camp',
-    ]) assert.equal(campConfirmIntent(no), false, no)
+    // Deletion authority comes from the requester's message, not the model's
+    // choice of tool. A denial does not open that door.
+    for (const request of [
+      '@camp delete the pitch fee', '@camp remove the bacon',
+      '@camp get rid of the tarp', '@camp take the paperback off the list',
+    ]) assert.equal(campDeleteIntent(request), true, request)
+    for (const request of [
+      '@camp add a tarp', "@camp don't delete the pitch fee", '@camp who paid for petrol?',
+      '@camp who deleted the tarp?', '@camp did Alex remove the bacon?',
+      '@camp I removed the pitch fee', '@camp should I delete the payment?',
+    ]) assert.equal(campDeleteIntent(request), false, request)
   }
 
-  // ---- deleting, which is proposed and then confirmed ---------------------------------
+  // ---- deleting immediately ---------------------------------------------------------
 
   {
-    // A removal tool writes nothing. It comes back with what would go.
+    // A removal tool cannot turn an unrelated write request into a deletion.
     const { snapshot, ctx } = context()
-    const proposed = runCampTool('remove_items', { refs: [refFor(snapshot, 'Bacon')] }, ctx)
-    assert.equal(proposed.nothingDeletedYet, true)
-    assert.deepEqual(proposed.wouldRemove, ['Bacon'])
-    assert.ok(db.prepare("SELECT 1 FROM items WHERE title = 'Bacon'").get(), 'the tool deleted something')
-
-    // A second call in the same answer adds to the same proposal rather than
-    // replacing it, and money and things can be in one list.
-    const pitch = snapshot.money.expenses.find((e) => e.description === 'Pitch fee').ref
-    const both = runCampTool('remove_money', { refs: [pitch] }, ctx)
-    assert.equal(both.wouldRemove.length, 2)
-    assert.ok(db.prepare("SELECT 1 FROM expenses WHERE id = 'pitch'").get())
-
-    // Anything that is not a yes throws the whole proposal away — which is
-    // what stops "drop Alex from the tent" from ever authorising money.
-    assert.ok(campStagedRemoval('trip', 'sam'))
-    clearCampStagedRemoval('trip', 'sam')
-    assert.equal(campStagedRemoval('trip', 'sam'), null)
-    assert.equal(applyCampStagedRemoval('trip', 'sam'), null)
+    const refused = runCampTool('remove_items', { refs: [refFor(snapshot, 'Bacon')] }, ctx)
+    assert.ok(refused.error.includes('did not ask to delete'))
     assert.ok(db.prepare("SELECT 1 FROM items WHERE title = 'Bacon'").get())
-    assert.ok(db.prepare("SELECT 1 FROM expenses WHERE id = 'pitch'").get())
   }
 
   {
-    // And the yes, which deletes exactly what was named and nothing else.
-    const { snapshot, ctx } = context()
-    runCampTool('remove_items', { refs: [refFor(snapshot, 'Bacon')] }, ctx)
-    const done = applyCampStagedRemoval('trip', 'sam')
+    // A clear request deletes exactly what was named in the snapshot, now.
+    const { snapshot, ctx } = context({ canDelete: true })
+    const done = runCampTool('remove_items', { refs: [refFor(snapshot, 'Bacon')] }, ctx)
     assert.deepEqual(done.removed, ['Bacon'])
     assert.ok(!db.prepare("SELECT 1 FROM items WHERE title = 'Bacon'").get())
-    // The pitch fee was in the proposal that was thrown away, and stays put.
-    assert.ok(db.prepare("SELECT 1 FROM expenses WHERE id = 'pitch'").get())
-    // The yes is spent: saying it twice does not delete anything twice.
-    assert.equal(applyCampStagedRemoval('trip', 'sam'), null)
+
+    const pitch = snapshot.money.expenses.find((e) => e.description === 'Pitch fee').ref
+    const money = runCampTool('remove_money', { refs: [pitch] }, ctx)
+    assert.deepEqual(money.removed, ['Pitch fee (60.00)'])
+    assert.ok(!db.prepare("SELECT 1 FROM expenses WHERE id = 'pitch'").get())
+
+    // Existing outlier amounts are removable too; the recording ceiling does
+    // not turn a typo into a permanent ledger row.
+    expense.run('petrol', 'Petrol', 500000000, 'sam', ts, ts)
+    const { snapshot: largeSnapshot, ctx: largeCtx } = context({ canDelete: true })
+    const petrol = largeSnapshot.money.expenses.find((e) => e.description === 'Petrol').ref
+    const large = runCampTool('remove_money', { refs: [petrol] }, largeCtx)
+    assert.deepEqual(large.removed, ['Petrol (5000000.00)'])
+    assert.ok(!db.prepare("SELECT 1 FROM expenses WHERE id = 'petrol'").get())
   }
 
   {
-    // A row that goes away between the proposal and the yes is not an error.
-    const { snapshot, ctx } = context()
+    // A row that goes away between the snapshot and the tool call is not an error.
+    expense.run('pitch', 'Pitch fee', 6000, 'alex', ts, ts)
+    const { snapshot, ctx } = context({ canDelete: true })
     const pitch = snapshot.money.expenses.find((e) => e.description === 'Pitch fee').ref
-    runCampTool('remove_money', { refs: [pitch] }, ctx)
     db.prepare("DELETE FROM expenses WHERE id = 'pitch'").run()
-    const done = applyCampStagedRemoval('trip', 'sam')
+    const done = runCampTool('remove_money', { refs: [pitch] }, ctx)
     assert.equal(done.removed, undefined)
-    assert.equal(done.missed[0].reason, 'already gone')
+    assert.equal(done.failed[0].reason, 'already gone')
   }
 
   // ---- the ceilings ---------------------------------------------------------------
@@ -343,7 +335,7 @@ try {
   // A membership that goes away while the model is thinking takes its authority
   // with it, whatever the model has already decided to do.
   {
-    const { ctx } = context(true)
+    const { ctx } = context({ canDelete: true })
     // The ledger holds people on the trip, so it goes first — as it does when
     // somebody is removed through the app.
     db.prepare('DELETE FROM payments').run()

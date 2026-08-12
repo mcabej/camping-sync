@@ -161,6 +161,8 @@ try {
   assert.equal(first.input.length, 2)
   assert.ok(first.input[0].content.startsWith('Trip snapshot as JSON'))
   assert.ok(first.input[1].content.includes('@camp add a tarp for me'))
+  assert.ok(first.instructions.includes('Do not restate or paraphrase what the requester asked'))
+  assert.ok(first.instructions.includes('Call the necessary tools first'))
   assert.ok(first.tools.length >= 10, 'the model was offered no tools')
   assert.ok(second.input.some((turn) => turn.type === 'function_call_output'),
     'the tool result was never fed back')
@@ -202,24 +204,17 @@ try {
     assert.equal(snapshot.recentChanges.at(-1).did, 'started the trip')
   }
 
-  // ---- deleting, proposed and then confirmed --------------------------------------
+  // ---- deleting immediately -------------------------------------------------------
 
-  const proposed = 'That would remove Tarp. Confirm and I will do it.'
+  const deleted = 'Deleted the tarp.'
   script = (res, request) => (request.input.some((turn) => turn.type === 'function_call_output')
-    ? talks(res, proposed)
+    ? talks(res, deleted)
     : callsTool(res, toolCall('remove_items', { refs: ['i1'] })))
-  assert.equal(await ask('@camp delete the tarp', 'c3'), proposed)
-  assert.ok(db.prepare("SELECT 1 FROM items WHERE title = 'Tarp'").get(),
-    'the proposal deleted something on its own')
-
-  const confirmed = 'Deleted the tarp.'
-  script = (res) => talks(res, confirmed)
-  assert.equal(await ask('@camp how many confirmation do you need yes do it', 'c4'), confirmed)
-  assert.ok(!db.prepare("SELECT 1 FROM items WHERE title = 'Tarp'").get(), 'the yes did not delete it')
-  // The deletion happened before the model was called, and it was told so.
-  const afterYes = asked[asked.length - 1]
-  assert.ok(afterYes.input.some((turn) => String(turn.content ?? '').includes('already been carried out')))
-  assert.equal(afterYes.tools, undefined, 'a confirmation turn was sent tools')
+  assert.equal(await ask('@camp delete the tarp', 'c3'), deleted)
+  assert.ok(!db.prepare("SELECT 1 FROM items WHERE title = 'Tarp'").get(),
+    'the removal tool did not delete the item immediately')
+  assert.ok(asked.at(-1).input.some((turn) => turn.type === 'function_call_output'
+    && turn.output.includes('"removed":["Tarp"]')), 'the deletion result was not fed back to the model')
 
   // ---- replying to Camp, which is a question without the handle -------------------
 
