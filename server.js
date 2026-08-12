@@ -14,7 +14,7 @@ import {
 import { REMINDER_LEASE_MS, runReminders } from './lib/reminders.js'
 import { CATALOG, TIPS, WEATHER_ADVICE, catalogEntry } from './lib/catalog.js'
 import {
-  clean, excerpt, TRIP_FIELDS, TRIP_LIMITS, PLACE_MAX, currencyField, tripField, mapUrl,
+  clean, excerpt, unmark, TRIP_FIELDS, TRIP_LIMITS, PLACE_MAX, currencyField, tripField, mapUrl,
   money, coords, isDay, dayField, timeField, dayName, kindOf, mayTouch, isPrivate,
 } from './lib/fields.js'
 import { insertTripItems } from './lib/items.js'
@@ -442,7 +442,11 @@ async function notifyMessage(tripId, message, { onlyMemberId = '' } = {}) {
       && !active.has(sub.member_id))
 
   if (!subscriptions.length) return
-  const body = String(message.body ?? '').replace(/\s+/g, ' ').trim()
+  // The notification is drawn by the operating system, which will not render
+  // Camp's Markdown and has no room for it either, so the marks come off before
+  // the line is collapsed and cut.
+  const said = message.role === 'assistant' ? unmark(message.body) : message.body
+  const body = String(said ?? '').replace(/\s+/g, ' ').trim()
   const payload = JSON.stringify({
     title: trip.name,
     body: `${message.author_name}: ${body.length > 160 ? `${body.slice(0, 157)}…` : body}`,
@@ -1134,10 +1138,17 @@ function shapeMessage(row) {
   const { reply_to: replyTo, reply_role: role, reply_author: author, reply_body, ...message } = row
   if (!replyTo || author === null || author === undefined) return { ...message, reply: null }
   // One line, the same as the door and the push notification: a quote has room
-  // for a sentence, and the message it points at has room for the rest.
+  // for a sentence, and the message it points at has room for the rest. Camp's
+  // Markdown comes off on the way out, because the one line has nowhere to draw
+  // it — see unmark().
   return {
     ...message,
-    reply: { id: replyTo, author, assistant: role === 'assistant', body: excerpt(reply_body) },
+    reply: {
+      id: replyTo,
+      author,
+      assistant: role === 'assistant',
+      body: excerpt(role === 'assistant' ? unmark(reply_body) : reply_body),
+    },
   }
 }
 
@@ -1169,7 +1180,9 @@ function latestMessage(tripId) {
   if (!row) return null
   // One line: line breaks and runs of spaces collapse, the same as they do for
   // a push notification, because a door has room for a sentence and not a poem.
-  const body = String(row.body ?? '').replace(/\s+/g, ' ').trim()
+  // Camp's Markdown goes with them, and before the cut rather than after it.
+  const said = row.role === 'assistant' ? unmark(row.body) : row.body
+  const body = String(said ?? '').replace(/\s+/g, ' ').trim()
   return {
     author: row.author_name || 'Someone',
     assistant: row.role === 'assistant',
@@ -1507,13 +1520,13 @@ app.put('/api/trips/:id/pin', (req, res) => {
   // put a message in front of everybody, and naming one from a room you are not
   // in would be a way to read that room.
   const message = messageId === null ? null
-    : db.prepare('SELECT id, body FROM messages WHERE id = ? AND trip_id = ?').get(messageId, trip.id)
+    : db.prepare('SELECT id, role, body FROM messages WHERE id = ? AND trip_id = ?').get(messageId, trip.id)
   if (messageId !== null && !message) {
     return res.status(400).json({ error: 'That message is no longer in this room.' })
   }
 
   const before = trip.pinned_message_id
-    ? db.prepare('SELECT body FROM messages WHERE id = ? AND trip_id = ?')
+    ? db.prepare('SELECT role, body FROM messages WHERE id = ? AND trip_id = ?')
       .get(trip.pinned_message_id, trip.id)
     : null
 
@@ -1525,7 +1538,9 @@ app.put('/api/trips/:id/pin', (req, res) => {
     // What went up, and what it cost. A replacement says both, because one pin
     // means every pin is a choice against the last one and a feed that only
     // recorded the winner would quietly lose the decision that was dropped.
-    const said = (row) => (row ? `“${excerpt(row.body, FEED_QUOTE_CHARS)}”` : 'a message')
+    const said = (row) => (row
+      ? `“${excerpt(row.role === 'assistant' ? unmark(row.body) : row.body, FEED_QUOTE_CHARS)}”`
+      : 'a message')
     logEvent(trip.id, actorName(trip.id, req), message
       ? (before ? `replaced the pin ${said(before)} with ${said(message)}` : `pinned ${said(message)}`)
       : `unpinned ${said(before)}`)

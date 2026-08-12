@@ -1558,11 +1558,18 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
    headline that scrolls away is not a headline. It is one row and stays one row:
    the point of a single pin is that the room has one thing at the top of it, and
    a block that grew with the message would start to be the room. */
+/* Edged on three sides rather than left to be told apart by its fill. The band
+   sits between the dark green bar and the thread, and in the dark palette a
+   --tint ground lands between --forest-deep above it and --bar below it: three
+   near-identical greens stacked, and the pin stops looking like a strip of its
+   own. The green rail is the same mark a quote carries, which is the right
+   thing for it to borrow — both are a message being shown somewhere it isn't. */
 .pinned {
   flex: none; display: grid; grid-template-columns: minmax(0, 1fr) 30px;
   align-items: center; gap: 4px;
   padding: 8px var(--chat-pad-x, 18px);
-  background: var(--tint); box-shadow: 0 1px 0 var(--hair);
+  background: var(--tint-strong);
+  box-shadow: inset 3px 0 0 var(--forest-ink), inset 0 1px 0 var(--hair), 0 1px 0 var(--hair);
 }
 .pinned__jump {
   display: grid; grid-template-columns: 18px minmax(0, 1fr); align-items: center;

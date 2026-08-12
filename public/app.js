@@ -282,6 +282,25 @@ function assistantInline(text) {
   return html + esc(source.slice(at))
 }
 
+// The other end of the same subset: what Camp wrote, with the marks taken off
+// instead of drawn. A preview is one clipped line and has nowhere to put a bold
+// word, so it gets the words. This is the grammar above read backwards, and the
+// server keeps its own copy in lib/fields.js — it has to strip before it cuts a
+// body down to a quote, which is a thing only the end holding the whole message
+// can do.
+function unmark(text) {
+  return String(text ?? '')
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .map((line) => line.trim()
+      .replace(/^#{1,3}\s+/, '')
+      .replace(/^[-*]\s+/, '')
+      .replace(/^\d+[.)]\s+/, ''))
+    .join('\n')
+    .replace(/\*\*([^*\n]+)\*\*/g, '$1')
+    .replace(/`([^`\n]+)`/g, '$1')
+}
+
 function assistantHtml(text) {
   const lines = String(text ?? '').replace(/\r\n?/g, '\n').split('\n')
   let html = '', paragraph = [], list = '', items = []
@@ -4223,10 +4242,13 @@ function peopleCard() {
 
 // The same one-liner the server makes for the door, for a message that has just
 // come down the socket rather than one that was already there when we asked.
+// Including the Markdown coming off Camp's answers: the server does that before
+// its own cut (unmark, in lib/fields.js), and a door that read `**` on the live
+// message and plain words on the reloaded one would be two doors.
 const previewOf = (m) => ({
   author: m.author_name || 'Someone',
   assistant: m.role === 'assistant',
-  body: String(m.body ?? '').replace(/\s+/g, ' ').trim(),
+  body: (m.role === 'assistant' ? unmark(m.body) : String(m.body ?? '')).replace(/\s+/g, ' ').trim(),
   at: m.created_at,
 })
 
