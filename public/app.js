@@ -134,7 +134,7 @@ const ICONS = {
 const FEATURES = [
   {
     id: 'assistant', label: 'Camp, in the Planning Room',
-    note: 'The assistant you can put a question to with @camp. Off, the room is just the group.',
+    note: 'Ask it about the trip with @camp, or ask it to change the lists, plans, notes and costs. Off, the room is just the group.',
   },
   {
     id: 'weather', label: 'Weather forecast',
@@ -1188,14 +1188,41 @@ const isClaimed = (it) => claimsOn(it).length > 0
 
 const tripCurrency = () => String(S.trip?.currency || 'GBP').toUpperCase()
 
+// Building an Intl formatter costs tens of microseconds; using one costs a
+// small fraction of that. A page of prices and dates used to build a fresh
+// formatter for every row on every redraw, which on a long list is a real part
+// of the frame. They are keyed by whatever makes them differ and then kept —
+// there are only ever a handful, and none of them go stale.
+const moneyFormats = new Map()
+const dateFormats = new Map()
+
+const dateFormat = (opts) => {
+  const key = JSON.stringify(opts)
+  let found = dateFormats.get(key)
+  if (!found) dateFormats.set(key, found = new Intl.DateTimeFormat(undefined, opts))
+  return found
+}
+
+// What toLocaleString() spells out when asked for no options in particular.
+// Written down so the cached formatter says exactly what the tooltips used to.
+const STAMP = {
+  year: 'numeric', month: 'numeric', day: 'numeric',
+  hour: 'numeric', minute: 'numeric', second: 'numeric',
+}
+
 function moneyText(minor) {
+  const currency = tripCurrency()
   try {
-    return new Intl.NumberFormat('en', {
-      style: 'currency', currency: tripCurrency(), currencyDisplay: 'narrowSymbol',
-      minimumFractionDigits: 2, maximumFractionDigits: 2,
-    }).format(minor / 100)
+    let found = moneyFormats.get(currency)
+    if (!found) {
+      moneyFormats.set(currency, found = new Intl.NumberFormat('en', {
+        style: 'currency', currency, currencyDisplay: 'narrowSymbol',
+        minimumFractionDigits: 2, maximumFractionDigits: 2,
+      }))
+    }
+    return found.format(minor / 100)
   } catch {
-    return `${tripCurrency()} ${(minor / 100).toFixed(2)}`
+    return `${currency} ${(minor / 100).toFixed(2)}`
   }
 }
 
@@ -1527,10 +1554,14 @@ const dayAt = (iso) => {
 }
 // "Any day" is a day as far as anything reading one is concerned, so the two
 // that put a day into words answer for it rather than leaving 'any' on screen.
+const dayWords = (iso, opts) => {
+  const d = dayAt(iso)
+  return d ? dateFormat(opts).format(d) : iso
+}
 const dayFull = (iso) => (iso === ALL_WEEK ? ANY_DAY
-  : dayAt(iso)?.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' }) ?? iso)
+  : dayWords(iso, { weekday: 'short', day: 'numeric', month: 'short' }))
 const dayShort = (iso) => (iso === ALL_WEEK ? ANY_DAY
-  : dayAt(iso)?.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric' }) ?? iso)
+  : dayWords(iso, { weekday: 'short', day: 'numeric' }))
 
 // Which of these is today, once the trip is the thing you are standing in rather
 // than the thing you are planning. Working it out from the phone's own clock is
@@ -1701,7 +1732,7 @@ function shortDates(trip) {
     return Number.isNaN(+d) ? null : d
   }
   const yy = (d) => String(d.getFullYear() % 100).padStart(2, '0')
-  const dm = (d) => `${d.getDate()} ${d.toLocaleDateString(undefined, { month: 'short' })}`
+  const dm = (d) => `${d.getDate()} ${dateFormat({ month: 'short' }).format(d)}`
   const full = (d) => `${dm(d)} ${yy(d)}`
 
   const a = day(trip?.start_date), b = day(trip?.end_date)
@@ -2756,7 +2787,7 @@ function dayBar() {
           // not sit two pixels higher than the days either side of it.
           const now = isToday(d)
           return tab(d, `
-            <span class="daybar__dow">${esc(at ? at.toLocaleDateString(undefined, { weekday: 'short' }) : d)}</span>
+            <span class="daybar__dow">${esc(at ? dateFormat({ weekday: 'short' }).format(at) : d)}</span>
             <span class="daybar__num">${esc(at ? at.getDate() : '')}</span>
             <span class="daybar__now${now ? ' daybar__now--on' : ''}"></span>`,
           now ? `${dayFull(d)}, today` : dayFull(d))
@@ -3300,7 +3331,7 @@ function wxOpens(start) {
   const d = new Date(`${start}T12:00:00`)
   if (Number.isNaN(+d)) return ''
   d.setDate(d.getDate() - 15)
-  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'long' })
+  return dateFormat({ day: 'numeric', month: 'long' }).format(d)
 }
 
 // The rest of the numbers, spelled out rather than abbreviated — this is the
@@ -3520,9 +3551,9 @@ function stayStrip(sentence) {
     <div class="stay__end stay__end--${side}">
       <span class="stay__cap">${cap}</span>
       <span class="stay__date">
-        <b>${d.getDate()}</b>${esc(d.toLocaleDateString(undefined, { month: 'short' }))}
+        <b>${d.getDate()}</b>${esc(dateFormat({ month: 'short' }).format(d))}
       </span>
-      <span class="stay__dow">${esc(d.toLocaleDateString(undefined, { weekday: 'long' }))}</span>
+      <span class="stay__dow">${esc(dateFormat({ weekday: 'long' }).format(d))}</span>
     </div>`
 
   // One date is a real answer to give — a trip booked before anyone knows which
@@ -3974,7 +4005,7 @@ function chatRows() {
         <div class="thread__content">
           <div class="thread__meta">
             <strong>${esc(message.author_name)}${assistant ? ' <span class="thread__camp mono">assistant</span>' : ''}</strong>
-            <time class="mono" datetime="${esc(message.created_at)}" title="${esc(when.toLocaleString())}">${ago(message.created_at)}</time>
+            <time class="mono" datetime="${esc(message.created_at)}" title="${esc(dateFormat(STAMP).format(when))}">${ago(message.created_at)}</time>
           </div>
           ${assistant ? `<div class="assistant-copy">${assistantHtml(message.body)}</div>` : `<p>${esc(message.body)}</p>`}
         </div>
@@ -4013,7 +4044,7 @@ function chatCard() {
       <span class="sr-only chat__connection mono" data-chat-connection
         data-state="${esc(chat.connection)}" role="status" aria-live="polite">${chatConnectionLabel(chat.connection)}</span>
       <p class="sr-only" id="chat-help">${assistantOn()
-        ? 'Keep decisions with the trip. Start with <span class="mono">@camp</span> for help using its details and lists.'
+        ? 'Keep decisions with the trip. Start with <span class="mono">@camp</span> to ask about the trip, or to have it change the lists, plans, notes and costs.'
         : 'Keep decisions with the trip, where everybody can find them later.'}</p>
       <div class="chat__body">
         ${waiting ? '<div class="skel" aria-label="Loading messages"></div>' : chat.error ? `
@@ -4104,7 +4135,7 @@ function campPage() {
                 <div class="feed__row">
                   <span class="feed__who">${esc(e.actor || 'Someone')}</span>
                   <span class="feed__what">${esc(e.text)}</span>
-                  <span class="feed__when" title="${esc(new Date(e.created_at).toLocaleString())}">${ago(e.created_at)}</span>
+                  <span class="feed__when" title="${esc(dateFormat(STAMP).format(new Date(e.created_at)))}">${ago(e.created_at)}</span>
                 </div>`).join('') : '<p class="card__body">Nothing yet.</p>'}
             </div>
             ${moreBtn('feed', S.events.length, 8)}
@@ -6361,6 +6392,8 @@ document.addEventListener('submit', async (ev) => {
           toast('Camp is not available yet. Your message was saved for the group.')
         } else if (assistant?.status === 'busy') {
           toast('Camp already has a few requests queued. Try again shortly.')
+        } else if (assistant?.status === 'limited') {
+          toast('Camp has answered you a lot this hour. Your message was saved for the group.')
         }
         S.chat.pending = null
         S.chat.busy = false

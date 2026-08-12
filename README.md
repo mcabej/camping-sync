@@ -83,10 +83,15 @@ lost in a separate group chat.
   list. Two switches on your account, off until you ask, applying to every trip
   you are on — and nothing to do with muting a Planning Room.
 - **`@camp` assistant** — signed-in members can ask a trip-aware assistant about
-  the details, lists, people and recent planning thread. Replies stream through
-  the existing WebSocket and become durable messages when complete. Explicit
-  requests can add validated list items; ordinary questions never mutate the
-  trip.
+  the trip: its dates and days, the people and what they can eat, every list
+  with who is bringing and who has packed what, the shared notes, the ledger and
+  its balances, the forecast, and what has changed lately. It can act as well as answer — adding,
+  editing, claiming, ticking, writing the notes, recording costs and payments —
+  through the same validation the screens use. Replies stream through the
+  existing WebSocket and become durable messages when complete. A message that
+  only asks something is sent no tools at all, and deleting anything is proposed
+  and then confirmed rather than done; see
+  [What Camp is allowed to do](#what-camp-is-allowed-to-do).
 - **Activity feed** — who added, claimed, packed or dropped what.
 - **Installs, and works without a signal** — add it to a home screen and it
   opens full-screen showing the last state the server sent, which is the state
@@ -119,6 +124,11 @@ Express for routing; the frontend is three static files.
 ```
 server.js          REST API + WebSocket delivery + static hosting
 lib/db.js          schema, queries, trip codes
+lib/fields.js      what a field is allowed to be, for every door into the data
+lib/items.js       putting things on a list
+lib/money.js       the ledger's rules and the arithmetic that squares it
+lib/camp.js        what @camp may see and do; no API key, so it is testable
+lib/reminders.js   which of the two nudges is due, and for whom
 lib/catalog.js     the camping knowledge (gear, food, drinks, plans, tips)
 public/            index.html, styles.css, app.js
 public/            sw.js, manifest.webmanifest, icons/  — the installable part
@@ -634,6 +644,112 @@ subscriptions say where. `lib/reminders.js` decides and sends nothing;
 deciding testable — `scripts/reminder-smoke.mjs` hands it a particular Thursday
 in August.
 
+### What Camp is allowed to do
+
+Camp is a model in a room full of other people's writing, holding the keys to
+the trip. Both halves of that are the design: it is only useful if it can see
+the trip and change it, and it is only safe if neither of those is up to the
+model.
+
+**What it sees** is one snapshot, built by `campSnapshot()` from
+`getTripState(tripId, memberId)` — the same query, with the same viewer, that
+draws the asker's own screen. That is what makes the privacy line hold without a
+second rule to maintain: somebody else's personal kit is not filtered out of
+Camp's answer, it was never in the snapshot, because it is not in the trip as
+that person can see it. On top of the lists it carries the things a useful
+answer needs and a bare state dump does not have: today's date and every day of
+the trip with its weekday, who is coming and what they can eat, who is bringing
+and who has packed what, the ledger with its balances and the fewest handovers
+that would square it, the shared notes, the headings each list already uses, the
+last thirty things that happened to the trip, and the forecast — the same cached
+one the trip page draws, so two answers about Saturday cannot disagree.
+
+The last thirty things are the activity feed, which is the only history the app
+keeps: it answers "what changed while I was at work?", and because personal kit
+never reaches the feed it cannot answer that with somebody's private packing.
+The forecast goes further than the card does. A trip whose location was typed
+rather than picked has no pin, and the card stops there — Camp looks the words
+up through the same cache the *Where* box uses, forecasts for what it finds, and
+says that it guessed. The pin is used and not kept: a guess is not something to
+write into the trip.
+
+The dates are not a detail. A model given `2026-08-14` and no way to name it
+writes "Day 1: Breakfast", which is a shape where a meal plan should be. Given
+Friday, three people, one of them vegetarian and one who cannot eat nuts, it
+writes what to buy.
+
+**What it changes** it changes by ref. Every row in the snapshot carries a short
+handle — `i7`, `e2` — that means nothing outside the run it was made in, and
+tools take those rather than database ids. So Camp can only reach a row it was
+shown: a guessed id resolves to nothing, and a row from another trip cannot be
+named at all. Each tool then goes through the same validation as the screen that
+does the same job — `insertTripItems()`, `expenseFields()`, `mayTouch()` — so a
+thing added by asking is the same row as a thing added by tapping, with the same
+refusals and the same line in the activity feed. The feed says *Camp*, because
+it was.
+
+**What stops it** is not in the prompt. Four things are decided or counted in
+code, before the model has a say:
+
+- *Nothing changes on a question.* Whether this turn can write at all is decided
+  from the requester's own words by `campWriteIntent()`, before the request is
+  built. A message that only asks something is sent no tools — not tools with a
+  paragraph asking the model to leave them alone, no tools at all — so a
+  question cannot become a write, whatever the model decides and whatever an
+  item title on the trip has been named in the hope of being read as an
+  instruction. It errs towards not writing: guessing wrong that way costs a
+  sentence, and the person says the word. A tool call that arrives anyway, on a
+  turn that was given none, is answered rather than run.
+- *Deletion is proposed, never decided.* A removal tool writes nothing. It
+  resolves the refs to real rows, puts the exact ids aside, and returns them, so
+  Camp can list back what would go and ask. If the next thing that person says
+  is a plain yes, the server deletes those ids — before the model runs again,
+  from the ids it stored, so what goes is what was agreed to and not what the
+  model decides on the second pass. Anything that is not a plain yes throws the
+  proposal away. There is deliberately no regex trying to read destructive
+  intent out of a sentence: "don't delete the pitch fee" contains the words for
+  deleting the pitch fee, and "drop Alex from the tent" should never have been
+  able to authorise touching money.
+- *Budgets.* Twenty adds, twenty edits, ten deletions and ten money changes per
+  answer, counted as the tools run rather than requested in words. A model that
+  has misread one sentence can be wrong about twenty things and not two hundred.
+  Money has a ceiling too: five figures is a typo, not a pitch fee. A person gets
+  twenty answers an hour, which is the only thing between a shared trip link and
+  somebody else's API bill.
+- *Whose ticks.* A packed tick is a statement about one person. Camp only ever
+  ticks the requester's own, the same rule `POST /items/:id/packed` enforces.
+
+Writes are checked against the trip as it was read, not as it was left. The
+shared notes are one field holding everything anybody has written down and Camp
+rewrites the whole of it, so that write only lands if the notes still say what
+the snapshot said — somebody adding the gate code from their phone while the
+model is talking wins, and Camp is told to read them again.
+
+The prompt does the rest of the work — staying on the trip, refusing the essay,
+being specific about Saturday's dinner — and the prompt is also where the
+untrusted data is named as untrusted. The snapshot and the message arrive as two
+separate turns: this is the trip, and this is the one person asking for
+something. Everything in the first is data written by people on the trip, item
+titles and notes and older messages included, however imperative it sounds. None
+of that is load-bearing on its own; it is the sentence that explains the four
+rules above, which are.
+
+Some things Camp deliberately cannot do. It cannot set where the trip is, which
+needs the place search so the map pin comes with the words; it cannot add or
+remove people; it cannot send a notification. Each of those is a sentence it
+says instead, pointing at the screen that can.
+
+`lib/camp.js` holds the snapshot and the tools and touches nothing but the
+database, which is what makes `scripts/camp-smoke.mjs` possible: it walks a trip
+through the whole surface — the privacy cut, a guessed ref, a deletion asked for
+and a deletion not, the budgets running out, a membership disappearing mid-run —
+without an API key anywhere near it — and `scripts/camp-run-smoke.mjs` puts a
+stub model behind the real server to check the half that lib cannot see: that a
+question carries no tools, that a tool call invented anyway is refused rather
+than run, and that a proposed deletion waits for the yes. `server.js` keeps the
+streaming, the queue and the hourly allowance, and knows nothing about what a
+tool means.
+
 ### Installing it
 
 `manifest.webmanifest` and `public/sw.js` are what make it an app you can add
@@ -858,6 +974,8 @@ a door used to be.
 | `DEV_AUTH_BYPASS`  | `0`                 | Set to `1` for development-only sign-in.   |
 | `OPENAI_API_KEY`   | empty               | Enables `@camp`; keep it server-side.       |
 | `OPENAI_MODEL`     | `gpt-5.6-luna`      | Responses API model used by `@camp`.        |
+| `PLACES_URL`       | OpenStreetMap Nominatim | Override to self-host or to answer for it. |
+| `WEATHER_URL`      | Open-Meteo forecast | Override to self-host or to answer for it.  |
 | `VAPID_PUBLIC_KEY` | generated in DB     | Optional fixed Web Push application key.    |
 | `VAPID_PRIVATE_KEY`| generated in DB     | Pair with `VAPID_PUBLIC_KEY`; keep secret.   |
 | `VAPID_SUBJECT`    | app notification email | Web Push contact URI (`mailto:` or URL).  |
