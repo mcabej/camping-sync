@@ -1353,6 +1353,15 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
    ask for the attention a forecast would. */
 .card--quiet { box-shadow: none; background: var(--paper-sunk); }
 
+/* The way out of the trip, last on the page. Sunk paper and no shadow, because
+   it is the end of the page rather than another card competing with the weather
+   — findable when you are looking for it, and not otherwise. The delete goes in
+   the quiet button for the same reason the × on a list row does: removing
+   something is available, never inviting. */
+.trip-exit { box-shadow: none; background: var(--paper-sunk); }
+.trip-exit__acts { display: flex; flex-wrap: wrap; gap: 10px; }
+.trip-exit > .trip-exit__note { margin: 12px 0 0; font-size: 13px; color: var(--ink-faint); }
+
 /* The notes are the one piece of writing on the page, so they keep their line
    breaks and the ink of body copy rather than the grey of a caption. */
 .card .notes { white-space: pre-wrap; color: var(--ink); font-size: 15px; overflow-wrap: anywhere; }
@@ -2588,12 +2597,15 @@ button.wx__day:hover .wx__wet, .wx__row--open .wx__wet { color: var(--ink); }
 
 /* The address or the link, where the clipboard would not take it. Read-only
    and selected on arrival, so it is one long-press from being copied by hand —
-   and monospaced, because a URL is a thing you check character by character. */
-.ask__copy {
+   and monospaced, because a URL is a thing you check character by character.
+   The confirmation box is the same shape: a trip code read off the card above
+   and typed back in is the same kind of string, checked the same way. */
+.ask__copy, .ask__word {
   width: 100%; padding: 12px 14px; border-radius: var(--r-md);
   background: var(--paper); border: 1.5px solid var(--line-strong);
   font-family: var(--mono); font-size: 14px;
 }
+.ask__word::placeholder { color: var(--ink-faint); }
 
 /* ==========================================================================
    Toast

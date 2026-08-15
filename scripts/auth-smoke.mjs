@@ -8,7 +8,7 @@ const path = `/tmp/camping-sync-auth-${process.pid}.db`
 process.env.DB_PATH = path
 
 try {
-  const { db, getTripState, now } = await import('../lib/db.js')
+  const { db, getTripState, deleteTrip, now } = await import('../lib/db.js')
   const ts = now()
 
   db.prepare('INSERT INTO trips (id, name, created_at) VALUES (?, ?, ?)').run('trip', 'Auth trip', ts)
@@ -81,6 +81,67 @@ try {
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM sessions').get().n, 0)
   assert.equal(db.prepare('SELECT user_id FROM members WHERE id = ?').get('legacy').user_id, null)
   assert.equal(db.prepare('SELECT legacy_claimable FROM members WHERE id = ?').get('legacy').legacy_claimable, 0)
+
+  // ---- deleting the whole trip --------------------------------------------
+
+  // Who started it is the account, and it is not trip state: everybody on a
+  // trip can read every other member's name, and none of them can read an id
+  // that would follow that person onto their other trips.
+  db.prepare(`INSERT INTO users (id, name, email, picture, created_at, updated_at)
+              VALUES ('owner', 'Kim', '', '', ?, ?)`).run(ts, ts)
+  db.prepare(`INSERT INTO trips (id, name, created_by, created_at)
+              VALUES ('mine', 'Kim''s trip', 'owner', ?)`).run(ts)
+  db.prepare(`INSERT INTO members (id, trip_id, user_id, name, created_at)
+              VALUES ('kim', 'mine', 'owner', 'Kim', ?)`).run(ts)
+  db.prepare(`INSERT INTO members (id, trip_id, name, created_at)
+              VALUES ('guest', 'mine', 'Pat', ?)`).run(ts)
+
+  assert.equal(getTripState('mine', 'kim').owner, true)
+  assert.equal(getTripState('mine', 'guest').owner, false)
+  assert.equal(getTripState('mine', null).owner, false)
+  assert.equal(getTripState('mine', 'kim').trip.created_by, undefined)
+  // Two unknowns are not a match. A trip nobody owns is not owned by every
+  // member who never signed in.
+  db.prepare(`INSERT INTO trips (id, name, created_at) VALUES ('nobodys', 'Old trip', ?)`).run(ts)
+  db.prepare(`INSERT INTO members (id, trip_id, name, created_at)
+              VALUES ('anon', 'nobodys', 'Sam', ?)`).run(ts)
+  assert.equal(getTripState('nobodys', 'anon').owner, false)
+
+  // The delete has to get past the money, which holds its members with
+  // RESTRICT so that an expense can never lose the person who paid for it.
+  // Left to the cascade this is a coin toss; the point of deleteTrip is that it
+  // is not one.
+  db.prepare(`INSERT INTO items (id, trip_id, list, title, created_at, updated_at)
+              VALUES ('stove', 'mine', 'gear', 'Stove', ?, ?)`).run(ts, ts)
+  db.prepare(`INSERT INTO claims (item_id, member_id) VALUES ('stove', 'kim')`).run()
+  db.prepare(`INSERT INTO expenses
+    (id, trip_id, item_id, claim_member_id, description, amount, paid_by, created_at, updated_at)
+    VALUES ('pitch', 'mine', 'stove', 'kim', 'Pitch fee', 4200, 'kim', ?, ?)`).run(ts, ts)
+  db.prepare(`INSERT INTO expense_participants (expense_id, member_id)
+              VALUES ('pitch', 'kim'), ('pitch', 'guest')`).run()
+  db.prepare(`INSERT INTO payments (id, trip_id, from_member, to_member, amount, created_at)
+              VALUES ('back', 'mine', 'guest', 'kim', 2100, ?)`).run(ts)
+  db.prepare(`INSERT INTO messages (id, trip_id, client_id, member_id, author_name, body, created_at)
+              VALUES (900, 'mine', 'c1', 'kim', 'Kim', 'Bring the stove', ?)`).run(ts)
+  db.prepare(`UPDATE trips SET pinned_message_id = 900 WHERE id = 'mine'`).run()
+  db.prepare(`INSERT INTO camp_messages (trip_id, member_id, client_id, body, created_at)
+              VALUES ('mine', 'guest', 'c2', 'Just between us', ?)`).run(ts)
+
+  assert.equal(deleteTrip('mine'), true)
+  assert.equal(getTripState('mine'), null)
+  for (const table of ['members', 'items', 'expenses', 'payments', 'messages', 'camp_messages', 'events']) {
+    assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE trip_id = 'mine'`).get().n, 0,
+      `${table} outlived the trip`)
+  }
+  assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM claims WHERE item_id = 'stove'`).get().n, 0)
+  assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM expense_participants
+                           WHERE expense_id = 'pitch'`).get().n, 0)
+  // The people are still people. A trip going does not take the accounts that
+  // were on it, and Kim's other trips are none of this one's business.
+  assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM users WHERE id = 'owner'`).get().n, 1)
+  assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM trips WHERE id = 'nobodys'`).get().n, 1)
+  // Deleting what is already gone is not an error, and is not a deletion either.
+  assert.equal(deleteTrip('mine'), false)
 
   db.close()
   console.log('auth migration smoke passed')

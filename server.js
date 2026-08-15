@@ -9,7 +9,7 @@ import OpenAI from 'openai'
 import webpush from 'web-push'
 import { WebSocket, WebSocketServer } from 'ws'
 import {
-  db, uid, now, newTripCode, bumpRev, logEvent, getTripState,
+  db, uid, now, newTripCode, bumpRev, logEvent, getTripState, deleteTrip,
 } from './lib/db.js'
 import { REMINDER_LEASE_MS, runReminders } from './lib/reminders.js'
 import { CATALOG, TIPS, WEATHER_ADVICE, catalogEntry } from './lib/catalog.js'
@@ -366,12 +366,16 @@ function closeMemberSockets(tripId, memberId) {
   }
 }
 
-function broadcastTripEvent(tripId, event) {
+// `exceptMemberId` is for the one event that is news to everybody but the person
+// who caused it: they are told by the answer to their own request, and hearing
+// it twice — once as "somebody deleted this trip" — is worse than not hearing it
+// at all. Everything else here is news to the whole room including its author.
+function broadcastTripEvent(tripId, event, { exceptMemberId = '' } = {}) {
   const payload = JSON.stringify(event)
   for (const socket of socketsByTrip.get(tripId) ?? []) {
     if (!socketAuthorized(socket)) {
       socket.close(4003, 'Membership changed')
-    } else if (socket.readyState === WebSocket.OPEN) {
+    } else if (socket.readyState === WebSocket.OPEN && socket.memberId !== exceptMemberId) {
       socket.send(payload)
     }
   }
@@ -1167,11 +1171,11 @@ app.post('/api/trips', (req, res) => {
   const ts = now()
 
   const [lat, lon] = coords(req.body)
-  db.prepare(`INSERT INTO trips (id, name, location, lat, lon, map_url, start_date, end_date, notes, currency, created_at)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?)`)
+  db.prepare(`INSERT INTO trips (id, name, location, lat, lon, map_url, start_date, end_date, notes, currency, created_by, created_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?)`)
     .run(id, name, tripField('location', req.body?.location), lat, lon,
       mapUrl(req.body?.map_url), clean(req.body?.start_date, 20), clean(req.body?.end_date, 20),
-      currencyField(req.body?.currency) ?? 'GBP', ts)
+      currencyField(req.body?.currency) ?? 'GBP', user.id, ts)
 
   let memberId = null
   if (organiser) {
@@ -1197,8 +1201,11 @@ app.get('/api/trips/:id', (req, res) => {
 // codes on every device. Together they become the home-page trip list.
 app.post('/api/trips/summary', (req, res) => {
   const wanted = (Array.isArray(req.body?.trips) ? req.body.trips : []).slice(0, 40)
-  const tripRow = db.prepare('SELECT id, name, location, start_date, end_date FROM trips WHERE id = ?')
-  const memberRow = db.prepare('SELECT name, hue FROM members WHERE id = ? AND trip_id = ?')
+  const tripRow = db.prepare(`SELECT id, name, location, start_date, end_date, created_by
+                              FROM trips WHERE id = ?`)
+  // The id comes back with the name and the colour because the card's one
+  // button now acts on the membership as well as on this device's memory of it.
+  const memberRow = db.prepare('SELECT id, name, hue FROM members WHERE id = ? AND trip_id = ?')
   const headcount = db.prepare('SELECT COUNT(*) AS c FROM members WHERE trip_id = ?')
   // Plans are not "brought" by anyone and personal kit is private, so the home
   // page counts the same thing the coverage bar does: shared things, and gaps.
@@ -1222,12 +1229,18 @@ app.post('/api/trips/summary', (req, res) => {
   for (const entry of wanted) {
     const id = clean(entry?.id, 64)
     if (!id) continue
-    const trip = tripRow.get(id)
+    const row = tripRow.get(id)
     // Trips that no longer exist are reported back so the device can forget them.
-    if (!trip) { missing.push(id); continue }
+    if (!row) { missing.push(id); continue }
     const me = viewerId(req, id, entry?.memberId)
+    // As in getTripState: the owner leaves as a yes or no, never as the account
+    // id it was decided from. Asked of the session rather than of the membership
+    // here, so a card still says whose trip it is to somebody who has been taken
+    // off it and can still delete what they started.
+    const { created_by: startedBy, ...trip } = row
     trips.push({
       ...trip,
+      owner: !!startedBy && startedBy === req.user?.id,
       members: headcount.get(id).c,
       shared: sharedCount.get(id).c,
       open: openCount.get(id).c,
@@ -1846,6 +1859,42 @@ app.patch('/api/trips/:id', (req, res) => {
   res.json(getTripState(trip.id, viewerId(req, trip.id)))
 })
 
+// The one thing on a trip that is not an edit to it. Everybody on a trip can
+// change everything on it — that is what makes it a shared list rather than
+// somebody's plan you have been cc'd on — but deleting is not a change: it takes
+// the lists, the plans, the room, the ledger and four other people's copy of all
+// of it, and there is nothing to put back. So it is the single act here that
+// belongs to one person, and that person is whoever started it.
+//
+// Checked against the account, not against the membership, because a membership
+// is not a credential on this trip: any member can remove any other member, so
+// an owner that had to be a current member would be an owner anybody could
+// become by removing them. It is also why leaving does not hand the trip on —
+// see created_by in lib/db.js.
+app.delete('/api/trips/:id', (req, res) => {
+  const user = requireUser(req, res)
+  if (!user) return
+  const trip = requireTrip(req, res)
+  if (!trip) return
+  if (!trip.created_by || trip.created_by !== user.id) {
+    return res.status(403).json({
+      error: 'Only whoever started this trip can delete it. You can leave it instead.',
+    })
+  }
+
+  // Said while the trip is still there to say it about. Every socket on it is
+  // authorised by a membership that is one statement away from not existing, so
+  // afterwards the only thing these could be told is that they had been removed
+  // from the trip — which is what being dropped by somebody looks like, and is
+  // not what happened.
+  broadcastTripEvent(trip.id, { type: 'trip.deleted' },
+    { exceptMemberId: viewerId(req, trip.id) ?? '' })
+  deleteTrip(trip.id)
+  for (const socket of [...(socketsByTrip.get(trip.id) ?? [])]) socket.close(4004, 'Trip deleted')
+  socketsByTrip.delete(trip.id)
+  res.json({ ok: true })
+})
+
 // ---- expenses --------------------------------------------------------------
 
 app.post('/api/trips/:id/expenses', (req, res) => {
@@ -2097,12 +2146,22 @@ app.patch('/api/trips/:id/members/:mid', (req, res) => {
   res.json(getTripState(trip.id, viewerId(req, trip.id)))
 })
 
+// Taking somebody off the trip, and — with your own id — the way off it
+// yourself. One route for both, because they are the same row going and the same
+// consequences following it; what differs is only who is being told about it,
+// and that is the feed's business rather than the rule's. Leaving is every
+// member's to do, including the person who started the trip: their claim on it
+// is the account's and stays put, so they can still delete what they started
+// afterwards rather than being made to choose between staying on a trip they are
+// not going on and taking it away from everybody who is.
 app.delete('/api/trips/:id/members/:mid', (req, res) => {
   const trip = requireTrip(req, res)
   if (!trip) return
-  if (!requireMember(req, res, trip.id)) return
+  const me = requireMember(req, res, trip.id)
+  if (!me) return
   const m = db.prepare('SELECT * FROM members WHERE id = ? AND trip_id = ?').get(req.params.mid, trip.id)
   if (m) {
+    const self = m.id === me
     const costs = db.prepare(`SELECT COUNT(DISTINCT e.id) AS n FROM expenses e
       LEFT JOIN expense_participants p ON p.expense_id = e.id
       WHERE e.trip_id = ? AND (e.paid_by = ? OR p.member_id = ?)`)
@@ -2112,8 +2171,16 @@ app.delete('/api/trips/:id/members/:mid', (req, res) => {
     const paid = db.prepare(`SELECT COUNT(*) AS n FROM payments
       WHERE trip_id = ? AND (from_member = ? OR to_member = ?)`).get(trip.id, m.id, m.id).n
     if (costs || paid) {
-      return res.status(400).json({ error: `Clear or move ${m.name}'s recorded costs before removing them.` })
+      return res.status(400).json({
+        error: self
+          ? 'Settle up or hand over your share of the costs before you leave.'
+          : `Clear or move ${m.name}'s recorded costs before removing them.`,
+      })
     }
+    // Read before the row goes. Removing somebody else leaves the person doing
+    // it on the trip to be named; leaving does not, and a line in the feed
+    // saying that nobody left the trip is worse than no line at all.
+    const who = actorName(trip.id, req)
     // What they had put their name to goes back to nobody — claims cascade with
     // the member, and each carried that person's own packed tick with it. An
     // expense survives as a free-standing row once its item shortcut is gone.
@@ -2121,7 +2188,7 @@ app.delete('/api/trips/:id/members/:mid', (req, res) => {
                 WHERE claim_member_id = ?`).run(m.id)
     db.prepare('DELETE FROM members WHERE id = ?').run(m.id)
     closeMemberSockets(trip.id, m.id)
-    logEvent(trip.id, actorName(trip.id, req), `removed ${m.name} from the trip`)
+    logEvent(trip.id, who, self ? 'left the trip' : `removed ${m.name} from the trip`)
     bumpRev(trip.id)
   }
   res.json(getTripState(trip.id, viewerId(req, trip.id)))

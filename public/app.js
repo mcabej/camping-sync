@@ -204,6 +204,11 @@ const S = {
   // which is where every tab starts — and where it goes back to when you leave.
   filter: { day: '', kind: '', cat: '', hide: false, q: '' },
   trip: null, members: [], items: [], expenses: [], payments: [], events: [],
+  // Whether the person reading this is the one who started the trip, which is
+  // the one thing on it they can do that nobody else can: delete it. A bit
+  // rather than an id, because who that is is the server's business — see
+  // created_by in lib/db.js.
+  owner: false,
   // The one pinned message, as the server resolves it: `{ id, author, assistant,
   // body, at }` or null. Trip state rather than chat state, because it is what
   // the trip is currently waiting on and it changes when the trip does.
@@ -462,6 +467,32 @@ function ask({ title, blurb = '', yes = 'OK', no = 'Cancel' }) {
   }))
 }
 
+// The same question with the trip's own code to be typed into it, and the one
+// place in this app that asks for more than a tap. Everything else a button can
+// do here comes back: an item, a claim, a payment, a whole member. Deleting a
+// trip does not, and it is not only yours to lose — so the confirmation asks for
+// something a mis-tap cannot produce. The code rather than the name because it
+// is short, it is the thing on the invitation everybody already has, and typing
+// it is exactly the evidence that you know which trip this is.
+//
+// The button starts refused rather than hidden: a dialog whose only visible
+// answer is Cancel reads as one you cannot get out of, and a greyed Delete says
+// what the box is for.
+function askWord({ title, blurb = '', word, yes = 'OK', no = 'Cancel' }) {
+  return openAsk(askShell({
+    title,
+    blurb,
+    body: `<div class="ask__body">
+      <input class="ask__word" data-ask-word="${esc(String(word).trim().toLowerCase())}"
+             placeholder="${esc(word)}" aria-label="Type ${esc(word)} to confirm"
+             autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" autofocus>
+    </div>`,
+    acts: `
+      <button class="btn" data-ask="no">${esc(no)}</button>
+      <button class="btn btn--primary" data-ask="yes" disabled>${esc(yes)}</button>`,
+  }))
+}
+
 // The fallback when the clipboard will not take something — an old browser, or
 // a page the OS has decided is not allowed to write to it. There is nothing to
 // answer here: the text is the whole point, sitting selected in a box, one
@@ -477,6 +508,16 @@ function askCopy({ title, blurb = '', value }) {
     acts: `<button class="btn btn--primary" data-ask="yes">Done</button>`,
   }))
 }
+
+// The typed confirmation, checked as it is typed. Case and stray spaces are
+// forgiven — a phone that capitalises the first letter of everything is not
+// somebody who meant a different trip.
+askRoot.addEventListener('input', (ev) => {
+  const box = ev.target.closest?.('[data-ask-word]')
+  if (!box) return
+  const go = askRoot.querySelector('[data-ask="yes"]')
+  if (go) go.disabled = String(box.value).trim().toLowerCase() !== box.dataset.askWord
+})
 
 askRoot.addEventListener('click', (ev) => {
   const hit = ev.target.closest('[data-ask]')
@@ -511,6 +552,11 @@ async function api(path, opts = {}) {
     // needs the body, not just the message, so it rides along on the error.
     const err = new Error(data.error || 'Something went wrong. Try again.')
     err.payload = data
+    // And some are a fact about the trip rather than about the request: a poll
+    // that comes back "no trip with that code" is how a page finds out it has
+    // been deleted out from under it, and a sentence is not something to read
+    // that out of.
+    err.status = res.status
     throw err
   }
   return data
@@ -528,6 +574,7 @@ function absorb(state) {
   S.payments = state.payments ?? []
   S.events = state.events
   S.pinned = state.pinned ?? null
+  S.owner = !!state.owner
   S.rev = state.trip.rev
   render()
 }
@@ -1585,6 +1632,11 @@ function connectChatSocket(tripId) {
         // across two screens about what you had just deleted.
         if (S.ask.tripId === tripId) clearAskThread()
         if (onAskPage()) render()
+      } else if (data.type === 'trip.deleted') {
+        // Sent while the trip still existed to send it about, so it arrives
+        // before the socket closes. Everything after this — the reconnect, the
+        // next poll — would find nothing and say nothing.
+        tripDeleted(tripId)
       } else if (data.type?.startsWith('assistant.')) {
         receiveAssistantEvent(data)
       }
@@ -2757,7 +2809,9 @@ function tripCard(t) {
         </span>
       </a>
       <button class="trip-card__forget" data-act="forget-trip" data-id="${esc(t.id)}"
-              aria-label="Remove ${esc(t.name)} from this device">${ICONS.x}</button>
+              aria-label="${t.owner ? `Delete ${esc(t.name)}`
+                : t.you ? `Leave ${esc(t.name)}`
+                  : `Remove ${esc(t.name)} from this device`}">${ICONS.x}</button>
     </div>`
 }
 
@@ -4852,7 +4906,46 @@ function campPage() {
         </div>
         ${moreBtn('tips', S.tips.length, 3)}
       </div>`}
+
+      ${exitCard()}
     </main>`
+}
+
+// The way out of the trip itself, at the foot of the page and nowhere else. Not
+// up in the topbar beside the fingerpost: that is the way out of the page you
+// are reading, which you use twenty times a weekend. This is used once, and
+// having scrolled past everything it is about to take with you is the right
+// amount of trouble to have gone to.
+//
+// Which door you get is not a permission the app is being coy about. Somebody
+// who joined a trip can take themselves off it and nothing more; the person who
+// started it is the only one who can take it away from everybody, and is told so
+// in those words. Nobody is shown a button that will refuse them.
+function exitCard() {
+  if (!S.me) return ''
+  const others = S.members.length - 1
+
+  if (!S.owner) {
+    return `
+      <div class="card trip-exit">
+        <h3>Leave this trip</h3>
+        <p>It comes off your list everywhere, not just on this phone. Anything you said you would bring goes back to nobody, and your private thread with Camp goes with you. The trip carries on without you, and the link still lets you back in.</p>
+        <button class="btn" data-act="leave-trip">Leave trip</button>
+      </div>`
+  }
+
+  return `
+    <div class="card trip-exit">
+      <h3>Delete this trip</h3>
+      <p>You started this one, so you are the only person who can take it down${others
+        ? ` — and it goes for all ${others + 1} of you at once`
+        : ''}. The lists, the plans, the room and the ledger go with it, and nothing brings any of it back.</p>
+      <div class="trip-exit__acts">
+        ${others ? '<button class="btn" data-act="leave-trip">Just leave it</button>' : ''}
+        <button class="btn btn--quiet" data-act="delete-trip">Delete trip</button>
+      </div>
+      ${others ? '<p class="trip-exit__note">Leaving takes your own name off and leaves the trip standing for everyone else.</p>' : ''}
+    </div>`
 }
 
 // What the badge on a tab counts. For a list it is the group's open question —
@@ -6105,11 +6198,134 @@ function localTrips() {
 const saveTrips = (ids) => localStorage.setItem(TRIPS_KEY, JSON.stringify(ids.slice(0, 40)))
 const rememberTrip = (id) => saveTrips([id, ...localTrips().filter((t) => t !== id)])
 
+// Where the worker keeps the last trip state the server sent. Named here as
+// well as there because the page is the half that knows a trip has stopped
+// being yours; it must match DATA in public/sw.js.
+const DATA_CACHE = 'data-v1'
+
+// The offline copy goes with the trip. The worker keeps the last answer for
+// each trip so the app opens in a field with no bars, and a trip you have just
+// deleted or walked away from is not a page that should still read back on this
+// phone tomorrow. Best-effort on purpose: a browser with no Cache API, or one
+// that refuses it in a private window, is not a reason to fail something the
+// server has already done.
+function dropCachedTrip(id) {
+  if (typeof caches === 'undefined' || typeof caches.open !== 'function') return
+  const trip = `/api/trips/${encodeURIComponent(id)}`
+  caches.open(DATA_CACHE).then(async (cache) => {
+    // Both cacheable reads for a trip, and every variant of them: these vary by
+    // who asked, and the messages are fetched with a cursor on the query string.
+    for (const path of [trip, `${trip}/messages`]) {
+      await cache.delete(path, { ignoreVary: true, ignoreSearch: true })
+    }
+  }).catch(() => { /* the cache is a convenience, not a record */ })
+}
+
 function forgetTrip(id) {
   saveTrips(localTrips().filter((t) => t !== id))
   localStorage.removeItem(meKey(id))
   localStorage.removeItem(foldsKey(id))
+  dropCachedTrip(id)
   if (S.trips) S.trips = S.trips.filter((t) => t.id !== id)
+}
+
+// Back to the home page from a trip that is no longer there to be on. A replace
+// rather than a push, because the entry underneath is the trip itself and
+// pushing would leave the back button pointing at a page that cannot be loaded
+// any more. The trip in memory goes too: the poll and the socket both ask "am I
+// still on a trip?" before they do anything, and a dead one left lying there is
+// a page trying to sync with something that has gone.
+async function goHome() {
+  S.camp = false
+  S.trip = null
+  S.me = null
+  S.owner = false
+  stopChatSocket()
+  history.replaceState({}, '', '/')
+  await showLanding()
+  window.scrollTo(0, 0)
+}
+
+// Off the trip on the server first, then off this device — in that order,
+// because the local half is the one that can be undone by opening the link
+// again. A refusal, which is nearly always money still in your name, leaves you
+// exactly where you were with the reason on screen.
+async function leaveTrip(tripId, memberId) {
+  if (S.busy) return false
+  S.busy = true
+  try {
+    await api(`/trips/${tripId}/members/${memberId}`, { method: 'DELETE' })
+  } catch (err) {
+    toast(err.message)
+    return false
+  } finally {
+    S.busy = false
+  }
+  forgetTrip(tripId)
+  return true
+}
+
+// The whole trip, for everybody. Only ever reached through a typed confirmation
+// — see askWord — and only ever offered to the person the server already agrees
+// started it, which is checked again there.
+async function deleteTrip(tripId) {
+  if (S.busy) return false
+  S.busy = true
+  try {
+    await api(`/trips/${tripId}`, { method: 'DELETE' })
+  } catch (err) {
+    toast(err.message)
+    return false
+  } finally {
+    S.busy = false
+  }
+  forgetTrip(tripId)
+  return true
+}
+
+// The two questions, asked in one place so the home page and the trip page ask
+// them in the same words. Both return whether it actually happened, which is not
+// the same as whether it was agreed to: the server can still refuse.
+async function confirmLeaveTrip({ id, name, memberId }) {
+  const agreed = await ask({
+    title: `Leave “${name}”?`,
+    blurb: 'It comes off your list on every device. Anything you were bringing goes back to nobody, and your private thread with Camp goes with you. The link still works if you come back.',
+    yes: 'Leave the trip',
+  })
+  return agreed ? leaveTrip(id, memberId) : false
+}
+
+// Sized to what it costs. On a trip that is only you it is one tap — there is
+// nobody else's weekend in it — and the moment anybody else has joined it asks
+// for the code and says how many people that is.
+async function confirmDeleteTrip({ id, name, others }) {
+  const agreed = others > 0
+    ? await askWord({
+      title: `Delete “${name}” for everyone?`,
+      blurb: `${others === 1 ? 'One other person is' : `${others} other people are`} on this trip. The lists, the plans, the room and the ledger go for all of you, and nothing brings them back. Type the trip's code to confirm.`,
+      word: id,
+      yes: 'Delete the trip',
+    })
+    : await ask({
+      title: `Delete “${name}”?`,
+      blurb: 'Nobody else is on it. Everything on it goes, and nothing brings it back.',
+      yes: 'Delete the trip',
+    })
+  return agreed ? deleteTrip(id) : false
+}
+
+// Somebody else deleted the trip you are standing on. Every other way this app
+// finds out something changed ends in a refetch; this is the one where there is
+// nothing left to fetch, so it says what happened and takes you home rather than
+// leaving a page that has quietly stopped answering.
+async function tripDeleted(tripId) {
+  forgetTrip(tripId)
+  if (S.trip?.id !== tripId) {
+    render()
+    return
+  }
+  await goHome()
+  toast('That trip was deleted by whoever started it.')
 }
 
 // The summary is a POST, which the worker cannot cache — and an installed app
@@ -6466,12 +6682,37 @@ document.addEventListener('click', async (ev) => {
       window.scrollTo(0, 0)
       break
 
+    // This button has always meant one thing — take this off my list — and it
+    // now does it properly, which means three different things underneath.
+    // Forgetting a trip locally was only ever the truth for a device that had
+    // never joined it: for a member the account puts the card straight back on
+    // the next visit, so the ×, honestly kept, is leaving. And to whoever
+    // started the trip, "off my list" is not something they can have without
+    // deciding what happens to everybody else's copy, so they are asked that
+    // instead — behind the typed code, because this is a small button.
     case 'forget-trip': {
       const t = (S.trips ?? []).find((x) => x.id === el.dataset.id)
       if (!t) break
+
+      if (t.owner) {
+        if (!(await confirmDeleteTrip({
+          id: t.id, name: t.name, others: Math.max(0, (t.members ?? 0) - (t.you ? 1 : 0)),
+        }))) break
+        render()
+        toast('Trip deleted.')
+        break
+      }
+
+      if (t.you?.id) {
+        if (!(await confirmLeaveTrip({ id: t.id, name: t.name, memberId: t.you.id }))) break
+        render()
+        toast('You have left the trip.')
+        break
+      }
+
       const off = await ask({
         title: `Take "${t.name}" off this device?`,
-        blurb: 'The trip itself stays put, and the link still works.',
+        blurb: 'You never joined this one, so there is nothing to leave. The trip stays put, and the link still works.',
         yes: 'Take it off',
       })
       if (!off) break
@@ -7058,6 +7299,25 @@ document.addEventListener('click', async (ev) => {
       if (out) mutate(() => api(`/trips/${S.trip.id}/members/${m.id}`, { method: 'DELETE' }))
       break
     }
+
+    // The same row as drop-member, asked of yourself. It is a separate action
+    // because what happens afterwards is not a redraw of the trip page: you are
+    // not on that trip any more, and the page has to go somewhere.
+    case 'leave-trip':
+      if (!S.trip || !S.me) break
+      if (!(await confirmLeaveTrip({ id: S.trip.id, name: S.trip.name, memberId: S.me }))) break
+      await goHome()
+      toast('You have left the trip.')
+      break
+
+    case 'delete-trip':
+      if (!S.trip) break
+      if (!(await confirmDeleteTrip({
+        id: S.trip.id, name: S.trip.name, others: Math.max(0, S.members.length - 1),
+      }))) break
+      await goHome()
+      toast('Trip deleted.')
+      break
 
     case 'open-item':
       S.sheet = { kind: 'item', id: el.dataset.id }
@@ -8064,14 +8324,22 @@ async function pollMessages() {
 async function poll() {
   if (S.view !== 'trip' || !S.trip || document.hidden || S.busy) return
   await pollMessages()
+  const tripId = S.trip.id
   try {
-    const { rev } = await api(`/trips/${S.trip.id}/rev`)
+    const { rev } = await api(`/trips/${tripId}/rev`)
     if (rev !== S.rev) {
       // Don't yank the page out from under someone mid-edit.
       if (isEditing()) return
-      absorb(await api(`/trips/${S.trip.id}`))
+      absorb(await api(`/trips/${tripId}`))
     }
-  } catch { /* offline; try again next tick */ }
+  } catch (err) {
+    // The other half of hearing about a deletion, and the half that catches a
+    // phone that was asleep or out of signal when the socket said so. A trip
+    // that is not there is not a bad connection, and pretending otherwise
+    // leaves somebody reading a weekend that no longer exists.
+    if (err.status === 404) await tripDeleted(tripId)
+    /* anything else is offline; try again next tick */
+  }
 }
 
 setInterval(poll, 5000)

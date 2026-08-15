@@ -155,7 +155,7 @@ const hooks = ['S', 'render', 'viewTrip', 'renderSheet', 'CAMP', 'TABS',
   'clearComposer', 'watchKeyboard',
   'campMentionRange', 'completeCampMention',
   'settlement', 'customExpenseShares', 'googleSignIn', 'tripRoute', 'isEditing', 'unsaved', 'restore',
-  'ask', 'askCopy', 'closeAsk',
+  'ask', 'askCopy', 'askWord', 'closeAsk',
   'loadPrefs', 'savePrefs', 'applyTheme', 'viewSettings', 'showSettings', 'leaveSettings',
   'isSettingsRoute', 'FEATURES', 'THEMES', 'PREFS_KEY', 'FACES',
   'pushTripView', 'leaveFocus', 'receiveAssistantEvent', 'clearAskThread', 'ICONS']
@@ -172,7 +172,7 @@ const { __S: S, __render: render, __viewTrip: viewTrip, __renderSheet: renderShe
   __settlement: settlement, __customExpenseShares: customExpenseShares,
   __googleSignIn: googleSignIn, __tripRoute: tripRoute, __isEditing: isEditing,
   __unsaved: unsaved, __restore: restore,
-  __ask: ask, __askCopy: askCopy, __closeAsk: closeAsk,
+  __ask: ask, __askCopy: askCopy, __askWord: askWord, __closeAsk: closeAsk,
   __loadPrefs: loadPrefs, __savePrefs: savePrefs, __applyTheme: applyTheme,
   __viewSettings: viewSettings, __showSettings: showSettings, __leaveSettings: leaveSettings,
   __isSettingsRoute: isSettingsRoute, __FEATURES: FEATURES, __THEMES: THEMES,
@@ -1683,6 +1683,52 @@ const copyAsk = roots['ask-root'].innerHTML
 check('the clipboard fallback hands the text over to be copied by hand',
   find(copyAsk, 'value="http://x/t/pine-camp-123"') && find(copyAsk, 'readonly'))
 closeAsk(true)
+
+// ---- the way out of a trip ---------------------------------------------------
+
+section('Leaving, and deleting')
+
+S.view = 'trip'
+S.camp = 'overview'
+S.me = 'm1'
+S.owner = false
+
+const asMember = viewTrip()
+check('somebody who joined is offered the way off the trip',
+  find(asMember, 'data-act="leave-trip"'))
+check('and never the way to take it off everybody else',
+  !find(asMember, 'data-act="delete-trip"'))
+check('the card says plainly that this is not just this phone',
+  find(asMember, 'not just on this phone'))
+
+S.owner = true
+const asOwner = viewTrip()
+check('whoever started it gets the delete', find(asOwner, 'data-act="delete-trip"'))
+check('and can still just leave rather than take four people down with them',
+  find(asOwner, 'data-act="leave-trip"'))
+check('the card counts who else it would go for', find(asOwner, 'all 4 of you'))
+
+const wholeTrip = S.members
+S.members = [wholeTrip[0]]
+check('alone on a trip you started, leaving it is not one of the answers',
+  !find(viewTrip(), 'data-act="leave-trip"'))
+S.members = wholeTrip
+
+S.me = null
+const asStranger = viewTrip()
+check('a link opened by somebody who never joined offers neither',
+  !find(asStranger, 'data-act="leave-trip"') && !find(asStranger, 'data-act="delete-trip"'))
+S.me = 'm1'
+S.owner = false
+
+// The one confirmation in the app that asks for more than a tap.
+askWord({ title: 'Delete “Wasdale Weekend” for everyone?', word: 'Pine-Camp-123', yes: 'Delete the trip' })
+const wordAsk = roots['ask-root'].innerHTML
+check('deleting a trip asks for its code to be typed back',
+  find(wordAsk, 'data-ask-word="pine-camp-123"'))
+check('and refuses to delete anything until it has been',
+  find(wordAsk, 'data-ask="yes" disabled'))
+closeAsk(false)
 
 // The two views that are not the trip.
 S.sheet = null; S.view = 'landing'; S.trips = []; render()

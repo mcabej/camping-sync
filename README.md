@@ -104,6 +104,10 @@ lost in a separate group chat.
   carried out immediately; see
   [What Camp is allowed to do](#what-camp-is-allowed-to-do).
 - **Activity feed** — who added, claimed, packed or dropped what.
+- **Leaving, and deleting** — anyone can take themselves off a trip, on every
+  device rather than just this one. Deleting it for everybody belongs to
+  whoever started it, and asks for the trip's code to be typed before it goes.
+  See [Leaving, and deleting](#leaving-and-deleting).
 - **Installs, and works without a signal** — add it to a home screen and it
   opens full-screen showing the last state the server sent, which is the state
   that matters once you are at the campsite and the bars have gone.
@@ -157,6 +161,10 @@ optional `reply_to` naming the one message a reply answers. See *Quoted
 replies*. `camp_messages` is the other conversation — one thread per member per
 trip, which nobody else can read — and it is deliberately a separate table
 rather than a column on `messages`. See *Asking Camp on your own*.
+
+A trip also carries `created_by`: the account that started it, and the only
+thing about a trip that is not every member's to change. It is what deleting the
+whole trip is checked against. See *Leaving, and deleting*.
 
 An item's `kind` decides how it's tracked, and the two are mutually exclusive:
 
@@ -1016,6 +1024,81 @@ client secret is used by the Google Identity Services ID-token flow.
 For local or LAN testing without Google, set `DEV_AUTH_BYPASS=1` in `.env.local`
 and use **Continue as developer**. The bypass is opt-in and is ignored whenever
 `NODE_ENV=production`.
+
+### Leaving, and deleting
+
+Two different things, and the app is careful not to let either stand in for the
+other.
+
+**Leaving** is every member's, including the person who started the trip. It is
+the same row going as when somebody is removed from the roster — `DELETE
+/api/trips/:id/members/:mid` with your own id — so the same things follow it:
+claims cascade away and what you were bringing goes back to nobody, your private
+Camp thread goes with you, and your alerts for the trip stop. Money is the one
+thing that can refuse you, exactly as it refuses removing anybody else: an
+expense or a payment with your name on it must be cleared or handed over first,
+because a repayment missing one of its two people is not a record of anything.
+The feed says *left the trip* rather than *removed X*, read from the actor's
+name before the row goes. The trip carries on, and the link still lets you back
+in.
+
+**Deleting** takes the lists, the plans, the room, the ledger and everybody
+else's copy of all of it. It belongs to one person: `trips.created_by`, the
+account that started the trip, written at creation and backfilled on boot from
+each existing trip's first member. It is checked against the account rather than
+against a membership on purpose — any member can remove any other member, so an
+owner that had to be a current member would be an owner anybody could become by
+removing them. For the same reason leaving does not hand the trip on: somebody
+who started a trip, then dropped out of it, can still take it down.
+
+Trips whose first member never signed in have no owner and cannot be deleted for
+everybody. That is the safe way round for a question with no answer — leaving is
+still each person's to do.
+
+`deleteTrip()` in `lib/db.js` does the work in one transaction. Most of the trip
+goes by cascade, but money holds its members with `ON DELETE RESTRICT` so that an
+expense can never lose the person who paid for it, and SQLite checks `RESTRICT`
+as each row is written whether or not the constraint has been deferred — left to
+the cascade alone it is a coin toss between reaching the expenses before the
+members and failing outright. So the ledger comes down by hand first, innermost
+first, and the cascade is handed a trip whose money no longer points at anybody.
+
+`created_by` never leaves the server. `getTripState` and the home-page summary
+both replace it with one bit — `owner` — for the same reason members are sent
+without their `user_id`: an account id would follow that person onto their other
+trips.
+
+Camp cannot do either of these. Its tools are the ones the screens have — items,
+claims, ticks, diets, trip details, money — and deleting a trip is not one of
+them; see *What Camp is allowed to do*.
+
+On screen there are three doors, and everybody is shown the one that is theirs
+rather than a button that will refuse them:
+
+- The foot of the Trip tab carries the way out. A member gets *Leave trip*;
+  whoever started it gets *Delete trip*, and *Just leave it* alongside when
+  other people are on it — otherwise the only way off a trip you started would
+  be to take it away from the four people still going.
+- The × on a home-page card means what it always meant, *take this off my list*,
+  and now does it honestly. For a device that never joined, that is still
+  forgetting it locally. For a member it is leaving: forgetting a membership
+  locally was a lie, because the account puts the card back on the next visit.
+  For the owner it is the delete.
+- An open page finds out from the socket (`trip.deleted`, sent while the trip is
+  still there to send it about, and not to the socket belonging to whoever
+  pressed the button — they are told by the answer to their own request) or, for
+  a phone that was asleep, from the next poll's 404. Either way it says so and
+  goes home rather than quietly ceasing to answer.
+
+Either way the offline copy goes too. `forgetTrip()` drops the trip's entries
+from the service worker's data cache along with the device's memory of it,
+because a trip you have deleted or left should not still read back on this phone
+tomorrow in a field with no signal.
+
+Deleting for everybody is the only confirmation in the app that asks for more
+than a tap: on a trip with anybody else on it, you type the trip's code. It is
+short, it is the thing on the invitation everybody already has, and typing it is
+exactly the evidence that you know which trip this is.
 
 ### Faces
 

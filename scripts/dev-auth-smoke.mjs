@@ -273,6 +273,98 @@ try {
     })).status, 401)
   }
 
+  // ---- leaving, and deleting ----------------------------------------------
+
+  // The trip everything above was done to is not the one to take apart, so this
+  // is its own: two accounts, one of whom started it and one of whom joined.
+  {
+    const startTrip = async () => {
+      const made = await (await request('/trips', first.cookie, 'POST',
+        { name: 'Last weekend', organiser: 'Kim' })).json()
+      const guest = await (await request(`/trips/${made.trip.id}/members`, second.cookie, 'POST',
+        { name: 'Pat', self: true })).json()
+      return { id: made.trip.id, owner: made.memberId, guest: guest.member.id }
+    }
+
+    const trip = await startTrip()
+    const state = (cookie) => request(`/trips/${trip.id}`, cookie)
+
+    // The one bit each side is told about who started it. The account id it was
+    // decided from is nobody else's business and does not leave the server.
+    assert.equal((await (await state(first.cookie)).json()).owner, true)
+    assert.equal((await (await state(second.cookie)).json()).owner, false)
+    assert.equal((await (await state(first.cookie)).json()).trip.created_by, undefined)
+    const summary = await (await request('/trips/summary', first.cookie, 'POST',
+      { trips: [{ id: trip.id }] })).json()
+    assert.equal(summary.trips[0].owner, true)
+    assert.equal(summary.trips[0].you.id, trip.owner)
+    assert.equal(summary.trips[0].created_by, undefined)
+    const guestSummary = await (await request('/trips/summary', second.cookie, 'POST',
+      { trips: [{ id: trip.id }] })).json()
+    assert.equal(guestSummary.trips[0].owner, false)
+
+    // Somebody who joined can take themselves off and nothing more. The refusal
+    // says what they can do instead rather than only what they cannot.
+    const refused = await request(`/trips/${trip.id}`, second.cookie, 'DELETE')
+    assert.equal(refused.status, 403)
+    assert.match((await refused.json()).error, /started this trip/)
+    // And a stranger with the link is not even asked which trip they mean.
+    assert.equal((await fetch(`${origin}/api/trips/${trip.id}`, {
+      method: 'DELETE', headers: { origin },
+    })).status, 401)
+    assert.equal((await (await state(first.cookie)).json()).trip.id, trip.id)
+
+    // Money in your name is the one thing that stops you walking off with half
+    // a ledger behind you — the same rule as removing somebody else, said in
+    // the second person.
+    await request(`/trips/${trip.id}/expenses`, second.cookie, 'POST', {
+      description: 'Firelighters', amount: '4.00', paidBy: trip.guest,
+      participants: [trip.owner, trip.guest],
+    })
+    const owing = await request(`/trips/${trip.id}/members/${trip.guest}`, second.cookie, 'DELETE')
+    assert.equal(owing.status, 400)
+    assert.match((await owing.json()).error, /before you leave/)
+
+    const expenses = (await (await state(first.cookie)).json()).expenses
+    await request(`/expenses/${expenses[0].id}`, second.cookie, 'DELETE')
+
+    const left = await request(`/trips/${trip.id}/members/${trip.guest}`, second.cookie, 'DELETE')
+    assert.equal(left.status, 200)
+    const afterLeaving = await (await state(first.cookie)).json()
+    assert.deepEqual(afterLeaving.members.map((m) => m.name), ['Kim'])
+    // Leaving is not being thrown off, and the feed says which of the two it was.
+    assert.equal(afterLeaving.events[0].actor, 'Pat')
+    assert.equal(afterLeaving.events[0].text, 'left the trip')
+    // The trip is still there for everybody else, and the link still works: the
+    // person who left is a stranger with it rather than a locked-out member.
+    const asStrangerNow = await (await state(second.cookie)).json()
+    assert.equal(asStrangerNow.trip.id, trip.id)
+    assert.equal(asStrangerNow.viewer_id, null)
+    assert.equal(asStrangerNow.owner, false)
+
+    // Whoever started it can, and once is enough: the second attempt has no
+    // trip to find rather than a trip it is refused.
+    assert.equal((await request(`/trips/${trip.id}`, first.cookie, 'DELETE')).status, 200)
+    assert.equal((await request(`/trips/${trip.id}`, first.cookie)).status, 404)
+    assert.equal((await request(`/trips/${trip.id}`, first.cookie, 'DELETE')).status, 404)
+    // And the home page is told to forget it rather than left with a card that
+    // opens onto nothing.
+    const gone = await (await request('/trips/summary', first.cookie, 'POST',
+      { trips: [{ id: trip.id }] })).json()
+    assert.deepEqual(gone.trips, [])
+    assert.deepEqual(gone.missing, [trip.id])
+
+    // Leaving a trip you started is leaving, not deleting — the trip stands,
+    // and what you started stays yours to take down afterwards.
+    const kept = await startTrip()
+    assert.equal((await request(`/trips/${kept.id}/members/${kept.owner}`,
+      first.cookie, 'DELETE')).status, 200)
+    const standing = await (await request(`/trips/${kept.id}`, second.cookie)).json()
+    assert.deepEqual(standing.members.map((m) => m.name), ['Pat'])
+    assert.equal((await request(`/trips/${kept.id}`, second.cookie, 'DELETE')).status, 403)
+    assert.equal((await request(`/trips/${kept.id}`, first.cookie, 'DELETE')).status, 200)
+  }
+
   console.log('development auth smoke passed')
 } finally {
   if (server.exitCode === null) {
