@@ -7,6 +7,14 @@ data/
 .env.local
 .env.*.local
 .DS_Store
+public/dist/
+apps/mobile/android/
+apps/mobile/ios/
+*.keystore
+google-services.json
+GoogleService-Info.plist
+*-service-account.json
+.expo/
 
 # Local Netlify folder
 .netlify

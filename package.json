@@ -3,6 +3,10 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
   "description": "Shared trip planner for camping with friends",
   "engines": {
     "node": ">=22.9.0"
